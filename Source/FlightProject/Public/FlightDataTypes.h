@@ -224,7 +224,7 @@ struct FFlightSpatialLayoutRow : public FTableRowBase
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Layout")
     int32 bSpawnLight = 1;
 
-    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Layout")
+    UPROPERTY(Transient, VisibleAnywhere, BlueprintReadOnly, Category = "Layout")
     FName RowName = NAME_None;
 
     FVector GetLocation() const

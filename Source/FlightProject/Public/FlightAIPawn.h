@@ -38,6 +38,9 @@ private:
     TWeakObjectPtr<AFlightWaypointPath> FlightPath;
 
     float CurrentDistance = 0.f;
+    bool bLoggedMissingFlightPath = false;
+    bool bLoggedInvalidSpline = false;
+    bool bLoggedZeroLengthPath = false;
 
     void AdvanceAlongPath(float DeltaSeconds);
 };

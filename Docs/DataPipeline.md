@@ -29,7 +29,7 @@ Each CSV must contain a `Name` column whose value matches the `LightingConfigRow
   - `FlightSpatialLayoutDirector` spawns developer-art geometry (via `AFlightSpatialTestEntity`) for spatial testing, nav probes, and illuminated landmarks.
 
 ## Known Pitfalls
-1. **Packaging / Cooking** – CSVs are loaded from `FPaths::ProjectContentDir()`. In cooked builds loose files are excluded unless explicitly cooked. Make sure `Content/Data` is added to *Project Settings → Packaging → Additional Asset Directories to Cook* (or another equivalent rule). Otherwise, shipping builds will fall back to the hard-coded defaults and log errors.
+1. **Packaging / Cooking** – CSVs are loaded from `FPaths::ProjectContentDir()`. In cooked builds loose files are excluded unless explicitly cooked. We add `/Game/Data` via `+DirectoriesToAlwaysCook` so the CSVs ship; remember to update packaging when new data folders appear.
 2. **Import errors hidden in array** – `UDataTable::CreateTableFromCSVString` returns an array of error strings. Check the log for each entry; the subsystem logs and aborts if the array is non-empty.
 3. **Row mismatch** – An empty or misspelled row name results in no data being applied and hard-coded defaults being used. The subsystem warns but gameplay will revert to legacy values, so QA should watch for warning spam.
 4. **Designer edits outside Content** – Because we read from `Content/Data`, storing CSVs in other directories requires updating the developer settings. Keep all spreadsheet exports under that folder so the cook picks them up.

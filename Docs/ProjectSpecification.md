@@ -20,7 +20,7 @@ FlightProject is an Unreal Engine 5 simulation sandbox for autonomous aircraft a
   The demo now layers in a `NightRange` spatial testbed composed of CSV-authored nav probes, illuminated landmarks, and collision towers.
 
 ## Content & Data
-- **Maps**: Temporarily bootstrapped with `/Engine/Maps/Templates/Template_Default` until the project map `/Game/Maps/PersistentFlightTest` and loading transition `/Game/Maps/Loading` are authored.
+- **Maps**: `/Game/Maps/PersistentFlightTest` serves as both the primary play space and the current transition map (`TransitionMap=/Game/Maps/PersistentFlightTest`) while we iterate. Plan to add a lightweight `/Game/Maps/Loading` asset later.
 - **CSV Tuning**: Lighting and autopilot settings live in `Content/Data/*.csv`; see `Docs/DataPipeline.md` for schema and pitfalls.
 - **Spatial Layout**: `FlightSpatialLayout.csv` drives the placement of nav probes, developer-art obstacles, and landmark beacons spawned by `AFlightSpatialLayoutDirector` / `AFlightSpatialTestEntity` to stress avoidance and route planning in nightly conditions.
 - **Mass Config**: `Config/DefaultMass.ini` seeds flight-specific phases (`Flight.PrePhysics`, `Flight.DuringPhysics`, `Flight.PostPhysics`).
@@ -30,10 +30,11 @@ FlightProject is an Unreal Engine 5 simulation sandbox for autonomous aircraft a
 - **Module Dependencies**: FlightProject runtime module links AI, Mass, Niagara, ComputeFramework, DeveloperSettings, and editor hooks for tooling.
 - **Input Mapping**: `DefaultInput.ini` exposes throttle/pitch/yaw/roll/climb axes plus Mass debugger tooling shortcuts.
 - **Developer Settings**: `UFlightProjectDeveloperSettings` centralizes altitude thresholds, Mass batch sizing, and shader directory hints.
+- **Shader Source**: Project shaders live in `/Shaders` (backed by the `Shaders/` folder); the runtime module registers the directory so custom RDG/compute shaders compile in editor and staged builds.
 
 ## Roadmap Highlights
 1. **Flight AI Behaviors**: Implement Behavior Tree services for altitude stratification and collision avoidance; author State Trees for autopilot tasks.
 2. **Mass Processors**: Build SoA component fragments for flight metrics; register processors for perception, steering, and scheduling with the new phases.
-3. **GPU Compute Path**: Introduce RDG compute shaders for horizon scans and avoidance volumes; integrate with Niagara for visualization.
+3. **GPU Compute Path**: Introduce RDG compute shaders for horizon scans and avoidance volumes; integrate with Niagara for visualization. The `/Shaders` directory is now registered, so future work can drop shader sources there without extra setup.
 4. **Batch Spawning Tools**: Author data-driven spawners leveraging Mass Actors and the Asset Manager to instantiate swarm cohorts.
 5. **Profiling & Automation**: Wire Mass debugger snapshots to automated performance captures, enabling regression tracking across altitude scenarios.

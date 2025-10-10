@@ -4,11 +4,14 @@
 #include "Components/PointLightComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "Materials/MaterialInterface.h"
 #include "UObject/ConstructorHelpers.h"
 
 AFlightSpatialTestEntity::AFlightSpatialTestEntity()
 {
-    PrimaryActorTick.bCanEverTick = false;
+    PrimaryActorTick.bCanEverTick = true;
+    SetActorTickEnabled(false);
 
     Root = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
     SetRootComponent(Root);
@@ -33,6 +36,12 @@ AFlightSpatialTestEntity::AFlightSpatialTestEntity()
         NavProbeMesh = SphereMeshFinder.Object;
     }
 
+    static ConstructorHelpers::FObjectFinder<UStaticMesh> CylinderMeshFinder(TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
+    if (CylinderMeshFinder.Succeeded())
+    {
+        NavProbeMesh = CylinderMeshFinder.Object;
+    }
+
     static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeMeshFinder(TEXT("/Engine/BasicShapes/Cube.Cube"));
     if (CubeMeshFinder.Succeeded())
     {
@@ -45,6 +54,12 @@ AFlightSpatialTestEntity::AFlightSpatialTestEntity()
         LandmarkMesh = ConeMeshFinder.Object;
     }
 
+    static ConstructorHelpers::FObjectFinder<UMaterialInterface> NavProbeMaterialFinder(TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
+    if (NavProbeMaterialFinder.Succeeded())
+    {
+        NavProbeBaseMaterial = NavProbeMaterialFinder.Object;
+    }
+
     LayoutSnapshot = FFlightSpatialLayoutRow();
 }
 
@@ -54,6 +69,16 @@ void AFlightSpatialTestEntity::BeginPlay()
 #if WITH_EDITOR
     UpdateDebugLabel();
 #endif
+}
+
+void AFlightSpatialTestEntity::Tick(float DeltaSeconds)
+{
+    Super::Tick(DeltaSeconds);
+
+    if (bIsNavProbe)
+    {
+        UpdateNavProbePulse(DeltaSeconds);
+    }
 }
 
 void AFlightSpatialTestEntity::ApplyLayoutRow(const FFlightSpatialLayoutRow& LayoutRow)
@@ -71,6 +96,17 @@ void AFlightSpatialTestEntity::ApplyLayoutRow(const FFlightSpatialLayoutRow& Lay
     NavigationLight->SetAttenuationRadius(LayoutRow.LightRadius);
     NavigationLight->SetRelativeLocation(FVector(0.f, 0.f, LayoutRow.LightHeightOffset));
     NavigationLight->SetLightColor(LayoutRow.GetLightColor());
+
+    bIsNavProbe = (LayoutRow.EntityType == EFlightSpatialEntityType::NavProbe);
+    if (bIsNavProbe)
+    {
+        SetupNavProbeVisuals();
+    }
+    else
+    {
+        SetActorTickEnabled(false);
+        NavProbeMID = nullptr;
+    }
 
 #if WITH_EDITOR
     UpdateDebugLabel();
@@ -119,4 +155,48 @@ void AFlightSpatialTestEntity::UpdateDebugLabel()
     const FString Label = FString::Printf(TEXT("%s_%s"), *TypeString, *LayoutSnapshot.RowName.ToString());
     SetActorLabel(Label);
 #endif
+}
+
+void AFlightSpatialTestEntity::SetupNavProbeVisuals()
+{
+    if (!NavProbeBaseMaterial)
+    {
+        return;
+    }
+
+    if (!NavProbeMID)
+    {
+        NavProbeMID = UMaterialInstanceDynamic::Create(NavProbeBaseMaterial, this);
+    }
+
+    if (NavProbeMID)
+    {
+        MeshComponent->SetMaterial(0, NavProbeMID);
+        NavProbeMID->SetVectorParameterValue(TEXT("Color"), FLinearColor(0.35f, 0.02f, 0.02f, 1.f));
+    }
+
+    NavigationLight->SetLightColor(FLinearColor(1.f, 0.15f, 0.05f));
+    NavProbeBaseLightIntensity = FMath::Max(LayoutSnapshot.LightIntensity, 1000.f);
+    NavProbeLightMinIntensity = NavProbeBaseLightIntensity * 0.55f;
+    NavProbeLightMaxIntensity = NavProbeBaseLightIntensity * 1.15f;
+    NavProbeLightMinIntensity = FMath::Max(NavProbeLightMinIntensity, 100.f);
+    NavProbeLightMaxIntensity = FMath::Max(NavProbeLightMaxIntensity, NavProbeLightMinIntensity + 50.f);
+    PulseTime = FMath::FRandRange(0.f, 2.f * PI);
+    SetActorTickEnabled(true);
+}
+
+void AFlightSpatialTestEntity::UpdateNavProbePulse(float DeltaSeconds)
+{
+    PulseTime += DeltaSeconds * NavProbePulseSpeed * 2.f * PI;
+    const float PulseAlpha = 0.5f + 0.5f * FMath::Sin(PulseTime);
+
+    const float TargetIntensity = FMath::Lerp(NavProbeLightMinIntensity, NavProbeLightMaxIntensity, PulseAlpha);
+    NavigationLight->SetIntensity(TargetIntensity);
+
+    if (NavProbeMID)
+    {
+        const float EmissiveStrength = FMath::Lerp(0.5f, NavProbeMeshEmissiveScale, PulseAlpha);
+        const FLinearColor EmissiveColor(EmissiveStrength, 0.05f * EmissiveStrength, 0.05f * EmissiveStrength, 1.f);
+        NavProbeMID->SetVectorParameterValue(TEXT("Color"), EmissiveColor);
+    }
 }

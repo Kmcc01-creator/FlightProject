@@ -40,5 +40,10 @@
 - If the build fails on `Unable to find parent class type for 'AFlightNetworkManager' named 'AGameNetworkManager'`, ensure `Source/FlightProject/Public/FlightNetworkManager.h` includes `GameFramework/GameNetworkManager.h` (UE 5.6 relocated this header).
 - MassEntity runtime code lives in the engine; keep MassGameplay/MassAI/StateTree plugins enabled for higher-level systems and authoring tools.
 - Keep `Docs/ProjectSpecification.md` and `Docs/EditorTooling.md` updated as systems mature.
-- When packaging, add `Content/Data` to *Additional Asset Directories to Cook* so the CSV configuration files ship alongside the build.
-- Game mode automatically spawns a `FlightSpatialLayoutDirector` which reads `FlightSpatialLayout.csv`; tweak the CSV to rearrange nav probes, collision towers, or landmarks without touching level assets.
+- Packaging settings now include `/Game/Data` under *Additional Asset Directories to Cook* so CSV configuration files ship alongside staged builds (set via `+DirectoriesToAlwaysCook` on Oct 10, 2025).
+- Transition map now points at `/Game/Maps/PersistentFlightTest` so seamless travel lands in the full test scene while we iterate (consider swapping to a lighter loading map later).
+- Custom shaders live in the project `Shaders/` directory; `FFlightProjectModule` registers the `/Shaders` mapping at startup, so RDG/compute shaders can compile in editor and packaged builds.
+ - Game mode automatically spawns a `FlightSpatialLayoutDirector` which reads `FlightSpatialLayout.csv`; tweak the CSV to rearrange nav probes, collision towers, or landmarks without touching level assets.
+
+### Follow-up Items (October 10, 2025)
+- Author a lightweight `/Game/Maps/Loading` level to replace the current `PersistentFlightTest` transition map once designers have final loading requirements.

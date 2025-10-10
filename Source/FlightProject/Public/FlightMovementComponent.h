@@ -56,8 +56,23 @@ protected:
     UPROPERTY(EditAnywhere, Category = "Flight")
     float ClimbRate = 1500.f;
 
-    UPROPERTY(EditAnywhere, Category = "Flight")
-    float TurnRate = 45.f;
+    UPROPERTY(EditAnywhere, Category = "Flight|Steering", meta = (ClampMin = "0.0"))
+    float TurnRateYawDegPerSec = 60.f;
+
+    UPROPERTY(EditAnywhere, Category = "Flight|Steering", meta = (ClampMin = "0.0"))
+    float TurnRatePitchDegPerSec = 45.f;
+
+    UPROPERTY(EditAnywhere, Category = "Flight|Steering", meta = (ClampMin = "0.0"))
+    float TurnRateRollDegPerSec = 75.f;
+
+    UPROPERTY(EditAnywhere, Category = "Flight|Steering", meta = (ClampMin = "0.0"))
+    float SteeringSlerpSpeed = 8.f;
+
+    UPROPERTY(EditAnywhere, Category = "Flight|Steering")
+    bool bAlignVelocityWithOrientation = true;
+
+    UPROPERTY(EditAnywhere, Category = "Flight|Steering", meta = (ClampMin = "0.0", EditCondition = "bAlignVelocityWithOrientation", EditConditionHides))
+    float VelocityAlignmentRate = 2.f;
 
 private:
     void UpdateFlightModel(float DeltaTime);

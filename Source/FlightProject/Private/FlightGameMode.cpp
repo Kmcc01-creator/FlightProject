@@ -13,10 +13,14 @@
 
 #include "Components/DirectionalLightComponent.h"
 #include "Components/SkyLightComponent.h"
+#include "Components/SceneComponent.h"
 #include "Engine/DirectionalLight.h"
 #include "Engine/SkyLight.h"
 #include "EngineUtils.h"
 #include "Engine/GameInstance.h"
+#include "Engine/World.h"
+
+DEFINE_LOG_CATEGORY_STATIC(LogFlightGameMode, Log, All);
 
 AFlightGameMode::AFlightGameMode()
 {
@@ -29,16 +33,21 @@ AFlightGameMode::AFlightGameMode()
 void AFlightGameMode::StartPlay()
 {
     Super::StartPlay();
+    const UWorld* World = GetWorld();
+    UE_LOG(LogFlightGameMode, Log, TEXT("StartPlay for map '%s'"), World ? *World->GetMapName() : TEXT("<unknown>"));
+
     InitializeMassRuntime();
     SetupNightEnvironment();
     BuildSpatialTestRange();
     SpawnAutonomousFlights();
+    UE_LOG(LogFlightGameMode, Log, TEXT("FlightGameMode StartPlay bootstrap complete"));
 }
 
 void AFlightGameMode::InitializeMassRuntime()
 {
     if (!GetWorld())
     {
+        UE_LOG(LogFlightGameMode, Warning, TEXT("InitializeMassRuntime skipped: world not available"));
         return;
     }
 
@@ -47,7 +56,16 @@ void AFlightGameMode::InitializeMassRuntime()
         if (SimulationSubsystem->IsSimulationPaused())
         {
             SimulationSubsystem->ResumeSimulation();
+            UE_LOG(LogFlightGameMode, Log, TEXT("Resumed MassSimulationSubsystem simulation"));
         }
+        else
+        {
+            UE_LOG(LogFlightGameMode, Verbose, TEXT("Mass simulation already active; no action taken"));
+        }
+    }
+    else
+    {
+        UE_LOG(LogFlightGameMode, Warning, TEXT("MassSimulationSubsystem not found; Mass agents will remain inactive"));
     }
 }
 
@@ -55,6 +73,7 @@ void AFlightGameMode::SetupNightEnvironment()
 {
     if (!GetWorld())
     {
+        UE_LOG(LogFlightGameMode, Warning, TEXT("SetupNightEnvironment skipped: world not available"));
         return;
     }
 
@@ -74,6 +93,11 @@ void AFlightGameMode::SetupNightEnvironment()
     const FLinearColor SkyColor = LightingConfig ? LightingConfig->GetSkyColor() : FLinearColor(0.02f, 0.06f, 0.12f, 1.f);
     const FLinearColor LowerHemisphereColor = LightingConfig ? LightingConfig->GetLowerHemisphereColor() : FLinearColor::Black;
 
+    UE_LOG(LogFlightGameMode, Log, TEXT("Applying lighting config: DirectionalIntensity=%.1f, SkyIntensity=%.2f (Source=%s)"),
+        DirectionalIntensity,
+        SkyIntensity,
+        LightingConfig ? TEXT("DataTable") : TEXT("Defaults"));
+
     ADirectionalLight* DirectionalLight = nullptr;
     for (TActorIterator<ADirectionalLight> It(GetWorld()); It; ++It)
     {
@@ -90,10 +114,12 @@ void AFlightGameMode::SetupNightEnvironment()
     {
         if (UDirectionalLightComponent* DirectionalComponent = DirectionalLight->FindComponentByClass<UDirectionalLightComponent>())
         {
+            DirectionalComponent->SetMobility(EComponentMobility::Movable);
             DirectionalComponent->SetIntensity(DirectionalIntensity);
             DirectionalComponent->SetLightColor(DirectionalColor);
             DirectionalComponent->SetAtmosphereSunLightIndex(0);
             DirectionalComponent->SetEnableLightShaftOcclusion(true);
+            DirectionalComponent->MarkRenderStateDirty();
         }
 
         DirectionalLight->SetActorRotation(DirectionalRotation);
@@ -115,9 +141,11 @@ void AFlightGameMode::SetupNightEnvironment()
     {
         if (USkyLightComponent* SkyComponent = SkyLight->FindComponentByClass<USkyLightComponent>())
         {
+            SkyComponent->SetMobility(EComponentMobility::Movable);
             SkyComponent->SetIntensity(SkyIntensity);
             SkyComponent->SetLightColor(SkyColor);
             SkyComponent->SetLowerHemisphereColor(LowerHemisphereColor);
+            SkyComponent->RecaptureSky();
         }
     }
 }
@@ -126,11 +154,13 @@ void AFlightGameMode::BuildSpatialTestRange()
 {
     if (!GetWorld())
     {
+        UE_LOG(LogFlightGameMode, Warning, TEXT("BuildSpatialTestRange skipped: world not available"));
         return;
     }
 
     for (TActorIterator<AFlightSpatialLayoutDirector> It(GetWorld()); It; ++It)
     {
+        UE_LOG(LogFlightGameMode, Log, TEXT("Spatial layout director already present: %s"), *GetNameSafe(*It));
         return;
     }
 
@@ -138,13 +168,21 @@ void AFlightGameMode::BuildSpatialTestRange()
     SpawnParams.Owner = this;
     SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 
-    GetWorld()->SpawnActor<AFlightSpatialLayoutDirector>(AFlightSpatialLayoutDirector::StaticClass(), FTransform::Identity, SpawnParams);
+    if (AFlightSpatialLayoutDirector* NewDirector = GetWorld()->SpawnActor<AFlightSpatialLayoutDirector>(AFlightSpatialLayoutDirector::StaticClass(), FTransform::Identity, SpawnParams))
+    {
+        UE_LOG(LogFlightGameMode, Log, TEXT("Spawned spatial layout director: %s"), *GetNameSafe(NewDirector));
+    }
+    else
+    {
+        UE_LOG(LogFlightGameMode, Error, TEXT("Failed to spawn spatial layout director"));
+    }
 }
 
 void AFlightGameMode::SpawnAutonomousFlights()
 {
     if (!GetWorld())
     {
+        UE_LOG(LogFlightGameMode, Warning, TEXT("SpawnAutonomousFlights skipped: world not available"));
         return;
     }
 
@@ -159,17 +197,26 @@ void AFlightGameMode::SpawnAutonomousFlights()
     AFlightWaypointPath* WaypointPath = FindOrCreateWaypointPath(AutopilotConfig);
     if (!WaypointPath)
     {
+        UE_LOG(LogFlightGameMode, Error, TEXT("Unable to spawn drones: waypoint path missing"));
         return;
     }
 
     const float PathLength = WaypointPath->GetPathLength();
     if (PathLength <= KINDA_SMALL_NUMBER)
     {
+        UE_LOG(LogFlightGameMode, Error, TEXT("Waypoint path %s has insufficient length (%.2f)"),
+            *GetNameSafe(WaypointPath),
+            PathLength);
         return;
     }
 
     const int32 DroneCount = FMath::Max(AutopilotConfig ? AutopilotConfig->DroneCount : 6, 1);
     const bool bLoopPath = AutopilotConfig ? AutopilotConfig->ShouldLoopPath() : true;
+    UE_LOG(LogFlightGameMode, Log, TEXT("Spawning %d autonomous drones on path %s (Length=%.2f, Loop=%s)"),
+        DroneCount,
+        *GetNameSafe(WaypointPath),
+        PathLength,
+        bLoopPath ? TEXT("true") : TEXT("false"));
 
     for (int32 DroneIndex = 0; DroneIndex < DroneCount; ++DroneIndex)
     {
@@ -185,6 +232,15 @@ void AFlightGameMode::SpawnAutonomousFlights()
                 Drone->ApplyAutopilotConfig(*AutopilotConfig);
             }
             Drone->SetFlightPath(WaypointPath, Distance, bLoopPath);
+            UE_LOG(LogFlightGameMode, Log, TEXT("Spawned drone %s [%d/%d] at distance %.2f"),
+                *GetNameSafe(Drone),
+                DroneIndex + 1,
+                DroneCount,
+                Distance);
+        }
+        else
+        {
+            UE_LOG(LogFlightGameMode, Error, TEXT("Failed to spawn drone %d of %d"), DroneIndex + 1, DroneCount);
         }
     }
 }
@@ -193,6 +249,7 @@ AFlightWaypointPath* AFlightGameMode::FindOrCreateWaypointPath(const FFlightAuto
 {
     if (!GetWorld())
     {
+        UE_LOG(LogFlightGameMode, Warning, TEXT("FindOrCreateWaypointPath failed: world not available"));
         return nullptr;
     }
 
@@ -202,10 +259,15 @@ AFlightWaypointPath* AFlightGameMode::FindOrCreateWaypointPath(const FFlightAuto
         if (AutopilotConfig)
         {
             ExistingPath->ConfigureFromAutopilotConfig(*AutopilotConfig);
+            UE_LOG(LogFlightGameMode, Log, TEXT("Reusing waypoint path %s with autopilot config (Radius=%.1f, Altitude=%.1f)"),
+                *GetNameSafe(ExistingPath),
+                AutopilotConfig->PathRadius,
+                AutopilotConfig->BaseAltitude);
         }
         else
         {
             ExistingPath->EnsureDefaultLoop();
+            UE_LOG(LogFlightGameMode, Log, TEXT("Reusing waypoint path %s with default loop settings"), *GetNameSafe(ExistingPath));
         }
         return ExistingPath;
     }
@@ -219,11 +281,20 @@ AFlightWaypointPath* AFlightGameMode::FindOrCreateWaypointPath(const FFlightAuto
         if (AutopilotConfig)
         {
             Path->ConfigureFromAutopilotConfig(*AutopilotConfig);
+            UE_LOG(LogFlightGameMode, Log, TEXT("Created waypoint path %s from autopilot config (Radius=%.1f, Altitude=%.1f)"),
+                *GetNameSafe(Path),
+                AutopilotConfig->PathRadius,
+                AutopilotConfig->BaseAltitude);
         }
         else
         {
             Path->EnsureDefaultLoop();
+            UE_LOG(LogFlightGameMode, Log, TEXT("Created waypoint path %s with default loop settings"), *GetNameSafe(Path));
         }
+    }
+    else
+    {
+        UE_LOG(LogFlightGameMode, Error, TEXT("Failed to spawn waypoint path actor"));
     }
 
     return Path;

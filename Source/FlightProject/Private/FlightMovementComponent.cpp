@@ -87,12 +87,41 @@ void UFlightMovementComponent::ApplySteering(float DeltaTime)
     const float YawInput = FMath::Clamp(ControlInput.Yaw, -1.f, 1.f);
     const float RollInput = FMath::Clamp(ControlInput.Roll, -1.f, 1.f);
 
-    const float DeltaPitch = PitchInput * TurnRate * DeltaTime;
-    const float DeltaYaw = YawInput * TurnRate * DeltaTime;
-    const float DeltaRoll = RollInput * TurnRate * DeltaTime;
+    const float PitchRadians = FMath::DegreesToRadians(TurnRatePitchDegPerSec * PitchInput * DeltaTime);
+    const float YawRadians = FMath::DegreesToRadians(TurnRateYawDegPerSec * YawInput * DeltaTime);
+    const float RollRadians = FMath::DegreesToRadians(TurnRateRollDegPerSec * RollInput * DeltaTime);
 
-    const FRotator DeltaRot(DeltaPitch, DeltaYaw, DeltaRoll);
-    UpdatedComponent->AddLocalRotation(DeltaRot.Quaternion());
+    if (FMath::IsNearlyZero(PitchRadians) && FMath::IsNearlyZero(YawRadians) && FMath::IsNearlyZero(RollRadians))
+    {
+        return;
+    }
+
+    const FQuat CurrentOrientation = UpdatedComponent->GetComponentQuat();
+    const FVector ForwardVector = UpdatedComponent->GetForwardVector();
+    const FVector RightVector = UpdatedComponent->GetRightVector();
+    const FVector UpVector = UpdatedComponent->GetUpVector();
+
+    const FQuat PitchQuat = FQuat(RightVector, PitchRadians);
+    const FQuat YawQuat = FQuat(UpVector, YawRadians);
+    const FQuat RollQuat = FQuat(ForwardVector, RollRadians);
+
+    const FQuat DesiredOrientation = (YawQuat * PitchQuat * RollQuat) * CurrentOrientation;
+
+    FQuat NewOrientation = DesiredOrientation;
+    if (SteeringSlerpSpeed > 0.f)
+    {
+        const float Alpha = FMath::Clamp(1.f - FMath::Exp(-SteeringSlerpSpeed * DeltaTime), 0.f, 1.f);
+        NewOrientation = FQuat::Slerp(CurrentOrientation, DesiredOrientation, Alpha);
+    }
+
+    NewOrientation.Normalize();
+    UpdatedComponent->SetWorldRotation(NewOrientation);
+
+    if (bAlignVelocityWithOrientation && VelocityAlignmentRate > 0.f && !CurrentVelocity.IsNearlyZero())
+    {
+        const FVector DesiredVelocity = UpdatedComponent->GetForwardVector() * CurrentVelocity.Size();
+        CurrentVelocity = FMath::VInterpTo(CurrentVelocity, DesiredVelocity, DeltaTime, VelocityAlignmentRate);
+    }
 }
 
 void UFlightMovementComponent::UpdateAltitudeCache()

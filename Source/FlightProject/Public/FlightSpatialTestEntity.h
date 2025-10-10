@@ -8,6 +8,8 @@
 class UStaticMeshComponent;
 class UPointLightComponent;
 class USceneComponent;
+class UMaterialInterface;
+class UMaterialInstanceDynamic;
 
 /**
  * Simple developer-art actor used to visualize layout CSV entries (nav probes, obstacles, landmarks).
@@ -24,6 +26,7 @@ public:
 
 protected:
     virtual void BeginPlay() override;
+    virtual void Tick(float DeltaSeconds) override;
 
 private:
     UPROPERTY(VisibleAnywhere, Category = "Components")
@@ -50,6 +53,31 @@ private:
     UPROPERTY()
     UStaticMesh* LandmarkMesh;
 
+    UPROPERTY()
+    UMaterialInterface* NavProbeBaseMaterial;
+
+    UPROPERTY(Transient)
+    UMaterialInstanceDynamic* NavProbeMID;
+
+    bool bIsNavProbe = false;
+    float PulseTime = 0.f;
+
+    UPROPERTY(EditAnywhere, Category = "Flight|Visual")
+    float NavProbePulseSpeed = 0.6f;
+
+    UPROPERTY(EditAnywhere, Category = "Flight|Visual")
+    float NavProbeLightMinIntensity = 4800.f;
+
+    UPROPERTY(EditAnywhere, Category = "Flight|Visual")
+    float NavProbeLightMaxIntensity = 8600.f;
+
+    UPROPERTY(EditAnywhere, Category = "Flight|Visual")
+    float NavProbeMeshEmissiveScale = 4.0f;
+
+    float NavProbeBaseLightIntensity = 0.f;
+
     void ConfigureMeshForType(EFlightSpatialEntityType EntityType);
     void UpdateDebugLabel();
+    void SetupNavProbeVisuals();
+    void UpdateNavProbePulse(float DeltaSeconds);
 };
