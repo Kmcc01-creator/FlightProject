@@ -224,6 +224,18 @@ struct FFlightSpatialLayoutRow : public FTableRowBase
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Layout")
     int32 bSpawnLight = 1;
 
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "NavProbe")
+    float NavProbePulseSpeed = -1.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "NavProbe")
+    float NavProbeEmissiveScale = -1.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "NavProbe")
+    float NavProbeLightMinMultiplier = -1.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "NavProbe")
+    float NavProbeLightMaxMultiplier = -1.f;
+
     UPROPERTY(Transient, VisibleAnywhere, BlueprintReadOnly, Category = "Layout")
     FName RowName = NAME_None;
 
@@ -253,5 +265,108 @@ struct FFlightSpatialLayoutRow : public FTableRowBase
     bool ShouldSpawnLight() const
     {
         return bSpawnLight != 0 && LightIntensity > 0.f && LightRadius > 0.f;
+    }
+};
+
+UENUM(BlueprintType)
+enum class EFlightProceduralAnchorType : uint8
+{
+    Unknown,
+    NavBuoyRegion,
+    SpawnSwarm
+};
+
+/**
+ * Data table row describing procedural anchor overrides for editor-placeable layout sources.
+ */
+USTRUCT(BlueprintType)
+struct FFlightProceduralAnchorRow : public FTableRowBase
+{
+    GENERATED_BODY()
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Anchor")
+    EFlightProceduralAnchorType AnchorType = EFlightProceduralAnchorType::Unknown;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Anchor")
+    FName AnchorId = NAME_None;
+
+    // Nav buoy overrides
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "NavBuoy", meta = (ClampMin = "-1"))
+    int32 NavBuoyCount = -1;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "NavBuoy")
+    float NavBuoyRadius = -1.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "NavBuoy")
+    float NavBuoyHeightOffset = NAN;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "NavBuoy")
+    float NavBuoyLightIntensity = -1.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "NavBuoy")
+    float NavBuoyLightRadius = -1.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "NavBuoy")
+    float NavBuoyLightHeightOffset = NAN;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "NavBuoy")
+    float NavBuoyAzimuthOffsetDeg = NAN;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "NavBuoy")
+    float NavBuoyPulseSpeed = -1.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "NavBuoy")
+    float NavBuoyEmissiveScale = -1.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "NavBuoy")
+    float NavBuoyLightMinMultiplier = -1.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "NavBuoy")
+    float NavBuoyLightMaxMultiplier = -1.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "NavBuoy")
+    float NavBuoyRelativeYaw = NAN;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "NavBuoy")
+    float NavBuoyRelativePitch = NAN;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "NavBuoy")
+    float NavBuoyRelativeRoll = NAN;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "NavBuoy")
+    float NavBuoyLightColorR = -1.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "NavBuoy")
+    float NavBuoyLightColorG = -1.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "NavBuoy")
+    float NavBuoyLightColorB = -1.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "NavBuoy")
+    float NavBuoyLightColorA = -1.f;
+
+    // Spawn swarm overrides
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SpawnSwarm", meta = (ClampMin = "-1"))
+    int32 SwarmDroneCount = -1;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SpawnSwarm")
+    float SwarmPhaseOffsetDeg = NAN;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SpawnSwarm")
+    float SwarmPhaseSpreadDeg = NAN;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SpawnSwarm")
+    float SwarmAltitudeOffset = NAN;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SpawnSwarm")
+    float SwarmSpawnRadius = -1.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SpawnSwarm")
+    float SwarmAutopilotSpeed = -1.f;
+
+    bool MatchesAnchor(const FName InAnchorId, const EFlightProceduralAnchorType InType) const
+    {
+        return AnchorType == InType &&
+            (InAnchorId.IsNone() || AnchorId.IsNone() || AnchorId == InAnchorId);
     }
 };

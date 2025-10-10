@@ -75,6 +75,8 @@ private:
     float NavProbeMeshEmissiveScale = 4.0f;
 
     float NavProbeBaseLightIntensity = 0.f;
+    float NavProbeMinIntensityMultiplier = 0.55f;
+    float NavProbeMaxIntensityMultiplier = 1.15f;
 
     void ConfigureMeshForType(EFlightSpatialEntityType EntityType);
     void UpdateDebugLabel();

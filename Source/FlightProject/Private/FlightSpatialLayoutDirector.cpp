@@ -4,6 +4,8 @@
 #include "FlightDataSubsystem.h"
 #include "FlightDataTypes.h"
 #include "FlightProject.h"
+#include "FlightSpatialLayoutSourceComponent.h"
+#include "EngineUtils.h"
 
 #include "Engine/World.h"
 #include "Engine/GameInstance.h"
@@ -83,7 +85,30 @@ void AFlightSpatialLayoutDirector::RebuildLayout()
     }
 
     const TArray<FFlightSpatialLayoutRow>& LayoutRows = DataSubsystem->GetSpatialLayout();
-    if (LayoutRows.Num() == 0)
+
+    TArray<FFlightSpatialLayoutRow> CombinedRows;
+    CombinedRows.Reserve(LayoutRows.Num() + 16);
+    CombinedRows.Append(LayoutRows);
+
+    for (TActorIterator<AActor> ActorIt(World); ActorIt; ++ActorIt)
+    {
+        AActor* Actor = *ActorIt;
+        if (!Actor || Actor == this)
+        {
+            continue;
+        }
+
+        TInlineComponentArray<UFlightSpatialLayoutSourceComponent*> SourceComponents(Actor);
+        for (UFlightSpatialLayoutSourceComponent* SourceComponent : SourceComponents)
+        {
+            if (SourceComponent)
+            {
+                SourceComponent->GatherLayoutRows(CombinedRows);
+            }
+        }
+    }
+
+    if (CombinedRows.Num() == 0)
     {
         if (!DataSubsystem->HasSpatialLayout())
         {
@@ -92,7 +117,7 @@ void AFlightSpatialLayoutDirector::RebuildLayout()
         return;
     }
 
-    for (const FFlightSpatialLayoutRow& Row : LayoutRows)
+    for (const FFlightSpatialLayoutRow& Row : CombinedRows)
     {
         SpawnLayoutRow(Row);
     }

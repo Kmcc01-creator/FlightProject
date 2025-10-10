@@ -175,12 +175,32 @@ void AFlightSpatialTestEntity::SetupNavProbeVisuals()
         NavProbeMID->SetVectorParameterValue(TEXT("Color"), FLinearColor(0.35f, 0.02f, 0.02f, 1.f));
     }
 
+    if (LayoutSnapshot.NavProbePulseSpeed >= 0.f)
+    {
+        NavProbePulseSpeed = FMath::Max(0.01f, LayoutSnapshot.NavProbePulseSpeed);
+    }
+
+    if (LayoutSnapshot.NavProbeEmissiveScale >= 0.f)
+    {
+        NavProbeMeshEmissiveScale = FMath::Max(0.01f, LayoutSnapshot.NavProbeEmissiveScale);
+    }
+
+    if (LayoutSnapshot.NavProbeLightMinMultiplier >= 0.f)
+    {
+        NavProbeMinIntensityMultiplier = LayoutSnapshot.NavProbeLightMinMultiplier;
+    }
+
+    if (LayoutSnapshot.NavProbeLightMaxMultiplier >= 0.f)
+    {
+        NavProbeMaxIntensityMultiplier = LayoutSnapshot.NavProbeLightMaxMultiplier;
+    }
+
     NavigationLight->SetLightColor(FLinearColor(1.f, 0.15f, 0.05f));
-    NavProbeBaseLightIntensity = FMath::Max(LayoutSnapshot.LightIntensity, 1000.f);
-    NavProbeLightMinIntensity = NavProbeBaseLightIntensity * 0.55f;
-    NavProbeLightMaxIntensity = NavProbeBaseLightIntensity * 1.15f;
-    NavProbeLightMinIntensity = FMath::Max(NavProbeLightMinIntensity, 100.f);
-    NavProbeLightMaxIntensity = FMath::Max(NavProbeLightMaxIntensity, NavProbeLightMinIntensity + 50.f);
+    NavProbeBaseLightIntensity = FMath::Max(LayoutSnapshot.LightIntensity, 100.f);
+    const float MinMultiplier = FMath::Max(NavProbeMinIntensityMultiplier, 0.f);
+    const float MaxMultiplier = FMath::Max(NavProbeMaxIntensityMultiplier, MinMultiplier + KINDA_SMALL_NUMBER);
+    NavProbeLightMinIntensity = FMath::Max(NavProbeBaseLightIntensity * MinMultiplier, 50.f);
+    NavProbeLightMaxIntensity = FMath::Max(NavProbeBaseLightIntensity * MaxMultiplier, NavProbeLightMinIntensity + 25.f);
     PulseTime = FMath::FRandRange(0.f, 2.f * PI);
     SetActorTickEnabled(true);
 }

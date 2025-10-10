@@ -10,6 +10,7 @@
 #include "FlightDataSubsystem.h"
 #include "FlightDataTypes.h"
 #include "FlightWaypointPath.h"
+#include "FlightSpawnSwarmAnchor.h"
 
 #include "Components/DirectionalLightComponent.h"
 #include "Components/SkyLightComponent.h"
@@ -210,37 +211,172 @@ void AFlightGameMode::SpawnAutonomousFlights()
         return;
     }
 
-    const int32 DroneCount = FMath::Max(AutopilotConfig ? AutopilotConfig->DroneCount : 6, 1);
+    struct FSwarmAnchorGroup
+    {
+        AFlightSpawnSwarmAnchor* Anchor = nullptr;
+        int32 DroneCount = 0;
+        float PhaseOffsetDeg = 0.f;
+        float PhaseSpreadDeg = 360.f;
+        float SpeedOverride = -1.f;
+    };
+
+    TArray<FSwarmAnchorGroup> SwarmGroups;
+    int32 TotalAnchorDrones = 0;
+
+    for (TActorIterator<AFlightSpawnSwarmAnchor> AnchorIt(GetWorld()); AnchorIt; ++AnchorIt)
+    {
+        AFlightSpawnSwarmAnchor* Anchor = *AnchorIt;
+        if (!Anchor)
+        {
+            continue;
+        }
+
+        const int32 AnchorDroneCount = Anchor->GetDroneCount();
+        if (AnchorDroneCount <= 0)
+        {
+            continue;
+        }
+
+        FSwarmAnchorGroup Group;
+        Group.Anchor = Anchor;
+        Group.DroneCount = AnchorDroneCount;
+        Group.PhaseOffsetDeg = Anchor->GetPhaseOffsetDeg();
+        Group.PhaseSpreadDeg = Anchor->GetPhaseSpreadDeg();
+        Group.SpeedOverride = Anchor->GetAutopilotSpeedOverride();
+        SwarmGroups.Add(Group);
+        TotalAnchorDrones += AnchorDroneCount;
+    }
+
+    const bool bAnchorsProvideSpawns = TotalAnchorDrones > 0;
+    const int32 DroneCount = bAnchorsProvideSpawns
+        ? TotalAnchorDrones
+        : FMath::Max(AutopilotConfig ? AutopilotConfig->DroneCount : 6, 1);
     const bool bLoopPath = AutopilotConfig ? AutopilotConfig->ShouldLoopPath() : true;
-    UE_LOG(LogFlightGameMode, Log, TEXT("Spawning %d autonomous drones on path %s (Length=%.2f, Loop=%s)"),
+
+    if (DroneCount <= 0)
+    {
+        UE_LOG(LogFlightGameMode, Warning, TEXT("SpawnAutonomousFlights: No drones requested; skipping spawn."));
+        return;
+    }
+
+    UE_LOG(LogFlightGameMode, Log, TEXT("Spawning %d autonomous drones on path %s (Length=%.2f, Loop=%s)%s"),
         DroneCount,
         *GetNameSafe(WaypointPath),
         PathLength,
-        bLoopPath ? TEXT("true") : TEXT("false"));
+        bLoopPath ? TEXT("true") : TEXT("false"),
+        bAnchorsProvideSpawns ? TEXT(" using anchor overrides") : TEXT(""));
 
-    for (int32 DroneIndex = 0; DroneIndex < DroneCount; ++DroneIndex)
+    struct FSpawnOrder
     {
+        float Distance = 0.f;
+        float SpeedOverride = -1.f;
+        AFlightSpawnSwarmAnchor* SourceAnchor = nullptr;
+        int32 GlobalIndex = 0;
+    };
+
+    TArray<FSpawnOrder> SpawnOrders;
+    SpawnOrders.Reserve(DroneCount);
+
+    if (!bAnchorsProvideSpawns)
+    {
+        for (int32 DroneIndex = 0; DroneIndex < DroneCount; ++DroneIndex)
+        {
+            FSpawnOrder Order;
+            Order.Distance = (PathLength / DroneCount) * DroneIndex;
+            Order.GlobalIndex = DroneIndex;
+            SpawnOrders.Add(Order);
+        }
+    }
+    else
+    {
+        const float DefaultIncrement = PathLength / FMath::Max(DroneCount, 1);
+        int32 GlobalIndex = 0;
+
+        for (const FSwarmAnchorGroup& Group : SwarmGroups)
+        {
+            const float BaseFraction = FMath::Fmod(Group.PhaseOffsetDeg, 360.f) / 360.f;
+            float NormalizedBase = BaseFraction;
+            if (NormalizedBase < 0.f)
+            {
+                NormalizedBase += 1.f;
+            }
+
+            const float SpreadFraction = Group.PhaseSpreadDeg / 360.f;
+            const bool bUsePhaseSpread = SpreadFraction > KINDA_SMALL_NUMBER;
+            const float StepFraction = bUsePhaseSpread && Group.DroneCount > 0
+                ? SpreadFraction / Group.DroneCount
+                : 0.f;
+
+            for (int32 LocalIndex = 0; LocalIndex < Group.DroneCount; ++LocalIndex)
+            {
+                FSpawnOrder Order;
+                if (bUsePhaseSpread)
+                {
+                    float Fraction = NormalizedBase + StepFraction * LocalIndex;
+                    Fraction = FMath::Fmod(Fraction, 1.f);
+                    if (Fraction < 0.f)
+                    {
+                        Fraction += 1.f;
+                    }
+                    Order.Distance = Fraction * PathLength;
+                }
+                else
+                {
+                    Order.Distance = DefaultIncrement * GlobalIndex;
+                }
+
+                Order.SpeedOverride = Group.SpeedOverride;
+                Order.SourceAnchor = Group.Anchor;
+                Order.GlobalIndex = GlobalIndex;
+                SpawnOrders.Add(Order);
+                ++GlobalIndex;
+            }
+        }
+    }
+
+    for (int32 OrderIndex = 0; OrderIndex < SpawnOrders.Num(); ++OrderIndex)
+    {
+        const FSpawnOrder& Order = SpawnOrders[OrderIndex];
+
         FActorSpawnParameters SpawnParams;
         SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
         SpawnParams.Owner = this;
 
         if (AFlightAIPawn* Drone = GetWorld()->SpawnActor<AFlightAIPawn>(AFlightAIPawn::StaticClass(), FTransform::Identity, SpawnParams))
         {
-            const float Distance = (PathLength / DroneCount) * DroneIndex;
             if (AutopilotConfig)
             {
                 Drone->ApplyAutopilotConfig(*AutopilotConfig);
             }
-            Drone->SetFlightPath(WaypointPath, Distance, bLoopPath);
-            UE_LOG(LogFlightGameMode, Log, TEXT("Spawned drone %s [%d/%d] at distance %.2f"),
-                *GetNameSafe(Drone),
-                DroneIndex + 1,
-                DroneCount,
-                Distance);
+
+            Drone->SetFlightPath(WaypointPath, Order.Distance, bLoopPath);
+
+            if (Order.SpeedOverride > 0.f)
+            {
+                Drone->SetAutopilotSpeed(Order.SpeedOverride);
+            }
+
+            if (Order.SourceAnchor)
+            {
+                UE_LOG(LogFlightGameMode, Log, TEXT("Spawned drone %s [%d/%d] at distance %.2f via anchor %s"),
+                    *GetNameSafe(Drone),
+                    Order.GlobalIndex + 1,
+                    DroneCount,
+                    Order.Distance,
+                    *GetNameSafe(Order.SourceAnchor));
+            }
+            else
+            {
+                UE_LOG(LogFlightGameMode, Log, TEXT("Spawned drone %s [%d/%d] at distance %.2f"),
+                    *GetNameSafe(Drone),
+                    Order.GlobalIndex + 1,
+                    DroneCount,
+                    Order.Distance);
+            }
         }
         else
         {
-            UE_LOG(LogFlightGameMode, Error, TEXT("Failed to spawn drone %d of %d"), DroneIndex + 1, DroneCount);
+            UE_LOG(LogFlightGameMode, Error, TEXT("Failed to spawn drone %d of %d"), Order.GlobalIndex + 1, DroneCount);
         }
     }
 }

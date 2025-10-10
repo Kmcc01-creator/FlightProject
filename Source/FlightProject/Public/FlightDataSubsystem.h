@@ -36,18 +36,23 @@ public:
         return bSpatialLayoutLoaded;
     }
 
+    const FFlightProceduralAnchorRow* FindProceduralAnchorConfig(FName AnchorId, EFlightProceduralAnchorType AnchorType) const;
+
 private:
     bool LoadLightingConfig();
     bool LoadAutopilotConfig();
     bool LoadSpatialLayout();
+    bool LoadProceduralAnchors();
 
     bool LoadTableRow(const FString& RelativePath, const FName& RowName, UScriptStruct* RowStruct, TFunctionRef<void(const uint8*)> OnRowLoaded);
 
     bool bLightingLoaded = false;
     bool bAutopilotLoaded = false;
     bool bSpatialLayoutLoaded = false;
+    bool bProceduralAnchorsLoaded = false;
 
     FFlightLightingConfigRow LightingConfig;
     FFlightAutopilotConfigRow AutopilotConfig;
     TArray<FFlightSpatialLayoutRow> SpatialLayoutRows;
+    TMap<FName, TArray<FFlightProceduralAnchorRow>> ProceduralAnchors;
 };

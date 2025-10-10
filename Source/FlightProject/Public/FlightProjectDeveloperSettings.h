@@ -44,4 +44,7 @@ public:
 
     UPROPERTY(EditAnywhere, Config, Category = "Flight|Data")
     FName SpatialLayoutScenario;
+
+    UPROPERTY(EditAnywhere, Config, Category = "Flight|Data", meta = (RelativeToProjectContentDir))
+    FString ProceduralAnchorConfigPath;
 };

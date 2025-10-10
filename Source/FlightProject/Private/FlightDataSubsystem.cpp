@@ -28,6 +28,8 @@ void UFlightDataSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     {
         UE_LOG(LogFlightProject, Warning, TEXT("FlightDataSubsystem: Level layout CSV failed to load; test range actors will be absent."));
     }
+
+    bProceduralAnchorsLoaded = LoadProceduralAnchors();
 }
 
 bool UFlightDataSubsystem::LoadLightingConfig()
@@ -139,6 +141,99 @@ bool UFlightDataSubsystem::LoadSpatialLayout()
     });
 
     return true;
+}
+
+bool UFlightDataSubsystem::LoadProceduralAnchors()
+{
+    ProceduralAnchors.Reset();
+
+    const UFlightProjectDeveloperSettings* Settings = GetDefault<UFlightProjectDeveloperSettings>();
+    if (!Settings || Settings->ProceduralAnchorConfigPath.IsEmpty())
+    {
+        return false;
+    }
+
+    const FString ContentDir = FPaths::ProjectContentDir();
+    const FString AbsolutePath = FPaths::Combine(ContentDir, Settings->ProceduralAnchorConfigPath);
+
+    FString CSVString;
+    if (!FFileHelper::LoadFileToString(CSVString, *AbsolutePath))
+    {
+        UE_LOG(LogFlightProject, Warning, TEXT("FlightDataSubsystem: Procedural anchor CSV '%s' not found."), *AbsolutePath);
+        return false;
+    }
+
+    UDataTable* TempTable = NewObject<UDataTable>(this);
+    TempTable->RowStruct = FFlightProceduralAnchorRow::StaticStruct();
+
+    const TArray<FString> ImportErrors = TempTable->CreateTableFromCSVString(CSVString);
+    if (ImportErrors.Num() > 0)
+    {
+        for (const FString& Error : ImportErrors)
+        {
+            UE_LOG(LogFlightProject, Error, TEXT("FlightDataSubsystem: Procedural anchor import error for '%s': %s"), *AbsolutePath, *Error);
+        }
+        return false;
+    }
+
+    for (const auto& Pair : TempTable->GetRowMap())
+    {
+        const FFlightProceduralAnchorRow* Row = reinterpret_cast<const FFlightProceduralAnchorRow*>(Pair.Value);
+        if (!Row)
+        {
+            continue;
+        }
+
+        FFlightProceduralAnchorRow RowCopy = *Row;
+        if (RowCopy.AnchorId.IsNone())
+        {
+            RowCopy.AnchorId = Pair.Key;
+        }
+
+        ProceduralAnchors.FindOrAdd(RowCopy.AnchorId).Add(MoveTemp(RowCopy));
+    }
+
+    return ProceduralAnchors.Num() > 0;
+}
+
+const FFlightProceduralAnchorRow* UFlightDataSubsystem::FindProceduralAnchorConfig(FName AnchorId, EFlightProceduralAnchorType AnchorType) const
+{
+    if (!bProceduralAnchorsLoaded)
+    {
+        return nullptr;
+    }
+
+    const FName LookupKey = AnchorId.IsNone() ? NAME_None : AnchorId;
+
+    if (!LookupKey.IsNone())
+    {
+        if (const TArray<FFlightProceduralAnchorRow>* Rows = ProceduralAnchors.Find(LookupKey))
+        {
+            for (const FFlightProceduralAnchorRow& Row : *Rows)
+            {
+                if (Row.MatchesAnchor(LookupKey, AnchorType))
+                {
+                    return &Row;
+                }
+            }
+        }
+    }
+
+    if (LookupKey.IsNone())
+    {
+        for (const auto& Pair : ProceduralAnchors)
+        {
+            for (const FFlightProceduralAnchorRow& Row : Pair.Value)
+            {
+                if (Row.AnchorType == AnchorType)
+                {
+                    return &Row;
+                }
+            }
+        }
+    }
+
+    return nullptr;
 }
 
 bool UFlightDataSubsystem::LoadTableRow(const FString& RelativePath, const FName& RowName, UScriptStruct* RowStruct, TFunctionRef<void(const uint8*)> OnRowLoaded)
