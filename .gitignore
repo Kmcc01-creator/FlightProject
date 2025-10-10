@@ -1,0 +1,54 @@
+# Unreal Engine build outputs
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+Build/
+
+# Unreal header/tool caches
+.vs/
+*.VC.db
+*.VC.opendb
+*.suo
+*.sdf
+*.opensdf
+
+# IDE project files that can be regenerated
+*.xcodeproj/
+*.code-workspace.user
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# Misc platform junk
+*.log
+*.tlog
+*.tmp
+*.obj
+*.pdb
+*.ipch
+*.pch
+*.cache
+*.db
+*.opendb
+*.sln.cache
+*.sln.docstates
+*.sln.iml
+
+# Operating system clutter
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Backup / autosave outputs
+Saved/Backup-*/
+Saved/Autosaves/
+Content/Collections/Saved/*
+
+# Local developer-only content
+Content/Developers/
+
