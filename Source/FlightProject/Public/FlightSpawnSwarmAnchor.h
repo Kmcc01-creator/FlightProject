@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "FlightDataTypes.h"
+#include "FlightNavGraphTypes.h"
 #include "FlightSpawnSwarmAnchor.generated.h"
 
 /**
@@ -19,6 +20,7 @@ public:
 
     virtual void OnConstruction(const FTransform& Transform) override;
     virtual void BeginPlay() override;
+    virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
     FName GetAnchorId() const;
 
@@ -51,12 +53,27 @@ protected:
     UPROPERTY(EditAnywhere, Category = "Swarm", meta = (ClampMin = "-1.0"))
     float AutopilotSpeedOverride = -1.f;
 
+    /** Register this anchor as a node in the nav graph data hub for visualization/debug. */
+    UPROPERTY(EditAnywhere, Category = "Swarm|NavGraph")
+    bool bRegisterWithNavGraph = true;
+
+    /** Macro network identifier used when registering the anchor node. */
+    UPROPERTY(EditAnywhere, Category = "Swarm|NavGraph")
+    FName NavNetworkId = NAME_None;
+
+    /** Additional semantic tags applied to the nav graph node. */
+    UPROPERTY(EditAnywhere, Category = "Swarm|NavGraph")
+    TArray<FName> NavGraphTags;
+
 private:
     int32 EffectiveDroneCount = 0;
     float EffectivePhaseOffsetDeg = 0.f;
     float EffectivePhaseSpreadDeg = 360.f;
     float EffectiveAutopilotSpeed = -1.f;
+    FGuid RegisteredNavNodeId;
 
     void RefreshAnchor(bool bApplyOverrides);
     void ApplyOverrides(const FFlightProceduralAnchorRow* OverrideRow);
+    void SyncNavGraphNode();
+    void UnregisterNavGraphNode();
 };

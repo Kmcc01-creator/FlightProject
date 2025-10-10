@@ -1,6 +1,7 @@
 #include "FlightSpawnSwarmAnchor.h"
 
 #include "FlightDataSubsystem.h"
+#include "FlightNavGraphDataHubSubsystem.h"
 
 #include "Components/SceneComponent.h"
 #include "Engine/GameInstance.h"
@@ -15,6 +16,8 @@ AFlightSpawnSwarmAnchor::AFlightSpawnSwarmAnchor()
     EffectivePhaseOffsetDeg = PhaseOffsetDeg;
     EffectivePhaseSpreadDeg = PhaseSpreadDeg;
     EffectiveAutopilotSpeed = AutopilotSpeedOverride;
+
+    NavGraphTags.AddUnique(TEXT("SpawnSwarmAnchor"));
 }
 
 void AFlightSpawnSwarmAnchor::OnConstruction(const FTransform& Transform)
@@ -27,6 +30,12 @@ void AFlightSpawnSwarmAnchor::BeginPlay()
 {
     Super::BeginPlay();
     RefreshAnchor(/*bApplyOverrides=*/true);
+}
+
+void AFlightSpawnSwarmAnchor::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+    UnregisterNavGraphNode();
+    Super::EndPlay(EndPlayReason);
 }
 
 FName AFlightSpawnSwarmAnchor::GetAnchorId() const
@@ -60,6 +69,7 @@ void AFlightSpawnSwarmAnchor::RefreshAnchor(bool bApplyOverrides)
 
     EffectiveDroneCount = FMath::Max(EffectiveDroneCount, 0);
     EffectivePhaseSpreadDeg = FMath::Max(EffectivePhaseSpreadDeg, 0.f);
+    SyncNavGraphNode();
 }
 
 void AFlightSpawnSwarmAnchor::ApplyOverrides(const FFlightProceduralAnchorRow* OverrideRow)
@@ -85,4 +95,58 @@ void AFlightSpawnSwarmAnchor::ApplyOverrides(const FFlightProceduralAnchorRow* O
     {
         EffectiveAutopilotSpeed = OverrideRow->SwarmAutopilotSpeed;
     }
+}
+
+void AFlightSpawnSwarmAnchor::SyncNavGraphNode()
+{
+    if (!bRegisterWithNavGraph)
+    {
+        UnregisterNavGraphNode();
+        return;
+    }
+
+    UWorld* World = GetWorld();
+    if (!World)
+    {
+        return;
+    }
+
+    UFlightNavGraphDataHubSubsystem* NavGraphHub = World->GetSubsystem<UFlightNavGraphDataHubSubsystem>();
+    if (!NavGraphHub)
+    {
+        return;
+    }
+
+    FFlightNavGraphNodeDescriptor Descriptor;
+    Descriptor.NodeId = RegisteredNavNodeId;
+    Descriptor.DisplayName = GetAnchorId();
+    Descriptor.NetworkId = NavNetworkId.IsNone() ? GetAnchorId() : NavNetworkId;
+    Descriptor.Location = GetActorLocation();
+    Descriptor.Tags = NavGraphTags;
+    if (!GetAnchorId().IsNone())
+    {
+        Descriptor.Tags.AddUnique(GetAnchorId());
+    }
+    Descriptor.Tags.AddUnique(TEXT("SwarmAnchor"));
+
+    RegisteredNavNodeId = NavGraphHub->RegisterNode(Descriptor);
+}
+
+void AFlightSpawnSwarmAnchor::UnregisterNavGraphNode()
+{
+    if (!RegisteredNavNodeId.IsValid())
+    {
+        return;
+    }
+
+    UWorld* World = GetWorld();
+    if (World)
+    {
+        if (UFlightNavGraphDataHubSubsystem* NavGraphHub = World->GetSubsystem<UFlightNavGraphDataHubSubsystem>())
+        {
+            NavGraphHub->RemoveNode(RegisteredNavNodeId);
+        }
+    }
+
+    RegisteredNavNodeId.Invalidate();
 }

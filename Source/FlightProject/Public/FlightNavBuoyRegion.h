@@ -3,9 +3,11 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "FlightDataTypes.h"
+#include "FlightNavGraphTypes.h"
 #include "FlightNavBuoyRegion.generated.h"
 
 class UFlightSpatialLayoutSourceComponent;
+class UFlightNavGraphDataHubSubsystem;
 
 /**
  * Designer-placeable actor that spawns a ring of navigation buoys relative to its transform.
@@ -21,6 +23,7 @@ public:
 
     virtual void OnConstruction(const FTransform& Transform) override;
     virtual void BeginPlay() override;
+    virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
     FName GetAnchorId() const;
 
@@ -50,6 +53,26 @@ protected:
     /** Optional initial azimuth offset for the first buoy (degrees). */
     UPROPERTY(EditAnywhere, Category = "NavBuoy")
     float AzimuthOffsetDeg = 0.f;
+
+    /** Register generated nodes with the nav graph data hub for visualization/debug. */
+    UPROPERTY(EditAnywhere, Category = "NavBuoy|NavGraph")
+    bool bRegisterWithNavGraph = true;
+
+    /** Identifier for the macro network the generated buoys belong to. */
+    UPROPERTY(EditAnywhere, Category = "NavBuoy|NavGraph")
+    FName NavNetworkId = NAME_None;
+
+    /** Optional subnetwork grouping to help downstream routing. */
+    UPROPERTY(EditAnywhere, Category = "NavBuoy|NavGraph")
+    FName NavSubNetworkId = NAME_None;
+
+    /** When true, creates loop edges between consecutive buoys for quick visualization. */
+    UPROPERTY(EditAnywhere, Category = "NavBuoy|NavGraph")
+    bool bCreateLoopEdges = true;
+
+    /** Additional nav graph tags applied to each generated node. */
+    UPROPERTY(EditAnywhere, Category = "NavBuoy|NavGraph")
+    TArray<FName> NavGraphTags;
 
     /** Base light intensity when no override is supplied. */
     UPROPERTY(EditAnywhere, Category = "NavBuoy|Light", meta = (ClampMin = "0.0"))
@@ -82,4 +105,10 @@ private:
     void ApplyOverride(const FFlightProceduralAnchorRow* OverrideRow, int32& OutCount, float& OutRadius, float& OutHeight, float& OutAzimuth,
         float& OutLightIntensity, float& OutLightRadiusValue, float& OutLightHeight, FLinearColor& OutLightColor,
         float& OutPulseSpeed, float& OutEmissiveScale, float& OutMinMultiplier, float& OutMaxMultiplier) const;
+    void SyncNavGraph(const TArray<FFlightSpatialLayoutRow>& Rows);
+    void UnregisterNavGraphEntries();
+    void RegisterLoopEdges(const TArray<FGuid>& NodeIds, const TArray<FVector>& NodeLocations, class UFlightNavGraphDataHubSubsystem& Hub);
+
+    TArray<FGuid> RegisteredNodeIds;
+    TArray<FGuid> RegisteredEdgeIds;
 };

@@ -2,6 +2,8 @@
 
 #include "FlightSpatialLayoutSourceComponent.h"
 #include "FlightDataSubsystem.h"
+#include "FlightNavGraphDataHubSubsystem.h"
+#include "UObject/UnrealType.h"
 
 #include "Components/SceneComponent.h"
 #include "Engine/World.h"
@@ -33,6 +35,12 @@ void AFlightNavBuoyRegion::BeginPlay()
     RefreshLayout(/*bApplyOverrides=*/true);
 }
 
+void AFlightNavBuoyRegion::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+    UnregisterNavGraphEntries();
+    Super::EndPlay(EndPlayReason);
+}
+
 FName AFlightNavBuoyRegion::GetAnchorId() const
 {
     return AnchorId.IsNone() ? GetFName() : AnchorId;
@@ -62,6 +70,8 @@ void AFlightNavBuoyRegion::RefreshLayout(bool bApplyOverrides)
     {
         LayoutSource->SetGeneratedRows(Rows);
     }
+
+    SyncNavGraph(Rows);
 }
 
 void AFlightNavBuoyRegion::BuildBuoyRows(const FFlightProceduralAnchorRow* OverrideRow, TArray<FFlightSpatialLayoutRow>& OutRows) const
@@ -205,4 +215,133 @@ void AFlightNavBuoyRegion::ApplyOverride(const FFlightProceduralAnchorRow* Overr
 
     OutMinMultiplier = FMath::Max(OutMinMultiplier, 0.f);
     OutMaxMultiplier = FMath::Max(OutMaxMultiplier, OutMinMultiplier + KINDA_SMALL_NUMBER);
+}
+
+void AFlightNavBuoyRegion::SyncNavGraph(const TArray<FFlightSpatialLayoutRow>& Rows)
+{
+    UnregisterNavGraphEntries();
+
+    if (!bRegisterWithNavGraph || Rows.Num() == 0)
+    {
+        return;
+    }
+
+    UWorld* World = GetWorld();
+    if (!World)
+    {
+        return;
+    }
+
+    UFlightNavGraphDataHubSubsystem* NavGraphHub = World->GetSubsystem<UFlightNavGraphDataHubSubsystem>();
+    if (!NavGraphHub)
+    {
+        return;
+    }
+
+    RegisteredNodeIds.Reset();
+    RegisteredEdgeIds.Reset();
+
+    TArray<FVector> NodeLocations;
+    NodeLocations.Reserve(Rows.Num());
+
+    static const UEnum* SpatialTypeEnum = StaticEnum<EFlightSpatialEntityType>();
+
+    for (const FFlightSpatialLayoutRow& Row : Rows)
+    {
+        FFlightNavGraphNodeDescriptor Descriptor;
+        Descriptor.DisplayName = Row.RowName.IsNone() ? GetFName() : Row.RowName;
+        Descriptor.NetworkId = NavNetworkId.IsNone() ? GetAnchorId() : NavNetworkId;
+        Descriptor.SubNetworkId = NavSubNetworkId;
+        Descriptor.Location = FVector(Row.PositionX, Row.PositionY, Row.PositionZ);
+        Descriptor.Tags = NavGraphTags;
+
+        if (SpatialTypeEnum)
+        {
+            const FString Label = SpatialTypeEnum->GetNameStringByValue(static_cast<int64>(Row.EntityType));
+            if (!Label.IsEmpty())
+            {
+                Descriptor.Tags.AddUnique(FName(*Label));
+            }
+        }
+
+        Descriptor.Tags.AddUnique(TEXT("NavProbe"));
+        if (!GetAnchorId().IsNone())
+        {
+            Descriptor.Tags.AddUnique(GetAnchorId());
+        }
+
+        const FGuid NodeId = NavGraphHub->RegisterNode(Descriptor);
+        if (NodeId.IsValid())
+        {
+            RegisteredNodeIds.Add(NodeId);
+            NodeLocations.Add(Descriptor.Location);
+        }
+    }
+
+    if (bCreateLoopEdges && RegisteredNodeIds.Num() > 1 && NodeLocations.Num() == RegisteredNodeIds.Num())
+    {
+        RegisterLoopEdges(RegisteredNodeIds, NodeLocations, *NavGraphHub);
+    }
+}
+
+void AFlightNavBuoyRegion::UnregisterNavGraphEntries()
+{
+    if (RegisteredNodeIds.Num() == 0 && RegisteredEdgeIds.Num() == 0)
+    {
+        return;
+    }
+
+    UWorld* World = GetWorld();
+    UFlightNavGraphDataHubSubsystem* NavGraphHub = World ? World->GetSubsystem<UFlightNavGraphDataHubSubsystem>() : nullptr;
+
+    if (NavGraphHub)
+    {
+        for (const FGuid& EdgeId : RegisteredEdgeIds)
+        {
+            if (EdgeId.IsValid())
+            {
+                NavGraphHub->RemoveEdge(EdgeId);
+            }
+        }
+        for (const FGuid& NodeId : RegisteredNodeIds)
+        {
+            if (NodeId.IsValid())
+            {
+                NavGraphHub->RemoveNode(NodeId);
+            }
+        }
+    }
+
+    RegisteredEdgeIds.Reset();
+    RegisteredNodeIds.Reset();
+}
+
+void AFlightNavBuoyRegion::RegisterLoopEdges(const TArray<FGuid>& NodeIds, const TArray<FVector>& NodeLocations, UFlightNavGraphDataHubSubsystem& Hub)
+{
+    const int32 Count = NodeIds.Num();
+    if (Count < 2)
+    {
+        return;
+    }
+
+    RegisteredEdgeIds.Reserve(Count);
+
+    for (int32 Index = 0; Index < Count; ++Index)
+    {
+        const int32 NextIndex = (Index + 1) % Count;
+        const FGuid FromNodeId = NodeIds[Index];
+        const FGuid ToNodeId = NodeIds[NextIndex];
+
+        FFlightNavGraphEdgeDescriptor EdgeDescriptor;
+        EdgeDescriptor.FromNodeId = FromNodeId;
+        EdgeDescriptor.ToNodeId = ToNodeId;
+        EdgeDescriptor.BaseCost = FVector::Dist(NodeLocations[Index], NodeLocations[NextIndex]);
+        EdgeDescriptor.Tags.AddUnique(TEXT("BuoyLoop"));
+
+        const FGuid EdgeId = Hub.RegisterEdge(EdgeDescriptor);
+        if (EdgeId.IsValid())
+        {
+            RegisteredEdgeIds.Add(EdgeId);
+        }
+    }
 }

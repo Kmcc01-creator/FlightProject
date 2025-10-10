@@ -39,4 +39,7 @@ This quick-start is for Codex-style automation agents working inside the `Flight
 - Summaries should mention any modified files by path; tests are optional unless behavior changes.
 - Avoid destructive git operations; the workspace may contain user edits.
 
+## Team Composition
+- Solo developer (Kelly) partnering with Codex automation agents. Treat notes and docs as the shared memory for this “virtual team”.
+
 Stick to this playbook to keep automation runs predictable and to surface project gaps quickly. Update `Agents.md` whenever workflows change or new blockers appear.
