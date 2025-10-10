@@ -1,0 +1,911 @@
+{
+	"folders": [
+		{
+			"name": "FlightProject",
+			"path": "."
+		},
+		{
+			"name": "UE5",
+			"path": "/home/kelly/Unreal/UnrealEngine"
+		}
+	],
+	"settings": {
+		"typescript.tsc.autoDetect": "off",
+		"npm.autoDetect": "off",
+		"terminal.integrated.env.linux": {
+			"PATH": "/home/kelly/Unreal/UnrealEngine/Engine/Binaries/ThirdParty/DotNet/8.0.300/linux-x64:${env:PATH}",
+			"DOTNET_ROOT": "/home/kelly/Unreal/UnrealEngine/Engine/Binaries/ThirdParty/DotNet/8.0.300/linux-x64",
+			"DOTNET_HOST_PATH": "/home/kelly/Unreal/UnrealEngine/Engine/Binaries/ThirdParty/DotNet/8.0.300/linux-x64/dotnet",
+			"DOTNET_MULTILEVEL_LOOKUP": "0",
+			"DOTNET_ROLL_FORWARD": "LatestMajor"
+		}
+	},
+	"extensions": {
+		"recommendations": [
+			"ms-vscode.cpptools",
+			"ms-dotnettools.csharp"
+		]
+	},
+	"tasks": {
+		"version": "2.0.0",
+		"tasks": [
+			{
+				"label": "FlightProject Linux Debug Build",
+				"group": "build",
+				"command": "Engine/Build/BatchFiles/Linux/Build.sh",
+				"args": [
+					"FlightProject",
+					"Linux",
+					"Debug",
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"-waitmutex"
+				],
+				"problemMatcher": "$msCompile",
+				"type": "shell",
+				"options": {
+					"cwd": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"label": "FlightProject Linux Debug Rebuild",
+				"group": "build",
+				"command": "Engine/Build/BatchFiles/Linux/Build.sh",
+				"args": [
+					"FlightProject",
+					"Linux",
+					"Debug",
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"-waitmutex"
+				],
+				"problemMatcher": "$msCompile",
+				"dependsOn": [
+					"FlightProject Linux Debug Clean"
+				],
+				"type": "shell",
+				"options": {
+					"cwd": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"label": "FlightProject Linux Debug Clean",
+				"group": "build",
+				"command": "Engine/Build/BatchFiles/Linux/Build.sh",
+				"args": [
+					"FlightProject",
+					"Linux",
+					"Debug",
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"-waitmutex",
+					"-clean"
+				],
+				"problemMatcher": "$msCompile",
+				"type": "shell",
+				"options": {
+					"cwd": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"label": "FlightProject Linux DebugGame Build",
+				"group": "build",
+				"command": "Engine/Build/BatchFiles/Linux/Build.sh",
+				"args": [
+					"FlightProject",
+					"Linux",
+					"DebugGame",
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"-waitmutex"
+				],
+				"problemMatcher": "$msCompile",
+				"type": "shell",
+				"options": {
+					"cwd": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"label": "FlightProject Linux DebugGame Rebuild",
+				"group": "build",
+				"command": "Engine/Build/BatchFiles/Linux/Build.sh",
+				"args": [
+					"FlightProject",
+					"Linux",
+					"DebugGame",
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"-waitmutex"
+				],
+				"problemMatcher": "$msCompile",
+				"dependsOn": [
+					"FlightProject Linux DebugGame Clean"
+				],
+				"type": "shell",
+				"options": {
+					"cwd": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"label": "FlightProject Linux DebugGame Clean",
+				"group": "build",
+				"command": "Engine/Build/BatchFiles/Linux/Build.sh",
+				"args": [
+					"FlightProject",
+					"Linux",
+					"DebugGame",
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"-waitmutex",
+					"-clean"
+				],
+				"problemMatcher": "$msCompile",
+				"type": "shell",
+				"options": {
+					"cwd": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"label": "FlightProject Linux Development Build",
+				"group": "build",
+				"command": "Engine/Build/BatchFiles/Linux/Build.sh",
+				"args": [
+					"FlightProject",
+					"Linux",
+					"Development",
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"-waitmutex"
+				],
+				"problemMatcher": "$msCompile",
+				"type": "shell",
+				"options": {
+					"cwd": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"label": "FlightProject Linux Development Rebuild",
+				"group": "build",
+				"command": "Engine/Build/BatchFiles/Linux/Build.sh",
+				"args": [
+					"FlightProject",
+					"Linux",
+					"Development",
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"-waitmutex"
+				],
+				"problemMatcher": "$msCompile",
+				"dependsOn": [
+					"FlightProject Linux Development Clean"
+				],
+				"type": "shell",
+				"options": {
+					"cwd": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"label": "FlightProject Linux Development Clean",
+				"group": "build",
+				"command": "Engine/Build/BatchFiles/Linux/Build.sh",
+				"args": [
+					"FlightProject",
+					"Linux",
+					"Development",
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"-waitmutex",
+					"-clean"
+				],
+				"problemMatcher": "$msCompile",
+				"type": "shell",
+				"options": {
+					"cwd": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"label": "FlightProject Linux Test Build",
+				"group": "build",
+				"command": "Engine/Build/BatchFiles/Linux/Build.sh",
+				"args": [
+					"FlightProject",
+					"Linux",
+					"Test",
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"-waitmutex"
+				],
+				"problemMatcher": "$msCompile",
+				"type": "shell",
+				"options": {
+					"cwd": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"label": "FlightProject Linux Test Rebuild",
+				"group": "build",
+				"command": "Engine/Build/BatchFiles/Linux/Build.sh",
+				"args": [
+					"FlightProject",
+					"Linux",
+					"Test",
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"-waitmutex"
+				],
+				"problemMatcher": "$msCompile",
+				"dependsOn": [
+					"FlightProject Linux Test Clean"
+				],
+				"type": "shell",
+				"options": {
+					"cwd": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"label": "FlightProject Linux Test Clean",
+				"group": "build",
+				"command": "Engine/Build/BatchFiles/Linux/Build.sh",
+				"args": [
+					"FlightProject",
+					"Linux",
+					"Test",
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"-waitmutex",
+					"-clean"
+				],
+				"problemMatcher": "$msCompile",
+				"type": "shell",
+				"options": {
+					"cwd": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"label": "FlightProject Linux Shipping Build",
+				"group": "build",
+				"command": "Engine/Build/BatchFiles/Linux/Build.sh",
+				"args": [
+					"FlightProject",
+					"Linux",
+					"Shipping",
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"-waitmutex"
+				],
+				"problemMatcher": "$msCompile",
+				"type": "shell",
+				"options": {
+					"cwd": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"label": "FlightProject Linux Shipping Rebuild",
+				"group": "build",
+				"command": "Engine/Build/BatchFiles/Linux/Build.sh",
+				"args": [
+					"FlightProject",
+					"Linux",
+					"Shipping",
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"-waitmutex"
+				],
+				"problemMatcher": "$msCompile",
+				"dependsOn": [
+					"FlightProject Linux Shipping Clean"
+				],
+				"type": "shell",
+				"options": {
+					"cwd": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"label": "FlightProject Linux Shipping Clean",
+				"group": "build",
+				"command": "Engine/Build/BatchFiles/Linux/Build.sh",
+				"args": [
+					"FlightProject",
+					"Linux",
+					"Shipping",
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"-waitmutex",
+					"-clean"
+				],
+				"problemMatcher": "$msCompile",
+				"type": "shell",
+				"options": {
+					"cwd": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"label": "FlightProject LinuxArm64 Debug Build",
+				"group": "build",
+				"command": "Engine/Build/BatchFiles/Linux/Build.sh",
+				"args": [
+					"FlightProject",
+					"LinuxArm64",
+					"Debug",
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"-waitmutex"
+				],
+				"problemMatcher": "$msCompile",
+				"type": "shell",
+				"options": {
+					"cwd": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"label": "FlightProject LinuxArm64 Debug Rebuild",
+				"group": "build",
+				"command": "Engine/Build/BatchFiles/Linux/Build.sh",
+				"args": [
+					"FlightProject",
+					"LinuxArm64",
+					"Debug",
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"-waitmutex"
+				],
+				"problemMatcher": "$msCompile",
+				"dependsOn": [
+					"FlightProject LinuxArm64 Debug Clean"
+				],
+				"type": "shell",
+				"options": {
+					"cwd": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"label": "FlightProject LinuxArm64 Debug Clean",
+				"group": "build",
+				"command": "Engine/Build/BatchFiles/Linux/Build.sh",
+				"args": [
+					"FlightProject",
+					"LinuxArm64",
+					"Debug",
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"-waitmutex",
+					"-clean"
+				],
+				"problemMatcher": "$msCompile",
+				"type": "shell",
+				"options": {
+					"cwd": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"label": "FlightProject LinuxArm64 DebugGame Build",
+				"group": "build",
+				"command": "Engine/Build/BatchFiles/Linux/Build.sh",
+				"args": [
+					"FlightProject",
+					"LinuxArm64",
+					"DebugGame",
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"-waitmutex"
+				],
+				"problemMatcher": "$msCompile",
+				"type": "shell",
+				"options": {
+					"cwd": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"label": "FlightProject LinuxArm64 DebugGame Rebuild",
+				"group": "build",
+				"command": "Engine/Build/BatchFiles/Linux/Build.sh",
+				"args": [
+					"FlightProject",
+					"LinuxArm64",
+					"DebugGame",
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"-waitmutex"
+				],
+				"problemMatcher": "$msCompile",
+				"dependsOn": [
+					"FlightProject LinuxArm64 DebugGame Clean"
+				],
+				"type": "shell",
+				"options": {
+					"cwd": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"label": "FlightProject LinuxArm64 DebugGame Clean",
+				"group": "build",
+				"command": "Engine/Build/BatchFiles/Linux/Build.sh",
+				"args": [
+					"FlightProject",
+					"LinuxArm64",
+					"DebugGame",
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"-waitmutex",
+					"-clean"
+				],
+				"problemMatcher": "$msCompile",
+				"type": "shell",
+				"options": {
+					"cwd": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"label": "FlightProject LinuxArm64 Development Build",
+				"group": "build",
+				"command": "Engine/Build/BatchFiles/Linux/Build.sh",
+				"args": [
+					"FlightProject",
+					"LinuxArm64",
+					"Development",
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"-waitmutex"
+				],
+				"problemMatcher": "$msCompile",
+				"type": "shell",
+				"options": {
+					"cwd": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"label": "FlightProject LinuxArm64 Development Rebuild",
+				"group": "build",
+				"command": "Engine/Build/BatchFiles/Linux/Build.sh",
+				"args": [
+					"FlightProject",
+					"LinuxArm64",
+					"Development",
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"-waitmutex"
+				],
+				"problemMatcher": "$msCompile",
+				"dependsOn": [
+					"FlightProject LinuxArm64 Development Clean"
+				],
+				"type": "shell",
+				"options": {
+					"cwd": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"label": "FlightProject LinuxArm64 Development Clean",
+				"group": "build",
+				"command": "Engine/Build/BatchFiles/Linux/Build.sh",
+				"args": [
+					"FlightProject",
+					"LinuxArm64",
+					"Development",
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"-waitmutex",
+					"-clean"
+				],
+				"problemMatcher": "$msCompile",
+				"type": "shell",
+				"options": {
+					"cwd": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"label": "FlightProject LinuxArm64 Test Build",
+				"group": "build",
+				"command": "Engine/Build/BatchFiles/Linux/Build.sh",
+				"args": [
+					"FlightProject",
+					"LinuxArm64",
+					"Test",
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"-waitmutex"
+				],
+				"problemMatcher": "$msCompile",
+				"type": "shell",
+				"options": {
+					"cwd": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"label": "FlightProject LinuxArm64 Test Rebuild",
+				"group": "build",
+				"command": "Engine/Build/BatchFiles/Linux/Build.sh",
+				"args": [
+					"FlightProject",
+					"LinuxArm64",
+					"Test",
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"-waitmutex"
+				],
+				"problemMatcher": "$msCompile",
+				"dependsOn": [
+					"FlightProject LinuxArm64 Test Clean"
+				],
+				"type": "shell",
+				"options": {
+					"cwd": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"label": "FlightProject LinuxArm64 Test Clean",
+				"group": "build",
+				"command": "Engine/Build/BatchFiles/Linux/Build.sh",
+				"args": [
+					"FlightProject",
+					"LinuxArm64",
+					"Test",
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"-waitmutex",
+					"-clean"
+				],
+				"problemMatcher": "$msCompile",
+				"type": "shell",
+				"options": {
+					"cwd": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"label": "FlightProject LinuxArm64 Shipping Build",
+				"group": "build",
+				"command": "Engine/Build/BatchFiles/Linux/Build.sh",
+				"args": [
+					"FlightProject",
+					"LinuxArm64",
+					"Shipping",
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"-waitmutex"
+				],
+				"problemMatcher": "$msCompile",
+				"type": "shell",
+				"options": {
+					"cwd": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"label": "FlightProject LinuxArm64 Shipping Rebuild",
+				"group": "build",
+				"command": "Engine/Build/BatchFiles/Linux/Build.sh",
+				"args": [
+					"FlightProject",
+					"LinuxArm64",
+					"Shipping",
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"-waitmutex"
+				],
+				"problemMatcher": "$msCompile",
+				"dependsOn": [
+					"FlightProject LinuxArm64 Shipping Clean"
+				],
+				"type": "shell",
+				"options": {
+					"cwd": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"label": "FlightProject LinuxArm64 Shipping Clean",
+				"group": "build",
+				"command": "Engine/Build/BatchFiles/Linux/Build.sh",
+				"args": [
+					"FlightProject",
+					"LinuxArm64",
+					"Shipping",
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"-waitmutex",
+					"-clean"
+				],
+				"problemMatcher": "$msCompile",
+				"type": "shell",
+				"options": {
+					"cwd": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"label": "FlightProjectEditor Linux Debug Build",
+				"group": "build",
+				"command": "Engine/Build/BatchFiles/Linux/Build.sh",
+				"args": [
+					"FlightProjectEditor",
+					"Linux",
+					"Debug",
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"-waitmutex"
+				],
+				"problemMatcher": "$msCompile",
+				"type": "shell",
+				"options": {
+					"cwd": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"label": "FlightProjectEditor Linux Debug Rebuild",
+				"group": "build",
+				"command": "Engine/Build/BatchFiles/Linux/Build.sh",
+				"args": [
+					"FlightProjectEditor",
+					"Linux",
+					"Debug",
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"-waitmutex"
+				],
+				"problemMatcher": "$msCompile",
+				"dependsOn": [
+					"FlightProjectEditor Linux Debug Clean"
+				],
+				"type": "shell",
+				"options": {
+					"cwd": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"label": "FlightProjectEditor Linux Debug Clean",
+				"group": "build",
+				"command": "Engine/Build/BatchFiles/Linux/Build.sh",
+				"args": [
+					"FlightProjectEditor",
+					"Linux",
+					"Debug",
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"-waitmutex",
+					"-clean"
+				],
+				"problemMatcher": "$msCompile",
+				"type": "shell",
+				"options": {
+					"cwd": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"label": "FlightProjectEditor Linux DebugGame Build",
+				"group": "build",
+				"command": "Engine/Build/BatchFiles/Linux/Build.sh",
+				"args": [
+					"FlightProjectEditor",
+					"Linux",
+					"DebugGame",
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"-waitmutex"
+				],
+				"problemMatcher": "$msCompile",
+				"type": "shell",
+				"options": {
+					"cwd": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"label": "FlightProjectEditor Linux DebugGame Rebuild",
+				"group": "build",
+				"command": "Engine/Build/BatchFiles/Linux/Build.sh",
+				"args": [
+					"FlightProjectEditor",
+					"Linux",
+					"DebugGame",
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"-waitmutex"
+				],
+				"problemMatcher": "$msCompile",
+				"dependsOn": [
+					"FlightProjectEditor Linux DebugGame Clean"
+				],
+				"type": "shell",
+				"options": {
+					"cwd": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"label": "FlightProjectEditor Linux DebugGame Clean",
+				"group": "build",
+				"command": "Engine/Build/BatchFiles/Linux/Build.sh",
+				"args": [
+					"FlightProjectEditor",
+					"Linux",
+					"DebugGame",
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"-waitmutex",
+					"-clean"
+				],
+				"problemMatcher": "$msCompile",
+				"type": "shell",
+				"options": {
+					"cwd": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"label": "FlightProjectEditor Linux Development Build",
+				"group": "build",
+				"command": "Engine/Build/BatchFiles/Linux/Build.sh",
+				"args": [
+					"FlightProjectEditor",
+					"Linux",
+					"Development",
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"-waitmutex"
+				],
+				"problemMatcher": "$msCompile",
+				"type": "shell",
+				"options": {
+					"cwd": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"label": "FlightProjectEditor Linux Development Rebuild",
+				"group": "build",
+				"command": "Engine/Build/BatchFiles/Linux/Build.sh",
+				"args": [
+					"FlightProjectEditor",
+					"Linux",
+					"Development",
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"-waitmutex"
+				],
+				"problemMatcher": "$msCompile",
+				"dependsOn": [
+					"FlightProjectEditor Linux Development Clean"
+				],
+				"type": "shell",
+				"options": {
+					"cwd": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"label": "FlightProjectEditor Linux Development Clean",
+				"group": "build",
+				"command": "Engine/Build/BatchFiles/Linux/Build.sh",
+				"args": [
+					"FlightProjectEditor",
+					"Linux",
+					"Development",
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"-waitmutex",
+					"-clean"
+				],
+				"problemMatcher": "$msCompile",
+				"type": "shell",
+				"options": {
+					"cwd": "/home/kelly/Unreal/UnrealEngine"
+				}
+			}
+		]
+	},
+	"launch": {
+		"version": "0.2.0",
+		"configurations": [
+			{
+				"name": "Launch FlightProject (Debug)",
+				"request": "launch",
+				"program": "/home/kelly/Documents/Unreal Projects/FlightProject/Binaries/Linux/FlightProject-Linux-Debug",
+				"preLaunchTask": "FlightProject Linux Debug Build",
+				"args": [
+				],
+				"cwd": "/home/kelly/Unreal/UnrealEngine",
+				"type": "cppdbg",
+				"visualizerFile": "/home/kelly/Unreal/UnrealEngine/Engine/Extras/VisualStudioDebugging/Unreal.natvis",
+				"showDisplayString": true,
+				"sourceFileMap": {
+					"/UEVFS/FlightProject": "/home/kelly/Documents/Unreal Projects/FlightProject",
+					"/UEVFS/Root": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"name": "Launch FlightProject (DebugGame)",
+				"request": "launch",
+				"program": "/home/kelly/Documents/Unreal Projects/FlightProject/Binaries/Linux/FlightProject-Linux-DebugGame",
+				"preLaunchTask": "FlightProject Linux DebugGame Build",
+				"args": [
+				],
+				"cwd": "/home/kelly/Unreal/UnrealEngine",
+				"type": "cppdbg",
+				"visualizerFile": "/home/kelly/Unreal/UnrealEngine/Engine/Extras/VisualStudioDebugging/Unreal.natvis",
+				"showDisplayString": true,
+				"sourceFileMap": {
+					"/UEVFS/FlightProject": "/home/kelly/Documents/Unreal Projects/FlightProject",
+					"/UEVFS/Root": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"name": "Launch FlightProject (Development)",
+				"request": "launch",
+				"program": "/home/kelly/Documents/Unreal Projects/FlightProject/Binaries/Linux/FlightProject",
+				"preLaunchTask": "FlightProject Linux Development Build",
+				"args": [
+				],
+				"cwd": "/home/kelly/Unreal/UnrealEngine",
+				"type": "cppdbg",
+				"visualizerFile": "/home/kelly/Unreal/UnrealEngine/Engine/Extras/VisualStudioDebugging/Unreal.natvis",
+				"showDisplayString": true,
+				"sourceFileMap": {
+					"/UEVFS/FlightProject": "/home/kelly/Documents/Unreal Projects/FlightProject",
+					"/UEVFS/Root": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"name": "Launch FlightProject (Test)",
+				"request": "launch",
+				"program": "/home/kelly/Documents/Unreal Projects/FlightProject/Binaries/Linux/FlightProject-Linux-Test",
+				"preLaunchTask": "FlightProject Linux Test Build",
+				"args": [
+				],
+				"cwd": "/home/kelly/Unreal/UnrealEngine",
+				"type": "cppdbg",
+				"visualizerFile": "/home/kelly/Unreal/UnrealEngine/Engine/Extras/VisualStudioDebugging/Unreal.natvis",
+				"showDisplayString": true,
+				"sourceFileMap": {
+					"/UEVFS/FlightProject": "/home/kelly/Documents/Unreal Projects/FlightProject",
+					"/UEVFS/Root": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"name": "Launch FlightProject (Shipping)",
+				"request": "launch",
+				"program": "/home/kelly/Documents/Unreal Projects/FlightProject/Binaries/Linux/FlightProject-Linux-Shipping",
+				"preLaunchTask": "FlightProject Linux Shipping Build",
+				"args": [
+				],
+				"cwd": "/home/kelly/Unreal/UnrealEngine",
+				"type": "cppdbg",
+				"visualizerFile": "/home/kelly/Unreal/UnrealEngine/Engine/Extras/VisualStudioDebugging/Unreal.natvis",
+				"showDisplayString": true,
+				"sourceFileMap": {
+					"/UEVFS/FlightProject": "/home/kelly/Documents/Unreal Projects/FlightProject",
+					"/UEVFS/Root": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"name": "Launch FlightProjectEditor (Debug)",
+				"request": "launch",
+				"program": "/home/kelly/Unreal/UnrealEngine/Engine/Binaries/Linux/UnrealEditor-Linux-Debug",
+				"preLaunchTask": "FlightProjectEditor Linux Debug Build",
+				"args": [
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject"
+				],
+				"cwd": "/home/kelly/Unreal/UnrealEngine",
+				"type": "cppdbg",
+				"visualizerFile": "/home/kelly/Unreal/UnrealEngine/Engine/Extras/VisualStudioDebugging/Unreal.natvis",
+				"showDisplayString": true,
+				"sourceFileMap": {
+					"/UEVFS/FlightProject": "/home/kelly/Documents/Unreal Projects/FlightProject",
+					"/UEVFS/Root": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"name": "Launch FlightProjectEditor (DebugGame)",
+				"request": "launch",
+				"program": "/home/kelly/Unreal/UnrealEngine/Engine/Binaries/Linux/UnrealEditor-Linux-DebugGame",
+				"preLaunchTask": "FlightProjectEditor Linux DebugGame Build",
+				"args": [
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject"
+				],
+				"cwd": "/home/kelly/Unreal/UnrealEngine",
+				"type": "cppdbg",
+				"visualizerFile": "/home/kelly/Unreal/UnrealEngine/Engine/Extras/VisualStudioDebugging/Unreal.natvis",
+				"showDisplayString": true,
+				"sourceFileMap": {
+					"/UEVFS/FlightProject": "/home/kelly/Documents/Unreal Projects/FlightProject",
+					"/UEVFS/Root": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"name": "Launch FlightProjectEditor (Development)",
+				"request": "launch",
+				"program": "/home/kelly/Unreal/UnrealEngine/Engine/Binaries/Linux/UnrealEditor",
+				"preLaunchTask": "FlightProjectEditor Linux Development Build",
+				"args": [
+					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject"
+				],
+				"cwd": "/home/kelly/Unreal/UnrealEngine",
+				"type": "cppdbg",
+				"visualizerFile": "/home/kelly/Unreal/UnrealEngine/Engine/Extras/VisualStudioDebugging/Unreal.natvis",
+				"showDisplayString": true,
+				"sourceFileMap": {
+					"/UEVFS/FlightProject": "/home/kelly/Documents/Unreal Projects/FlightProject",
+					"/UEVFS/Root": "/home/kelly/Unreal/UnrealEngine"
+				}
+			},
+			{
+				"name": "Generate Project Files",
+				"type": "coreclr",
+				"request": "launch",
+				"preLaunchTask": "UnrealBuildTool Linux Development Build",
+				"program": "/home/kelly/Unreal/UnrealEngine/Engine/Build/BatchFiles/RunUBT.bat",
+				"args": [
+					"-projectfiles",
+					"-vscode",
+					"-project=/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"-game",
+					"-engine",
+					"-dotnet"
+				],
+				"env": {
+					"PATH": "/home/kelly/Unreal/UnrealEngine/Engine/Binaries/ThirdParty/DotNet/8.0.300/linux-x64:${env:PATH}",
+					"DOTNET_ROOT": "/home/kelly/Unreal/UnrealEngine/Engine/Binaries/ThirdParty/DotNet/8.0.300/linux-x64",
+					"DOTNET_HOST_PATH": "/home/kelly/Unreal/UnrealEngine/Engine/Binaries/ThirdParty/DotNet/8.0.300/linux-x64/dotnet",
+					"DOTNET_MULTILEVEL_LOOKUP": "0",
+					"DOTNET_ROLL_FORWARD": "LatestMajor"
+				},
+				"console": "internalConsole",
+				"internalConsoleOptions": "openOnSessionStart",
+				"stopAtEntry": false,
+				"cwd": "/home/kelly/Unreal/UnrealEngine"
+			}
+		]
+	}
+}

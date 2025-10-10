@@ -1,0 +1,67 @@
+{
+    "FileVersion": 3,
+    "EngineAssociation": "5F9B7F2C-6733-46F8-8CDF-2E962DA75B9C",
+    "Category": "Simulation",
+    "Description": "Autonomous flight sandbox with large-scale swarm support and GPU-driven systems.",
+    "Modules": [
+        {
+            "Name": "FlightProject",
+            "Type": "Runtime",
+            "LoadingPhase": "Default"
+        }
+    ],
+    "Plugins": [
+        {
+            "Name": "ModelingToolsEditorMode",
+            "Enabled": true,
+            "TargetAllowList": [
+                "Editor"
+            ]
+        },
+        {
+            "Name": "EnhancedInput",
+            "Enabled": true
+        },
+        {
+            "Name": "Niagara",
+            "Enabled": true
+        },
+        {
+            "Name": "MassGameplay",
+            "Enabled": true
+        },
+        {
+            "Name": "MassAI",
+            "Enabled": true
+        },
+        {
+            "Name": "StateTree",
+            "Enabled": true
+        },
+        {
+            "Name": "ComputeFramework",
+            "Enabled": true
+        },
+        {
+            "Name": "ChaosCaching",
+            "Enabled": true,
+            "TargetAllowList": [
+                "Editor"
+            ]
+        },
+        {
+            "Name": "GeometryScripting",
+            "Enabled": true,
+            "TargetAllowList": [
+                "Editor"
+            ]
+        },
+        {
+            "Name": "WorldPartitionHLODUtilities",
+            "Enabled": true,
+            "TargetAllowList": [
+                "Editor"
+            ]
+        }
+    ]
+}

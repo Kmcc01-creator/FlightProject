@@ -1,0 +1,257 @@
+#pragma once
+
+#include "CoreMinimal.h"
+#include "Engine/DataTable.h"
+#include "FlightDataTypes.generated.h"
+
+/**
+ * Data table row describing global lighting parameters.
+ */
+USTRUCT(BlueprintType)
+struct FFlightLightingConfigRow : public FTableRowBase
+{
+    GENERATED_BODY()
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Lighting")
+    float DirectionalIntensity = 1500.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Lighting")
+    float DirectionalPitch = -10.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Lighting")
+    float DirectionalYaw = 130.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Lighting")
+    float DirectionalRoll = 0.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Lighting")
+    float DirectionalColorR = 0.05f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Lighting")
+    float DirectionalColorG = 0.08f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Lighting")
+    float DirectionalColorB = 0.18f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Lighting")
+    float DirectionalColorA = 1.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Lighting")
+    float SkyIntensity = 0.25f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Lighting")
+    float SkyColorR = 0.02f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Lighting")
+    float SkyColorG = 0.06f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Lighting")
+    float SkyColorB = 0.12f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Lighting")
+    float SkyColorA = 1.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Lighting")
+    float LowerHemisphereColorR = 0.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Lighting")
+    float LowerHemisphereColorG = 0.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Lighting")
+    float LowerHemisphereColorB = 0.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Lighting")
+    float LowerHemisphereColorA = 1.f;
+
+    FLinearColor GetDirectionalColor() const
+    {
+        return FLinearColor(DirectionalColorR, DirectionalColorG, DirectionalColorB, DirectionalColorA);
+    }
+
+    FRotator GetDirectionalRotation() const
+    {
+        return FRotator(DirectionalPitch, DirectionalYaw, DirectionalRoll);
+    }
+
+    FLinearColor GetSkyColor() const
+    {
+        return FLinearColor(SkyColorR, SkyColorG, SkyColorB, SkyColorA);
+    }
+
+    FLinearColor GetLowerHemisphereColor() const
+    {
+        return FLinearColor(LowerHemisphereColorR, LowerHemisphereColorG, LowerHemisphereColorB, LowerHemisphereColorA);
+    }
+};
+
+/**
+ * Data table row describing autopilot drones and navigation lighting.
+ */
+USTRUCT(BlueprintType)
+struct FFlightAutopilotConfigRow : public FTableRowBase
+{
+    GENERATED_BODY()
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Autopilot")
+    float PathRadius = 3500.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Autopilot")
+    float BaseAltitude = 1200.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Autopilot")
+    int32 DroneCount = 6;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Autopilot")
+    float DroneSpeed = 1500.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Lighting")
+    float NavigationLightIntensity = 8000.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Lighting")
+    float NavigationLightRadius = 1500.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Lighting")
+    float NavigationLightColorR = 0.588f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Lighting")
+    float NavigationLightColorG = 0.784f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Lighting")
+    float NavigationLightColorB = 1.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Lighting")
+    float NavigationLightColorA = 1.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Lighting")
+    float NavigationLightHeightOffset = 250.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Lighting")
+    int32 bNavigationLightUseInverseSquared = 0;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Autopilot")
+    int32 bLoopPath = 1;
+
+    FLinearColor GetNavigationLightColor() const
+    {
+        return FLinearColor(
+            NavigationLightColorR,
+            NavigationLightColorG,
+            NavigationLightColorB,
+            NavigationLightColorA);
+    }
+
+    bool UseInverseSquaredFalloff() const
+    {
+        return bNavigationLightUseInverseSquared != 0;
+    }
+
+    bool ShouldLoopPath() const
+    {
+        return bLoopPath != 0;
+    }
+};
+
+UENUM(BlueprintType)
+enum class EFlightSpatialEntityType : uint8
+{
+    NavProbe,
+    Obstacle,
+    Landmark
+};
+
+/**
+ * Data table row describing authored spatial anchors and obstacles for the test range.
+ */
+USTRUCT(BlueprintType)
+struct FFlightSpatialLayoutRow : public FTableRowBase
+{
+    GENERATED_BODY()
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Layout")
+    FName Scenario = NAME_None;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Layout")
+    EFlightSpatialEntityType EntityType = EFlightSpatialEntityType::NavProbe;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Layout")
+    float PositionX = 0.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Layout")
+    float PositionY = 0.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Layout")
+    float PositionZ = 0.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Layout")
+    float RotationPitch = 0.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Layout")
+    float RotationYaw = 0.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Layout")
+    float RotationRoll = 0.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Layout")
+    float ScaleX = 1.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Layout")
+    float ScaleY = 1.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Layout")
+    float ScaleZ = 1.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Lighting")
+    float LightIntensity = 1500.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Lighting")
+    float LightRadius = 1200.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Lighting")
+    float LightHeightOffset = 220.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Lighting")
+    float LightColorR = 0.4f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Lighting")
+    float LightColorG = 0.75f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Lighting")
+    float LightColorB = 1.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Lighting")
+    float LightColorA = 1.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Layout")
+    int32 bSpawnLight = 1;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Layout")
+    FName RowName = NAME_None;
+
+    FVector GetLocation() const
+    {
+        return FVector(PositionX, PositionY, PositionZ);
+    }
+
+    FRotator GetRotation() const
+    {
+        return FRotator(RotationPitch, RotationYaw, RotationRoll);
+    }
+
+    FVector GetScale() const
+    {
+        return FVector(
+            FMath::Max(ScaleX, KINDA_SMALL_NUMBER),
+            FMath::Max(ScaleY, KINDA_SMALL_NUMBER),
+            FMath::Max(ScaleZ, KINDA_SMALL_NUMBER));
+    }
+
+    FLinearColor GetLightColor() const
+    {
+        return FLinearColor(LightColorR, LightColorG, LightColorB, LightColorA);
+    }
+
+    bool ShouldSpawnLight() const
+    {
+        return bSpawnLight != 0 && LightIntensity > 0.f && LightRadius > 0.f;
+    }
+};
