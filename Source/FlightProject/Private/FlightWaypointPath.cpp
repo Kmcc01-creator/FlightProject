@@ -1,8 +1,10 @@
 #include "FlightWaypointPath.h"
 
 #include "FlightDataTypes.h"
+#include "Mass/FlightWaypointPathRegistry.h"
 #include "Components/SceneComponent.h"
 #include "Components/SplineComponent.h"
+#include "Engine/World.h"
 
 AFlightWaypointPath::AFlightWaypointPath()
 {
@@ -25,6 +27,29 @@ void AFlightWaypointPath::OnConstruction(const FTransform& Transform)
     {
         BuildDefaultLoop();
     }
+}
+
+void AFlightWaypointPath::BeginPlay()
+{
+    Super::BeginPlay();
+
+    if (UFlightWaypointPathRegistry* Registry = GetWorld()->GetSubsystem<UFlightWaypointPathRegistry>())
+    {
+        PathId = Registry->RegisterPath(this);
+    }
+}
+
+void AFlightWaypointPath::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+    if (PathId.IsValid())
+    {
+        if (UFlightWaypointPathRegistry* Registry = GetWorld()->GetSubsystem<UFlightWaypointPathRegistry>())
+        {
+            Registry->UnregisterPath(PathId);
+        }
+    }
+
+    Super::EndPlay(EndPlayReason);
 }
 
 float AFlightWaypointPath::GetPathLength() const

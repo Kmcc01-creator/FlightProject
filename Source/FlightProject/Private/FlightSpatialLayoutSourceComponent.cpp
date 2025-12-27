@@ -1,4 +1,5 @@
 #include "FlightSpatialLayoutSourceComponent.h"
+#include "GameFramework/Actor.h"
 
 UFlightSpatialLayoutSourceComponent::UFlightSpatialLayoutSourceComponent()
 {

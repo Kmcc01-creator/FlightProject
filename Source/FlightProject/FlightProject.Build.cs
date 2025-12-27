@@ -6,6 +6,9 @@ public class FlightProject : ModuleRules
     {
         PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 
+        // Use C++23 standard for modern language features
+        CppStandard = CppStandardVersion.Cpp23;
+
         PublicDependencyModuleNames.AddRange(new string[]
         {
             "Core",
@@ -25,7 +28,11 @@ public class FlightProject : ModuleRules
             "MassSimulation",
             "StateTreeModule",
             "ComputeFramework",
-            "DeveloperSettings"
+            "DeveloperSettings",
+            // Geometry/Modeling support for MeshIR system
+            "GeometryCore",
+            "GeometryFramework",
+            "GeometryScriptingCore"
         });
 
         PrivateDependencyModuleNames.AddRange(new string[]
@@ -34,6 +41,14 @@ public class FlightProject : ModuleRules
             "RHI",
             "Projects"
         });
+
+        // Linux-specific io_uring and Vulkan integration
+        if (Target.Platform == UnrealTargetPlatform.Linux)
+        {
+            PrivateDependencyModuleNames.Add("VulkanRHI");
+            PublicDefinitions.Add("VULKAN_RHI_AVAILABLE=1");
+            // Vulkan functions loaded dynamically at runtime via dlopen
+        }
 
         if (Target.Type == TargetRules.TargetType.Editor)
         {

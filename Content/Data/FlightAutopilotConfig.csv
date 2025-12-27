@@ -1,2 +1,0 @@
-Name,PathRadius,BaseAltitude,DroneCount,DroneSpeed,NavigationLightIntensity,NavigationLightRadius,NavigationLightColorR,NavigationLightColorG,NavigationLightColorB,NavigationLightColorA,NavigationLightHeightOffset,bNavigationLightUseInverseSquared,bLoopPath
-NightDemo,3500,1200,6,1500,8000,1500,0.588,0.784,1.0,1.0,250,0,1

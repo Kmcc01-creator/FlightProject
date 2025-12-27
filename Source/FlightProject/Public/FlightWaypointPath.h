@@ -19,8 +19,12 @@ public:
     AFlightWaypointPath();
 
     virtual void OnConstruction(const FTransform& Transform) override;
+    virtual void BeginPlay() override;
+    virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
     USplineComponent* GetSplineComponent() const { return FlightSpline; }
+
+    FGuid GetPathId() const { return PathId; }
 
     float GetPathLength() const;
     FTransform GetTransformAtDistance(float Distance) const;
@@ -38,6 +42,9 @@ private:
 
     UPROPERTY(EditAnywhere, Category = "Flight|Path")
     float DefaultAltitude = 1200.f;
+
+    UPROPERTY(Transient, VisibleAnywhere, Category = "Flight|Path")
+    FGuid PathId;
 
     void BuildDefaultLoop();
     void BuildLoop(float Radius, float Altitude);

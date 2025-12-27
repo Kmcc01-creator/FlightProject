@@ -1,6 +1,8 @@
 #include "FlightPlayerController.h"
 
+#include "Components/InputComponent.h"
 #include "Engine/Engine.h"
+#include "Engine/LocalPlayer.h"
 #include "EnhancedInputSubsystems.h"
 #include "InputMappingContext.h"
 

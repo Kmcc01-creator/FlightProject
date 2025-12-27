@@ -42,7 +42,10 @@ private:
     UPROPERTY(Transient)
     TArray<TWeakObjectPtr<AActor>> SpawnedActors;
 
+public:
     void RebuildLayout();
+
+private:
     void DestroySpawnedActors();
     void SpawnLayoutRow(const FFlightSpatialLayoutRow& Row);
     TSubclassOf<AFlightSpatialTestEntity> ResolveClassForType(const FFlightSpatialLayoutRow& Row) const;

@@ -4,434 +4,355 @@
 #include "FlightHUD.h"
 #include "FlightPlayerController.h"
 #include "FlightVehiclePawn.h"
-#include "MassSimulationSubsystem.h"
-#include "FlightAIPawn.h"
-#include "FlightSpatialLayoutDirector.h"
-#include "FlightDataSubsystem.h"
-#include "FlightDataTypes.h"
-#include "FlightWaypointPath.h"
-#include "FlightSpawnSwarmAnchor.h"
+#include "FlightWorldBootstrapSubsystem.h"
+#include "FlightScriptingLibrary.h"
+#include "Modeling/FlightMeshIRLibrary.h"
+#include "Modeling/FlightMeshIR.h"
 
-#include "Components/DirectionalLightComponent.h"
-#include "Components/SkyLightComponent.h"
-#include "Components/SceneComponent.h"
-#include "Engine/DirectionalLight.h"
-#include "Engine/SkyLight.h"
-#include "EngineUtils.h"
-#include "Engine/GameInstance.h"
+#include "Engine/Engine.h"
 #include "Engine/World.h"
+#include "UDynamicMesh.h"
+#include "Components/DynamicMeshComponent.h"
+#include "GameFramework/PlayerController.h"
+#include "Camera/PlayerCameraManager.h"
+#include "Materials/Material.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogFlightGameMode, Log, All);
 
 AFlightGameMode::AFlightGameMode()
 {
-    DefaultPawnClass = AFlightVehiclePawn::StaticClass();
-    PlayerControllerClass = AFlightPlayerController::StaticClass();
-    HUDClass = AFlightHUD::StaticClass();
-    GameStateClass = AFlightGameState::StaticClass();
 }
 
 void AFlightGameMode::StartPlay()
 {
     Super::StartPlay();
-    const UWorld* World = GetWorld();
-    UE_LOG(LogFlightGameMode, Log, TEXT("StartPlay for map '%s'"), World ? *World->GetMapName() : TEXT("<unknown>"));
+    UE_LOG(LogFlightGameMode, Log, TEXT("=== FlightGameMode::StartPlay ==="));
 
-    InitializeMassRuntime();
-    SetupNightEnvironment();
-    BuildSpatialTestRange();
-    SpawnAutonomousFlights();
-    UE_LOG(LogFlightGameMode, Log, TEXT("FlightGameMode StartPlay bootstrap complete"));
-}
-
-void AFlightGameMode::InitializeMassRuntime()
-{
-    if (!GetWorld())
+    UWorld* World = GetWorld();
+    if (!World)
     {
-        UE_LOG(LogFlightGameMode, Warning, TEXT("InitializeMassRuntime skipped: world not available"));
+        UE_LOG(LogFlightGameMode, Error, TEXT("StartPlay: No world available"));
         return;
     }
 
-    if (UMassSimulationSubsystem* SimulationSubsystem = UWorld::GetSubsystem<UMassSimulationSubsystem>(GetWorld()))
+    // Step 1: Run world bootstrap (lighting, spatial layout, resume Mass simulation)
+    if (UFlightWorldBootstrapSubsystem* Bootstrap = World->GetSubsystem<UFlightWorldBootstrapSubsystem>())
     {
-        if (SimulationSubsystem->IsSimulationPaused())
-        {
-            SimulationSubsystem->ResumeSimulation();
-            UE_LOG(LogFlightGameMode, Log, TEXT("Resumed MassSimulationSubsystem simulation"));
-        }
-        else
-        {
-            UE_LOG(LogFlightGameMode, Verbose, TEXT("Mass simulation already active; no action taken"));
-        }
+        UE_LOG(LogFlightGameMode, Log, TEXT("Running world bootstrap..."));
+        Bootstrap->RunBootstrap();
+        UE_LOG(LogFlightGameMode, Log, TEXT("World bootstrap complete"));
     }
     else
     {
-        UE_LOG(LogFlightGameMode, Warning, TEXT("MassSimulationSubsystem not found; Mass agents will remain inactive"));
+        UE_LOG(LogFlightGameMode, Warning, TEXT("FlightWorldBootstrapSubsystem not available"));
+    }
+
+    // Step 2: Spawn initial swarm (via scripting library - handles plugin dependency)
+    UE_LOG(LogFlightGameMode, Log, TEXT("Spawning initial swarm..."));
+    int32 SpawnedCount = UFlightScriptingLibrary::SpawnInitialSwarm(this);
+    UE_LOG(LogFlightGameMode, Log, TEXT("Spawned %d swarm entities"), SpawnedCount);
+
+    // Summary
+    UE_LOG(LogFlightGameMode, Log, TEXT("=== FlightGameMode initialization complete ==="));
+
+    if (GEngine)
+    {
+        GEngine->AddOnScreenDebugMessage(-1, 5.f, FColor::Green,
+            FString::Printf(TEXT("Flight initialized: %d swarm entities"), SpawnedCount));
     }
 }
 
-void AFlightGameMode::SetupNightEnvironment()
+void AFlightGameMode::ResetSwarm()
 {
-    if (!GetWorld())
-    {
-        UE_LOG(LogFlightGameMode, Warning, TEXT("SetupNightEnvironment skipped: world not available"));
-        return;
-    }
-
-    const UFlightDataSubsystem* DataSubsystem = nullptr;
-    if (UGameInstance* GameInstance = GetWorld()->GetGameInstance())
-    {
-        DataSubsystem = GameInstance->GetSubsystem<UFlightDataSubsystem>();
-    }
-
-    const FFlightLightingConfigRow* LightingConfig = DataSubsystem ? DataSubsystem->GetLightingConfig() : nullptr;
-
-    const float DirectionalIntensity = LightingConfig ? LightingConfig->DirectionalIntensity : 1500.f;
-    const FLinearColor DirectionalColor = LightingConfig ? LightingConfig->GetDirectionalColor() : FLinearColor(0.05f, 0.08f, 0.18f, 1.f);
-    const FRotator DirectionalRotation = LightingConfig ? LightingConfig->GetDirectionalRotation() : FRotator(-10.f, 130.f, 0.f);
-
-    const float SkyIntensity = LightingConfig ? LightingConfig->SkyIntensity : 0.25f;
-    const FLinearColor SkyColor = LightingConfig ? LightingConfig->GetSkyColor() : FLinearColor(0.02f, 0.06f, 0.12f, 1.f);
-    const FLinearColor LowerHemisphereColor = LightingConfig ? LightingConfig->GetLowerHemisphereColor() : FLinearColor::Black;
-
-    UE_LOG(LogFlightGameMode, Log, TEXT("Applying lighting config: DirectionalIntensity=%.1f, SkyIntensity=%.2f (Source=%s)"),
-        DirectionalIntensity,
-        SkyIntensity,
-        LightingConfig ? TEXT("DataTable") : TEXT("Defaults"));
-
-    ADirectionalLight* DirectionalLight = nullptr;
-    for (TActorIterator<ADirectionalLight> It(GetWorld()); It; ++It)
-    {
-        DirectionalLight = *It;
-        break;
-    }
-
-    if (!DirectionalLight)
-    {
-        DirectionalLight = GetWorld()->SpawnActor<ADirectionalLight>();
-    }
+    UE_LOG(LogTemp, Warning, TEXT("FlightGameMode: Resetting Swarm (Placeholder)"));
     
-    if (DirectionalLight)
+    // Example logic: Find all pawns of a certain type and destroy them, or reset a simulation subsystem.
+    // For now, just logging to prove the Exec command works from the console.
+    
+    if (GEngine)
     {
-        if (UDirectionalLightComponent* DirectionalComponent = DirectionalLight->FindComponentByClass<UDirectionalLightComponent>())
-        {
-            DirectionalComponent->SetMobility(EComponentMobility::Movable);
-            DirectionalComponent->SetIntensity(DirectionalIntensity);
-            DirectionalComponent->SetLightColor(DirectionalColor);
-            DirectionalComponent->SetAtmosphereSunLightIndex(0);
-            DirectionalComponent->SetEnableLightShaftOcclusion(true);
-            DirectionalComponent->MarkRenderStateDirty();
-        }
+        GEngine->AddOnScreenDebugMessage(-1, 5.f, FColor::Yellow, TEXT("Swarm Reset Triggered"));
+    }
+}
 
-        DirectionalLight->SetActorRotation(DirectionalRotation);
+void AFlightGameMode::SpawnTestDrone(float Distance)
+{
+    UE_LOG(LogTemp, Display, TEXT("FlightGameMode: Spawning Test Drone at distance %f"), Distance);
+
+    // Logic to spawn a drone would go here.
+    // We would typically use GetWorld()->SpawnActor<...>(...) using the player's camera location.
+
+    if (GEngine)
+    {
+        GEngine->AddOnScreenDebugMessage(-1, 5.f, FColor::Cyan, FString::Printf(TEXT("Spawn Drone Request: %.2f units"), Distance));
+    }
+}
+
+void AFlightGameMode::TestMeshIR()
+{
+    UE_LOG(LogFlightGameMode, Log, TEXT("=== MeshIR System Test ==="));
+
+    if (GEngine)
+    {
+        GEngine->AddOnScreenDebugMessage(-1, 10.f, FColor::Green, TEXT("Running MeshIR Tests..."));
     }
 
-    ASkyLight* SkyLight = nullptr;
-    for (TActorIterator<ASkyLight> It(GetWorld()); It; ++It)
+    int32 PassCount = 0;
+    int32 FailCount = 0;
+
+    // Test 1: Basic Box Creation
     {
-        SkyLight = *It;
+        FFlightMeshIR BoxIR = UFlightMeshIRLibrary::MakeBoxIR(100.f, 100.f, 100.f);
+        if (BoxIR.IsValid() && BoxIR.Ops.Num() == 1)
+        {
+            UE_LOG(LogFlightGameMode, Log, TEXT("  [PASS] Basic box creation"));
+            PassCount++;
+        }
+        else
+        {
+            UE_LOG(LogFlightGameMode, Error, TEXT("  [FAIL] Basic box creation"));
+            FailCount++;
+        }
+    }
+
+    // Test 2: Box with Hole (Boolean Subtract)
+    {
+        FFlightMeshIR IR = UFlightMeshIRLibrary::MakeBoxIR(200.f, 200.f, 100.f);
+        UFlightMeshIRLibrary::SubtractCylinder(IR, 50.f, 150.f, FTransform::Identity);
+
+        if (IR.IsValid() && IR.Ops.Num() == 2)
+        {
+            UE_LOG(LogFlightGameMode, Log, TEXT("  [PASS] Box with hole (2 ops)"));
+            PassCount++;
+        }
+        else
+        {
+            UE_LOG(LogFlightGameMode, Error, TEXT("  [FAIL] Box with hole"));
+            FailCount++;
+        }
+    }
+
+    // Test 3: Hash Consistency
+    {
+        FFlightMeshIR IR1 = UFlightMeshIRLibrary::MakeBoxIR(100.f, 100.f, 100.f);
+        FFlightMeshIR IR2 = UFlightMeshIRLibrary::MakeBoxIR(100.f, 100.f, 100.f);
+        int64 Hash1 = UFlightMeshIRLibrary::GetIRHash(IR1);
+        int64 Hash2 = UFlightMeshIRLibrary::GetIRHash(IR2);
+
+        if (Hash1 == Hash2 && Hash1 != 0)
+        {
+            UE_LOG(LogFlightGameMode, Log, TEXT("  [PASS] Hash consistency (hash=%lld)"), Hash1);
+            PassCount++;
+        }
+        else
+        {
+            UE_LOG(LogFlightGameMode, Error, TEXT("  [FAIL] Hash consistency (%lld != %lld)"), Hash1, Hash2);
+            FailCount++;
+        }
+    }
+
+    // Test 4: Mesh Evaluation
+    {
+        FFlightMeshIR IR = UFlightMeshIRLibrary::MakeBoxIR(100.f, 100.f, 100.f);
+        UDynamicMesh* Mesh = UFlightMeshIRLibrary::EvaluateIR(IR);
+
+        if (Mesh != nullptr)
+        {
+            UE_LOG(LogFlightGameMode, Log, TEXT("  [PASS] Mesh evaluation succeeded"));
+            PassCount++;
+        }
+        else
+        {
+            UE_LOG(LogFlightGameMode, Error, TEXT("  [FAIL] Mesh evaluation returned null"));
+            FailCount++;
+        }
+    }
+
+    // Test 5: Cache System
+    {
+        UFlightMeshIRLibrary::ClearGlobalCache();
+
+        FFlightMeshIR IR = UFlightMeshIRLibrary::MakeSphereIR(50.f, 16);
+
+        // First call - cache miss
+        UDynamicMesh* Mesh1 = UFlightMeshIRLibrary::GetOrCreateMesh(IR);
+
+        // Second call - should be cache hit
+        UDynamicMesh* Mesh2 = UFlightMeshIRLibrary::GetOrCreateMesh(IR);
+
+        int32 EntryCount, HitCount, MissCount;
+        UFlightMeshIRLibrary::GetCacheStats(EntryCount, HitCount, MissCount);
+
+        if (Mesh1 != nullptr && Mesh2 == Mesh1 && HitCount == 1 && MissCount == 1)
+        {
+            UE_LOG(LogFlightGameMode, Log, TEXT("  [PASS] Cache system (entries=%d, hits=%d, misses=%d)"),
+                EntryCount, HitCount, MissCount);
+            PassCount++;
+        }
+        else
+        {
+            UE_LOG(LogFlightGameMode, Error, TEXT("  [FAIL] Cache system (entries=%d, hits=%d, misses=%d)"),
+                EntryCount, HitCount, MissCount);
+            FailCount++;
+        }
+    }
+
+    // Test 6: Presets
+    {
+        FFlightMeshIR HexNut = UFlightMeshIRPresets::MakeHexNut(50.f, 20.f, 30.f);
+        if (HexNut.IsValid() && HexNut.Ops.Num() >= 2)
+        {
+            UE_LOG(LogFlightGameMode, Log, TEXT("  [PASS] HexNut preset (%d ops)"), HexNut.Ops.Num());
+            PassCount++;
+        }
+        else
+        {
+            UE_LOG(LogFlightGameMode, Error, TEXT("  [FAIL] HexNut preset"));
+            FailCount++;
+        }
+    }
+
+    // Summary
+    UE_LOG(LogFlightGameMode, Log, TEXT("=== MeshIR Test Results: %d passed, %d failed ==="), PassCount, FailCount);
+
+    if (GEngine)
+    {
+        FColor ResultColor = (FailCount == 0) ? FColor::Green : FColor::Red;
+        GEngine->AddOnScreenDebugMessage(-1, 10.f, ResultColor,
+            FString::Printf(TEXT("MeshIR Tests: %d PASSED, %d FAILED"), PassCount, FailCount));
+    }
+}
+
+void AFlightGameMode::SpawnMeshIRDemo(int32 DemoType)
+{
+    UWorld* World = GetWorld();
+    if (!World)
+    {
+        UE_LOG(LogFlightGameMode, Error, TEXT("SpawnMeshIRDemo: No world"));
+        return;
+    }
+
+    // Get spawn location in front of the player
+    FVector SpawnLocation = FVector::ZeroVector;
+    FRotator SpawnRotation = FRotator::ZeroRotator;
+
+    APlayerController* PC = World->GetFirstPlayerController();
+    if (PC && PC->PlayerCameraManager)
+    {
+        FVector CamLoc = PC->PlayerCameraManager->GetCameraLocation();
+        FRotator CamRot = PC->PlayerCameraManager->GetCameraRotation();
+        SpawnLocation = CamLoc + CamRot.Vector() * 500.f; // 500 units in front
+    }
+    else
+    {
+        SpawnLocation = FVector(0, 0, 200);
+    }
+
+    // Create IR based on demo type
+    FFlightMeshIR IR;
+    FString DemoName;
+
+    switch (DemoType)
+    {
+    case 0: // Box with center hole
+        DemoName = TEXT("BoxWithHole");
+        IR = UFlightMeshIRLibrary::MakeBoxIR(200.f, 200.f, 100.f);
+        UFlightMeshIRLibrary::SubtractCylinder(IR, 50.f, 150.f, FTransform::Identity);
+        break;
+
+    case 1: // Box with 4 corner holes
+        DemoName = TEXT("MultiHole");
+        IR = UFlightMeshIRLibrary::MakeBoxIR(300.f, 300.f, 80.f);
+        {
+            float Offset = 100.f;
+            TArray<FVector> Corners = {
+                FVector(Offset, Offset, 0),
+                FVector(-Offset, Offset, 0),
+                FVector(-Offset, -Offset, 0),
+                FVector(Offset, -Offset, 0)
+            };
+            for (const FVector& Corner : Corners)
+            {
+                UFlightMeshIRLibrary::SubtractCylinder(IR, 30.f, 120.f, FTransform(Corner));
+            }
+        }
+        break;
+
+    case 2: // L-Bracket
+        DemoName = TEXT("LBracket");
+        IR = UFlightMeshIRPresets::MakeLBracket(200.f, 80.f, 20.f);
+        break;
+
+    case 3: // Hex Nut
+        DemoName = TEXT("HexNut");
+        IR = UFlightMeshIRPresets::MakeHexNut(100.f, 40.f, 50.f);
+        break;
+
+    case 4: // T-Junction pipe
+        DemoName = TEXT("TJunction");
+        IR = UFlightMeshIRPresets::MakeTJunction(30.f, 200.f, 25.f, 120.f);
+        break;
+
+    default:
+        DemoName = TEXT("DefaultBox");
+        IR = UFlightMeshIRLibrary::MakeBoxIR(100.f, 100.f, 100.f);
         break;
     }
 
-    if (!SkyLight)
+    // Evaluate IR to mesh
+    UDynamicMesh* DynMesh = UFlightMeshIRLibrary::GetOrCreateMesh(IR);
+    if (!DynMesh)
     {
-        SkyLight = GetWorld()->SpawnActor<ASkyLight>();
-    }
-
-    if (SkyLight)
-    {
-        if (USkyLightComponent* SkyComponent = SkyLight->FindComponentByClass<USkyLightComponent>())
+        UE_LOG(LogFlightGameMode, Error, TEXT("SpawnMeshIRDemo: Failed to evaluate mesh"));
+        if (GEngine)
         {
-            SkyComponent->SetMobility(EComponentMobility::Movable);
-            SkyComponent->SetIntensity(SkyIntensity);
-            SkyComponent->SetLightColor(SkyColor);
-            SkyComponent->SetLowerHemisphereColor(LowerHemisphereColor);
-            SkyComponent->RecaptureSky();
+            GEngine->AddOnScreenDebugMessage(-1, 5.f, FColor::Red, TEXT("MeshIR evaluation failed"));
         }
-    }
-}
-
-void AFlightGameMode::BuildSpatialTestRange()
-{
-    if (!GetWorld())
-    {
-        UE_LOG(LogFlightGameMode, Warning, TEXT("BuildSpatialTestRange skipped: world not available"));
         return;
     }
 
-    for (TActorIterator<AFlightSpatialLayoutDirector> It(GetWorld()); It; ++It)
-    {
-        UE_LOG(LogFlightGameMode, Log, TEXT("Spatial layout director already present: %s"), *GetNameSafe(*It));
-        return;
-    }
-
-    FActorSpawnParameters SpawnParams;
-    SpawnParams.Owner = this;
-    SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-
-    if (AFlightSpatialLayoutDirector* NewDirector = GetWorld()->SpawnActor<AFlightSpatialLayoutDirector>(AFlightSpatialLayoutDirector::StaticClass(), FTransform::Identity, SpawnParams))
-    {
-        UE_LOG(LogFlightGameMode, Log, TEXT("Spawned spatial layout director: %s"), *GetNameSafe(NewDirector));
-    }
-    else
-    {
-        UE_LOG(LogFlightGameMode, Error, TEXT("Failed to spawn spatial layout director"));
-    }
-}
-
-void AFlightGameMode::SpawnAutonomousFlights()
-{
-    if (!GetWorld())
-    {
-        UE_LOG(LogFlightGameMode, Warning, TEXT("SpawnAutonomousFlights skipped: world not available"));
-        return;
-    }
-
-    const UFlightDataSubsystem* DataSubsystem = nullptr;
-    if (UGameInstance* GameInstance = GetWorld()->GetGameInstance())
-    {
-        DataSubsystem = GameInstance->GetSubsystem<UFlightDataSubsystem>();
-    }
-
-    const FFlightAutopilotConfigRow* AutopilotConfig = DataSubsystem ? DataSubsystem->GetAutopilotConfig() : nullptr;
-
-    AFlightWaypointPath* WaypointPath = FindOrCreateWaypointPath(AutopilotConfig);
-    if (!WaypointPath)
-    {
-        UE_LOG(LogFlightGameMode, Error, TEXT("Unable to spawn drones: waypoint path missing"));
-        return;
-    }
-
-    const float PathLength = WaypointPath->GetPathLength();
-    if (PathLength <= KINDA_SMALL_NUMBER)
-    {
-        UE_LOG(LogFlightGameMode, Error, TEXT("Waypoint path %s has insufficient length (%.2f)"),
-            *GetNameSafe(WaypointPath),
-            PathLength);
-        return;
-    }
-
-    struct FSwarmAnchorGroup
-    {
-        AFlightSpawnSwarmAnchor* Anchor = nullptr;
-        int32 DroneCount = 0;
-        float PhaseOffsetDeg = 0.f;
-        float PhaseSpreadDeg = 360.f;
-        float SpeedOverride = -1.f;
-    };
-
-    TArray<FSwarmAnchorGroup> SwarmGroups;
-    int32 TotalAnchorDrones = 0;
-
-    for (TActorIterator<AFlightSpawnSwarmAnchor> AnchorIt(GetWorld()); AnchorIt; ++AnchorIt)
-    {
-        AFlightSpawnSwarmAnchor* Anchor = *AnchorIt;
-        if (!Anchor)
-        {
-            continue;
-        }
-
-        const int32 AnchorDroneCount = Anchor->GetDroneCount();
-        if (AnchorDroneCount <= 0)
-        {
-            continue;
-        }
-
-        FSwarmAnchorGroup Group;
-        Group.Anchor = Anchor;
-        Group.DroneCount = AnchorDroneCount;
-        Group.PhaseOffsetDeg = Anchor->GetPhaseOffsetDeg();
-        Group.PhaseSpreadDeg = Anchor->GetPhaseSpreadDeg();
-        Group.SpeedOverride = Anchor->GetAutopilotSpeedOverride();
-        SwarmGroups.Add(Group);
-        TotalAnchorDrones += AnchorDroneCount;
-    }
-
-    const bool bAnchorsProvideSpawns = TotalAnchorDrones > 0;
-    const int32 DroneCount = bAnchorsProvideSpawns
-        ? TotalAnchorDrones
-        : FMath::Max(AutopilotConfig ? AutopilotConfig->DroneCount : 6, 1);
-    const bool bLoopPath = AutopilotConfig ? AutopilotConfig->ShouldLoopPath() : true;
-
-    if (DroneCount <= 0)
-    {
-        UE_LOG(LogFlightGameMode, Warning, TEXT("SpawnAutonomousFlights: No drones requested; skipping spawn."));
-        return;
-    }
-
-    UE_LOG(LogFlightGameMode, Log, TEXT("Spawning %d autonomous drones on path %s (Length=%.2f, Loop=%s)%s"),
-        DroneCount,
-        *GetNameSafe(WaypointPath),
-        PathLength,
-        bLoopPath ? TEXT("true") : TEXT("false"),
-        bAnchorsProvideSpawns ? TEXT(" using anchor overrides") : TEXT(""));
-
-    struct FSpawnOrder
-    {
-        float Distance = 0.f;
-        float SpeedOverride = -1.f;
-        AFlightSpawnSwarmAnchor* SourceAnchor = nullptr;
-        int32 GlobalIndex = 0;
-    };
-
-    TArray<FSpawnOrder> SpawnOrders;
-    SpawnOrders.Reserve(DroneCount);
-
-    if (!bAnchorsProvideSpawns)
-    {
-        for (int32 DroneIndex = 0; DroneIndex < DroneCount; ++DroneIndex)
-        {
-            FSpawnOrder Order;
-            Order.Distance = (PathLength / DroneCount) * DroneIndex;
-            Order.GlobalIndex = DroneIndex;
-            SpawnOrders.Add(Order);
-        }
-    }
-    else
-    {
-        const float DefaultIncrement = PathLength / FMath::Max(DroneCount, 1);
-        int32 GlobalIndex = 0;
-
-        for (const FSwarmAnchorGroup& Group : SwarmGroups)
-        {
-            const float BaseFraction = FMath::Fmod(Group.PhaseOffsetDeg, 360.f) / 360.f;
-            float NormalizedBase = BaseFraction;
-            if (NormalizedBase < 0.f)
-            {
-                NormalizedBase += 1.f;
-            }
-
-            const float SpreadFraction = Group.PhaseSpreadDeg / 360.f;
-            const bool bUsePhaseSpread = SpreadFraction > KINDA_SMALL_NUMBER;
-            const float StepFraction = bUsePhaseSpread && Group.DroneCount > 0
-                ? SpreadFraction / Group.DroneCount
-                : 0.f;
-
-            for (int32 LocalIndex = 0; LocalIndex < Group.DroneCount; ++LocalIndex)
-            {
-                FSpawnOrder Order;
-                if (bUsePhaseSpread)
-                {
-                    float Fraction = NormalizedBase + StepFraction * LocalIndex;
-                    Fraction = FMath::Fmod(Fraction, 1.f);
-                    if (Fraction < 0.f)
-                    {
-                        Fraction += 1.f;
-                    }
-                    Order.Distance = Fraction * PathLength;
-                }
-                else
-                {
-                    Order.Distance = DefaultIncrement * GlobalIndex;
-                }
-
-                Order.SpeedOverride = Group.SpeedOverride;
-                Order.SourceAnchor = Group.Anchor;
-                Order.GlobalIndex = GlobalIndex;
-                SpawnOrders.Add(Order);
-                ++GlobalIndex;
-            }
-        }
-    }
-
-    for (int32 OrderIndex = 0; OrderIndex < SpawnOrders.Num(); ++OrderIndex)
-    {
-        const FSpawnOrder& Order = SpawnOrders[OrderIndex];
-
-        FActorSpawnParameters SpawnParams;
-        SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
-        SpawnParams.Owner = this;
-
-        if (AFlightAIPawn* Drone = GetWorld()->SpawnActor<AFlightAIPawn>(AFlightAIPawn::StaticClass(), FTransform::Identity, SpawnParams))
-        {
-            if (AutopilotConfig)
-            {
-                Drone->ApplyAutopilotConfig(*AutopilotConfig);
-            }
-
-            Drone->SetFlightPath(WaypointPath, Order.Distance, bLoopPath);
-
-            if (Order.SpeedOverride > 0.f)
-            {
-                Drone->SetAutopilotSpeed(Order.SpeedOverride);
-            }
-
-            if (Order.SourceAnchor)
-            {
-                UE_LOG(LogFlightGameMode, Log, TEXT("Spawned drone %s [%d/%d] at distance %.2f via anchor %s"),
-                    *GetNameSafe(Drone),
-                    Order.GlobalIndex + 1,
-                    DroneCount,
-                    Order.Distance,
-                    *GetNameSafe(Order.SourceAnchor));
-            }
-            else
-            {
-                UE_LOG(LogFlightGameMode, Log, TEXT("Spawned drone %s [%d/%d] at distance %.2f"),
-                    *GetNameSafe(Drone),
-                    Order.GlobalIndex + 1,
-                    DroneCount,
-                    Order.Distance);
-            }
-        }
-        else
-        {
-            UE_LOG(LogFlightGameMode, Error, TEXT("Failed to spawn drone %d of %d"), Order.GlobalIndex + 1, DroneCount);
-        }
-    }
-}
-
-AFlightWaypointPath* AFlightGameMode::FindOrCreateWaypointPath(const FFlightAutopilotConfigRow* AutopilotConfig)
-{
-    if (!GetWorld())
-    {
-        UE_LOG(LogFlightGameMode, Warning, TEXT("FindOrCreateWaypointPath failed: world not available"));
-        return nullptr;
-    }
-
-    for (TActorIterator<AFlightWaypointPath> It(GetWorld()); It; ++It)
-    {
-        AFlightWaypointPath* ExistingPath = *It;
-        if (AutopilotConfig)
-        {
-            ExistingPath->ConfigureFromAutopilotConfig(*AutopilotConfig);
-            UE_LOG(LogFlightGameMode, Log, TEXT("Reusing waypoint path %s with autopilot config (Radius=%.1f, Altitude=%.1f)"),
-                *GetNameSafe(ExistingPath),
-                AutopilotConfig->PathRadius,
-                AutopilotConfig->BaseAltitude);
-        }
-        else
-        {
-            ExistingPath->EnsureDefaultLoop();
-            UE_LOG(LogFlightGameMode, Log, TEXT("Reusing waypoint path %s with default loop settings"), *GetNameSafe(ExistingPath));
-        }
-        return ExistingPath;
-    }
-
+    // Spawn an actor
     FActorSpawnParameters SpawnParams;
     SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 
-    AFlightWaypointPath* Path = GetWorld()->SpawnActor<AFlightWaypointPath>(AFlightWaypointPath::StaticClass(), FTransform::Identity, SpawnParams);
-    if (Path)
+    AActor* MeshActor = World->SpawnActor<AActor>(AActor::StaticClass(), SpawnLocation, SpawnRotation, SpawnParams);
+    if (!MeshActor)
     {
-        if (AutopilotConfig)
-        {
-            Path->ConfigureFromAutopilotConfig(*AutopilotConfig);
-            UE_LOG(LogFlightGameMode, Log, TEXT("Created waypoint path %s from autopilot config (Radius=%.1f, Altitude=%.1f)"),
-                *GetNameSafe(Path),
-                AutopilotConfig->PathRadius,
-                AutopilotConfig->BaseAltitude);
-        }
-        else
-        {
-            Path->EnsureDefaultLoop();
-            UE_LOG(LogFlightGameMode, Log, TEXT("Created waypoint path %s with default loop settings"), *GetNameSafe(Path));
-        }
-    }
-    else
-    {
-        UE_LOG(LogFlightGameMode, Error, TEXT("Failed to spawn waypoint path actor"));
+        UE_LOG(LogFlightGameMode, Error, TEXT("SpawnMeshIRDemo: Failed to spawn actor"));
+        return;
     }
 
-    return Path;
+    MeshActor->SetActorLabel(FString::Printf(TEXT("MeshIR_%s"), *DemoName));
+
+    // Add root component
+    USceneComponent* RootComp = NewObject<USceneComponent>(MeshActor, TEXT("Root"));
+    RootComp->SetMobility(EComponentMobility::Movable);
+    MeshActor->SetRootComponent(RootComp);
+    RootComp->RegisterComponent();
+
+    // Add DynamicMeshComponent
+    UDynamicMeshComponent* MeshComp = NewObject<UDynamicMeshComponent>(MeshActor, TEXT("MeshComponent"));
+    MeshComp->SetupAttachment(RootComp);
+    MeshComp->SetMobility(EComponentMobility::Movable);
+
+    // Copy mesh data
+    MeshComp->SetDynamicMesh(DynMesh);
+
+    // Set a basic material
+    UMaterial* DefaultMat = LoadObject<UMaterial>(nullptr, TEXT("/Engine/BasicShapes/BasicShapeMaterial"));
+    if (DefaultMat)
+    {
+        MeshComp->SetMaterial(0, DefaultMat);
+    }
+
+    MeshComp->RegisterComponent();
+
+    UE_LOG(LogFlightGameMode, Log, TEXT("Spawned MeshIR demo: %s at %s (%d ops)"),
+        *DemoName, *SpawnLocation.ToString(), IR.Ops.Num());
+
+    if (GEngine)
+    {
+        GEngine->AddOnScreenDebugMessage(-1, 5.f, FColor::Cyan,
+            FString::Printf(TEXT("Spawned: %s (%d boolean ops)"), *DemoName, IR.Ops.Num()));
+    }
 }

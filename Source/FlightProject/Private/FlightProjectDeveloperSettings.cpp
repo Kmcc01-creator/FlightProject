@@ -10,10 +10,9 @@ UFlightProjectDeveloperSettings::UFlightProjectDeveloperSettings()
     DefaultTargetAltitude = 500.f;
     LowAltitudeThreshold = 100.f;
     HighAltitudeThreshold = 600.f;
-    LightingConfigPath = TEXT("Data/FlightLightingConfig.csv");
+
+    // Data Table references are set in Project Settings
     LightingConfigRow = TEXT("NightDemo");
-    AutopilotConfigPath = TEXT("Data/FlightAutopilotConfig.csv");
     AutopilotConfigRow = TEXT("NightDemo");
-    SpatialLayoutConfigPath = TEXT("Data/FlightSpatialLayout.csv");
     SpatialLayoutScenario = TEXT("NightRange");
 }

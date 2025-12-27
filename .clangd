@@ -1,0 +1,36 @@
+# clangd configuration for FlightProject (UE 5.7)
+# https://clangd.llvm.org/config
+
+CompileFlags:
+  # Treat .h files as C++ (UE uses .h for C++ headers)
+  Add:
+    - "-xc++"
+    - "-std=c++20"
+  # Remove flags that clangd doesn't understand
+  Remove:
+    - "-forward-unknown-to-host-compiler"
+    - "-Wno-deprecated-*"
+    - "--gcc-toolchain=*"
+
+Diagnostics:
+  # Suppress noisy warnings in engine headers
+  Suppress:
+    - "pp_including_mainfile_in_preamble"
+    - "-Wunused-variable"
+  ClangTidy:
+    Remove:
+      - modernize-*
+      - readability-*
+
+Index:
+  # Background indexing for faster navigation
+  Background: Build
+
+InlayHints:
+  # Show parameter names in function calls
+  ParameterNames: Yes
+  DeducedTypes: Yes
+  Designators: Yes
+
+Hover:
+  ShowAKA: Yes

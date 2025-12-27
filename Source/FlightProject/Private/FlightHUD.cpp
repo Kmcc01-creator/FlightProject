@@ -1,6 +1,8 @@
 #include "FlightHUD.h"
 
 #include "Engine/Canvas.h"
+#include "Engine/Engine.h"
+#include "Engine/World.h"
 #include "FlightGameState.h"
 #include "FlightVehiclePawn.h"
 

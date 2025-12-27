@@ -1,2 +1,0 @@
-Name,DirectionalIntensity,DirectionalPitch,DirectionalYaw,DirectionalRoll,DirectionalColorR,DirectionalColorG,DirectionalColorB,DirectionalColorA,SkyIntensity,SkyColorR,SkyColorG,SkyColorB,SkyColorA,LowerHemisphereColorR,LowerHemisphereColorG,LowerHemisphereColorB,LowerHemisphereColorA
-NightDemo,1500,-10,130,0,0.05,0.08,0.18,1.0,0.25,0.02,0.06,0.12,1.0,0.0,0.0,0.0,1.0

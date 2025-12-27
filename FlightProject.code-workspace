@@ -13,9 +13,9 @@
 		"typescript.tsc.autoDetect": "off",
 		"npm.autoDetect": "off",
 		"terminal.integrated.env.linux": {
-			"PATH": "/home/kelly/Unreal/UnrealEngine/Engine/Binaries/ThirdParty/DotNet/8.0.300/linux-x64:${env:PATH}",
-			"DOTNET_ROOT": "/home/kelly/Unreal/UnrealEngine/Engine/Binaries/ThirdParty/DotNet/8.0.300/linux-x64",
-			"DOTNET_HOST_PATH": "/home/kelly/Unreal/UnrealEngine/Engine/Binaries/ThirdParty/DotNet/8.0.300/linux-x64/dotnet",
+			"PATH": "/home/kelly/Unreal/UnrealEngine/Engine/Binaries/ThirdParty/DotNet/8.0.412/linux-x64:${env:PATH}",
+			"DOTNET_ROOT": "/home/kelly/Unreal/UnrealEngine/Engine/Binaries/ThirdParty/DotNet/8.0.412/linux-x64",
+			"DOTNET_HOST_PATH": "/home/kelly/Unreal/UnrealEngine/Engine/Binaries/ThirdParty/DotNet/8.0.412/linux-x64/dotnet",
 			"DOTNET_MULTILEVEL_LOOKUP": "0",
 			"DOTNET_ROLL_FORWARD": "LatestMajor"
 		}
@@ -37,7 +37,7 @@
 					"FlightProject",
 					"Linux",
 					"Debug",
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject",
 					"-waitmutex"
 				],
 				"problemMatcher": "$msCompile",
@@ -54,7 +54,7 @@
 					"FlightProject",
 					"Linux",
 					"Debug",
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject",
 					"-waitmutex"
 				],
 				"problemMatcher": "$msCompile",
@@ -74,7 +74,7 @@
 					"FlightProject",
 					"Linux",
 					"Debug",
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject",
 					"-waitmutex",
 					"-clean"
 				],
@@ -92,7 +92,7 @@
 					"FlightProject",
 					"Linux",
 					"DebugGame",
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject",
 					"-waitmutex"
 				],
 				"problemMatcher": "$msCompile",
@@ -109,7 +109,7 @@
 					"FlightProject",
 					"Linux",
 					"DebugGame",
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject",
 					"-waitmutex"
 				],
 				"problemMatcher": "$msCompile",
@@ -129,7 +129,7 @@
 					"FlightProject",
 					"Linux",
 					"DebugGame",
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject",
 					"-waitmutex",
 					"-clean"
 				],
@@ -147,7 +147,7 @@
 					"FlightProject",
 					"Linux",
 					"Development",
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject",
 					"-waitmutex"
 				],
 				"problemMatcher": "$msCompile",
@@ -164,7 +164,7 @@
 					"FlightProject",
 					"Linux",
 					"Development",
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject",
 					"-waitmutex"
 				],
 				"problemMatcher": "$msCompile",
@@ -184,7 +184,7 @@
 					"FlightProject",
 					"Linux",
 					"Development",
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject",
 					"-waitmutex",
 					"-clean"
 				],
@@ -202,7 +202,7 @@
 					"FlightProject",
 					"Linux",
 					"Test",
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject",
 					"-waitmutex"
 				],
 				"problemMatcher": "$msCompile",
@@ -219,7 +219,7 @@
 					"FlightProject",
 					"Linux",
 					"Test",
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject",
 					"-waitmutex"
 				],
 				"problemMatcher": "$msCompile",
@@ -239,7 +239,7 @@
 					"FlightProject",
 					"Linux",
 					"Test",
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject",
 					"-waitmutex",
 					"-clean"
 				],
@@ -257,7 +257,7 @@
 					"FlightProject",
 					"Linux",
 					"Shipping",
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject",
 					"-waitmutex"
 				],
 				"problemMatcher": "$msCompile",
@@ -274,7 +274,7 @@
 					"FlightProject",
 					"Linux",
 					"Shipping",
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject",
 					"-waitmutex"
 				],
 				"problemMatcher": "$msCompile",
@@ -294,7 +294,7 @@
 					"FlightProject",
 					"Linux",
 					"Shipping",
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject",
 					"-waitmutex",
 					"-clean"
 				],
@@ -312,7 +312,7 @@
 					"FlightProject",
 					"LinuxArm64",
 					"Debug",
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject",
 					"-waitmutex"
 				],
 				"problemMatcher": "$msCompile",
@@ -329,7 +329,7 @@
 					"FlightProject",
 					"LinuxArm64",
 					"Debug",
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject",
 					"-waitmutex"
 				],
 				"problemMatcher": "$msCompile",
@@ -349,7 +349,7 @@
 					"FlightProject",
 					"LinuxArm64",
 					"Debug",
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject",
 					"-waitmutex",
 					"-clean"
 				],
@@ -367,7 +367,7 @@
 					"FlightProject",
 					"LinuxArm64",
 					"DebugGame",
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject",
 					"-waitmutex"
 				],
 				"problemMatcher": "$msCompile",
@@ -384,7 +384,7 @@
 					"FlightProject",
 					"LinuxArm64",
 					"DebugGame",
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject",
 					"-waitmutex"
 				],
 				"problemMatcher": "$msCompile",
@@ -404,7 +404,7 @@
 					"FlightProject",
 					"LinuxArm64",
 					"DebugGame",
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject",
 					"-waitmutex",
 					"-clean"
 				],
@@ -422,7 +422,7 @@
 					"FlightProject",
 					"LinuxArm64",
 					"Development",
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject",
 					"-waitmutex"
 				],
 				"problemMatcher": "$msCompile",
@@ -439,7 +439,7 @@
 					"FlightProject",
 					"LinuxArm64",
 					"Development",
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject",
 					"-waitmutex"
 				],
 				"problemMatcher": "$msCompile",
@@ -459,7 +459,7 @@
 					"FlightProject",
 					"LinuxArm64",
 					"Development",
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject",
 					"-waitmutex",
 					"-clean"
 				],
@@ -477,7 +477,7 @@
 					"FlightProject",
 					"LinuxArm64",
 					"Test",
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject",
 					"-waitmutex"
 				],
 				"problemMatcher": "$msCompile",
@@ -494,7 +494,7 @@
 					"FlightProject",
 					"LinuxArm64",
 					"Test",
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject",
 					"-waitmutex"
 				],
 				"problemMatcher": "$msCompile",
@@ -514,7 +514,7 @@
 					"FlightProject",
 					"LinuxArm64",
 					"Test",
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject",
 					"-waitmutex",
 					"-clean"
 				],
@@ -532,7 +532,7 @@
 					"FlightProject",
 					"LinuxArm64",
 					"Shipping",
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject",
 					"-waitmutex"
 				],
 				"problemMatcher": "$msCompile",
@@ -549,7 +549,7 @@
 					"FlightProject",
 					"LinuxArm64",
 					"Shipping",
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject",
 					"-waitmutex"
 				],
 				"problemMatcher": "$msCompile",
@@ -569,7 +569,7 @@
 					"FlightProject",
 					"LinuxArm64",
 					"Shipping",
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject",
 					"-waitmutex",
 					"-clean"
 				],
@@ -587,7 +587,7 @@
 					"FlightProjectEditor",
 					"Linux",
 					"Debug",
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject",
 					"-waitmutex"
 				],
 				"problemMatcher": "$msCompile",
@@ -604,7 +604,7 @@
 					"FlightProjectEditor",
 					"Linux",
 					"Debug",
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject",
 					"-waitmutex"
 				],
 				"problemMatcher": "$msCompile",
@@ -624,7 +624,7 @@
 					"FlightProjectEditor",
 					"Linux",
 					"Debug",
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject",
 					"-waitmutex",
 					"-clean"
 				],
@@ -642,7 +642,7 @@
 					"FlightProjectEditor",
 					"Linux",
 					"DebugGame",
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject",
 					"-waitmutex"
 				],
 				"problemMatcher": "$msCompile",
@@ -659,7 +659,7 @@
 					"FlightProjectEditor",
 					"Linux",
 					"DebugGame",
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject",
 					"-waitmutex"
 				],
 				"problemMatcher": "$msCompile",
@@ -679,7 +679,7 @@
 					"FlightProjectEditor",
 					"Linux",
 					"DebugGame",
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject",
 					"-waitmutex",
 					"-clean"
 				],
@@ -697,7 +697,7 @@
 					"FlightProjectEditor",
 					"Linux",
 					"Development",
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject",
 					"-waitmutex"
 				],
 				"problemMatcher": "$msCompile",
@@ -714,7 +714,7 @@
 					"FlightProjectEditor",
 					"Linux",
 					"Development",
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject",
 					"-waitmutex"
 				],
 				"problemMatcher": "$msCompile",
@@ -734,7 +734,7 @@
 					"FlightProjectEditor",
 					"Linux",
 					"Development",
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject",
 					"-waitmutex",
 					"-clean"
 				],
@@ -752,82 +752,62 @@
 			{
 				"name": "Launch FlightProject (Debug)",
 				"request": "launch",
-				"program": "/home/kelly/Documents/Unreal Projects/FlightProject/Binaries/Linux/FlightProject-Linux-Debug",
+				"program": "/home/kelly/Unreal/Projects/FlightProject/Binaries/Linux/FlightProject-Linux-Debug",
 				"preLaunchTask": "FlightProject Linux Debug Build",
 				"args": [
 				],
 				"cwd": "/home/kelly/Unreal/UnrealEngine",
 				"type": "cppdbg",
 				"visualizerFile": "/home/kelly/Unreal/UnrealEngine/Engine/Extras/VisualStudioDebugging/Unreal.natvis",
-				"showDisplayString": true,
-				"sourceFileMap": {
-					"/UEVFS/FlightProject": "/home/kelly/Documents/Unreal Projects/FlightProject",
-					"/UEVFS/Root": "/home/kelly/Unreal/UnrealEngine"
-				}
+				"showDisplayString": true
 			},
 			{
 				"name": "Launch FlightProject (DebugGame)",
 				"request": "launch",
-				"program": "/home/kelly/Documents/Unreal Projects/FlightProject/Binaries/Linux/FlightProject-Linux-DebugGame",
+				"program": "/home/kelly/Unreal/Projects/FlightProject/Binaries/Linux/FlightProject-Linux-DebugGame",
 				"preLaunchTask": "FlightProject Linux DebugGame Build",
 				"args": [
 				],
 				"cwd": "/home/kelly/Unreal/UnrealEngine",
 				"type": "cppdbg",
 				"visualizerFile": "/home/kelly/Unreal/UnrealEngine/Engine/Extras/VisualStudioDebugging/Unreal.natvis",
-				"showDisplayString": true,
-				"sourceFileMap": {
-					"/UEVFS/FlightProject": "/home/kelly/Documents/Unreal Projects/FlightProject",
-					"/UEVFS/Root": "/home/kelly/Unreal/UnrealEngine"
-				}
+				"showDisplayString": true
 			},
 			{
 				"name": "Launch FlightProject (Development)",
 				"request": "launch",
-				"program": "/home/kelly/Documents/Unreal Projects/FlightProject/Binaries/Linux/FlightProject",
+				"program": "/home/kelly/Unreal/Projects/FlightProject/Binaries/Linux/FlightProject",
 				"preLaunchTask": "FlightProject Linux Development Build",
 				"args": [
 				],
 				"cwd": "/home/kelly/Unreal/UnrealEngine",
 				"type": "cppdbg",
 				"visualizerFile": "/home/kelly/Unreal/UnrealEngine/Engine/Extras/VisualStudioDebugging/Unreal.natvis",
-				"showDisplayString": true,
-				"sourceFileMap": {
-					"/UEVFS/FlightProject": "/home/kelly/Documents/Unreal Projects/FlightProject",
-					"/UEVFS/Root": "/home/kelly/Unreal/UnrealEngine"
-				}
+				"showDisplayString": true
 			},
 			{
 				"name": "Launch FlightProject (Test)",
 				"request": "launch",
-				"program": "/home/kelly/Documents/Unreal Projects/FlightProject/Binaries/Linux/FlightProject-Linux-Test",
+				"program": "/home/kelly/Unreal/Projects/FlightProject/Binaries/Linux/FlightProject-Linux-Test",
 				"preLaunchTask": "FlightProject Linux Test Build",
 				"args": [
 				],
 				"cwd": "/home/kelly/Unreal/UnrealEngine",
 				"type": "cppdbg",
 				"visualizerFile": "/home/kelly/Unreal/UnrealEngine/Engine/Extras/VisualStudioDebugging/Unreal.natvis",
-				"showDisplayString": true,
-				"sourceFileMap": {
-					"/UEVFS/FlightProject": "/home/kelly/Documents/Unreal Projects/FlightProject",
-					"/UEVFS/Root": "/home/kelly/Unreal/UnrealEngine"
-				}
+				"showDisplayString": true
 			},
 			{
 				"name": "Launch FlightProject (Shipping)",
 				"request": "launch",
-				"program": "/home/kelly/Documents/Unreal Projects/FlightProject/Binaries/Linux/FlightProject-Linux-Shipping",
+				"program": "/home/kelly/Unreal/Projects/FlightProject/Binaries/Linux/FlightProject-Linux-Shipping",
 				"preLaunchTask": "FlightProject Linux Shipping Build",
 				"args": [
 				],
 				"cwd": "/home/kelly/Unreal/UnrealEngine",
 				"type": "cppdbg",
 				"visualizerFile": "/home/kelly/Unreal/UnrealEngine/Engine/Extras/VisualStudioDebugging/Unreal.natvis",
-				"showDisplayString": true,
-				"sourceFileMap": {
-					"/UEVFS/FlightProject": "/home/kelly/Documents/Unreal Projects/FlightProject",
-					"/UEVFS/Root": "/home/kelly/Unreal/UnrealEngine"
-				}
+				"showDisplayString": true
 			},
 			{
 				"name": "Launch FlightProjectEditor (Debug)",
@@ -835,16 +815,12 @@
 				"program": "/home/kelly/Unreal/UnrealEngine/Engine/Binaries/Linux/UnrealEditor-Linux-Debug",
 				"preLaunchTask": "FlightProjectEditor Linux Debug Build",
 				"args": [
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject"
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject"
 				],
 				"cwd": "/home/kelly/Unreal/UnrealEngine",
 				"type": "cppdbg",
 				"visualizerFile": "/home/kelly/Unreal/UnrealEngine/Engine/Extras/VisualStudioDebugging/Unreal.natvis",
-				"showDisplayString": true,
-				"sourceFileMap": {
-					"/UEVFS/FlightProject": "/home/kelly/Documents/Unreal Projects/FlightProject",
-					"/UEVFS/Root": "/home/kelly/Unreal/UnrealEngine"
-				}
+				"showDisplayString": true
 			},
 			{
 				"name": "Launch FlightProjectEditor (DebugGame)",
@@ -852,16 +828,12 @@
 				"program": "/home/kelly/Unreal/UnrealEngine/Engine/Binaries/Linux/UnrealEditor-Linux-DebugGame",
 				"preLaunchTask": "FlightProjectEditor Linux DebugGame Build",
 				"args": [
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject"
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject"
 				],
 				"cwd": "/home/kelly/Unreal/UnrealEngine",
 				"type": "cppdbg",
 				"visualizerFile": "/home/kelly/Unreal/UnrealEngine/Engine/Extras/VisualStudioDebugging/Unreal.natvis",
-				"showDisplayString": true,
-				"sourceFileMap": {
-					"/UEVFS/FlightProject": "/home/kelly/Documents/Unreal Projects/FlightProject",
-					"/UEVFS/Root": "/home/kelly/Unreal/UnrealEngine"
-				}
+				"showDisplayString": true
 			},
 			{
 				"name": "Launch FlightProjectEditor (Development)",
@@ -869,16 +841,12 @@
 				"program": "/home/kelly/Unreal/UnrealEngine/Engine/Binaries/Linux/UnrealEditor",
 				"preLaunchTask": "FlightProjectEditor Linux Development Build",
 				"args": [
-					"/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject"
+					"/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject"
 				],
 				"cwd": "/home/kelly/Unreal/UnrealEngine",
 				"type": "cppdbg",
 				"visualizerFile": "/home/kelly/Unreal/UnrealEngine/Engine/Extras/VisualStudioDebugging/Unreal.natvis",
-				"showDisplayString": true,
-				"sourceFileMap": {
-					"/UEVFS/FlightProject": "/home/kelly/Documents/Unreal Projects/FlightProject",
-					"/UEVFS/Root": "/home/kelly/Unreal/UnrealEngine"
-				}
+				"showDisplayString": true
 			},
 			{
 				"name": "Generate Project Files",
@@ -889,15 +857,15 @@
 				"args": [
 					"-projectfiles",
 					"-vscode",
-					"-project=/home/kelly/Documents/Unreal Projects/FlightProject/FlightProject.uproject",
+					"-project=/home/kelly/Unreal/Projects/FlightProject/FlightProject.uproject",
 					"-game",
 					"-engine",
 					"-dotnet"
 				],
 				"env": {
-					"PATH": "/home/kelly/Unreal/UnrealEngine/Engine/Binaries/ThirdParty/DotNet/8.0.300/linux-x64:${env:PATH}",
-					"DOTNET_ROOT": "/home/kelly/Unreal/UnrealEngine/Engine/Binaries/ThirdParty/DotNet/8.0.300/linux-x64",
-					"DOTNET_HOST_PATH": "/home/kelly/Unreal/UnrealEngine/Engine/Binaries/ThirdParty/DotNet/8.0.300/linux-x64/dotnet",
+					"PATH": "/home/kelly/Unreal/UnrealEngine/Engine/Binaries/ThirdParty/DotNet/8.0.412/linux-x64:${env:PATH}",
+					"DOTNET_ROOT": "/home/kelly/Unreal/UnrealEngine/Engine/Binaries/ThirdParty/DotNet/8.0.412/linux-x64",
+					"DOTNET_HOST_PATH": "/home/kelly/Unreal/UnrealEngine/Engine/Binaries/ThirdParty/DotNet/8.0.412/linux-x64/dotnet",
 					"DOTNET_MULTILEVEL_LOOKUP": "0",
 					"DOTNET_ROLL_FORWARD": "LatestMajor"
 				},

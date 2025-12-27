@@ -4,8 +4,6 @@
 #include "FlightProjectDeveloperSettings.h"
 
 #include "Engine/DataTable.h"
-#include "Misc/FileHelper.h"
-#include "Misc/Paths.h"
 
 void UFlightDataSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
@@ -26,10 +24,13 @@ void UFlightDataSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     bSpatialLayoutLoaded = LoadSpatialLayout();
     if (!bSpatialLayoutLoaded)
     {
-        UE_LOG(LogFlightProject, Warning, TEXT("FlightDataSubsystem: Level layout CSV failed to load; test range actors will be absent."));
+        UE_LOG(LogFlightProject, Warning, TEXT("FlightDataSubsystem: Spatial layout not loaded; test range actors will be absent."));
     }
 
     bProceduralAnchorsLoaded = LoadProceduralAnchors();
+
+    UE_LOG(LogFlightProject, Log, TEXT("FlightDataSubsystem: Initialized - Lighting=%d, Autopilot=%d, SpatialLayout=%d (%d rows), ProceduralAnchors=%d"),
+        bLightingLoaded, bAutopilotLoaded, bSpatialLayoutLoaded, SpatialLayoutRows.Num(), bProceduralAnchorsLoaded);
 }
 
 bool UFlightDataSubsystem::LoadLightingConfig()
@@ -40,14 +41,29 @@ bool UFlightDataSubsystem::LoadLightingConfig()
         return false;
     }
 
-    return LoadTableRow(
-        Settings->LightingConfigPath,
-        Settings->LightingConfigRow,
-        FFlightLightingConfigRow::StaticStruct(),
-        [this](const uint8* RowData)
-        {
-            LightingConfig = *reinterpret_cast<const FFlightLightingConfigRow*>(RowData);
-        });
+    UDataTable* Table = Settings->LightingConfigTable.LoadSynchronous();
+    if (!Table)
+    {
+        UE_LOG(LogFlightProject, Warning, TEXT("FlightDataSubsystem: LightingConfigTable not set in project settings."));
+        return false;
+    }
+
+    const FName RowName = Settings->LightingConfigRow;
+    if (RowName.IsNone())
+    {
+        UE_LOG(LogFlightProject, Warning, TEXT("FlightDataSubsystem: LightingConfigRow not specified."));
+        return false;
+    }
+
+    const FFlightLightingConfigRow* Row = Table->FindRow<FFlightLightingConfigRow>(RowName, TEXT("LoadLightingConfig"));
+    if (!Row)
+    {
+        UE_LOG(LogFlightProject, Error, TEXT("FlightDataSubsystem: Row '%s' not found in LightingConfigTable."), *RowName.ToString());
+        return false;
+    }
+
+    LightingConfig = *Row;
+    return true;
 }
 
 bool UFlightDataSubsystem::LoadAutopilotConfig()
@@ -58,14 +74,29 @@ bool UFlightDataSubsystem::LoadAutopilotConfig()
         return false;
     }
 
-    return LoadTableRow(
-        Settings->AutopilotConfigPath,
-        Settings->AutopilotConfigRow,
-        FFlightAutopilotConfigRow::StaticStruct(),
-        [this](const uint8* RowData)
-        {
-            AutopilotConfig = *reinterpret_cast<const FFlightAutopilotConfigRow*>(RowData);
-        });
+    UDataTable* Table = Settings->AutopilotConfigTable.LoadSynchronous();
+    if (!Table)
+    {
+        UE_LOG(LogFlightProject, Warning, TEXT("FlightDataSubsystem: AutopilotConfigTable not set in project settings."));
+        return false;
+    }
+
+    const FName RowName = Settings->AutopilotConfigRow;
+    if (RowName.IsNone())
+    {
+        UE_LOG(LogFlightProject, Warning, TEXT("FlightDataSubsystem: AutopilotConfigRow not specified."));
+        return false;
+    }
+
+    const FFlightAutopilotConfigRow* Row = Table->FindRow<FFlightAutopilotConfigRow>(RowName, TEXT("LoadAutopilotConfig"));
+    if (!Row)
+    {
+        UE_LOG(LogFlightProject, Error, TEXT("FlightDataSubsystem: Row '%s' not found in AutopilotConfigTable."), *RowName.ToString());
+        return false;
+    }
+
+    AutopilotConfig = *Row;
+    return true;
 }
 
 bool UFlightDataSubsystem::LoadSpatialLayout()
@@ -78,39 +109,16 @@ bool UFlightDataSubsystem::LoadSpatialLayout()
         return false;
     }
 
-    if (Settings->SpatialLayoutConfigPath.IsEmpty())
+    UDataTable* Table = Settings->SpatialLayoutTable.LoadSynchronous();
+    if (!Table)
     {
-        UE_LOG(LogFlightProject, Warning, TEXT("FlightDataSubsystem: Spatial layout path not configured."));
-        return false;
-    }
-
-    const FString ContentDir = FPaths::ProjectContentDir();
-    const FString AbsolutePath = FPaths::Combine(ContentDir, Settings->SpatialLayoutConfigPath);
-
-    FString CSVString;
-    if (!FFileHelper::LoadFileToString(CSVString, *AbsolutePath))
-    {
-        UE_LOG(LogFlightProject, Error, TEXT("FlightDataSubsystem: Failed to load spatial layout CSV '%s'."), *AbsolutePath);
-        return false;
-    }
-
-    UDataTable* TempTable = NewObject<UDataTable>(this);
-    TempTable->RowStruct = FFlightSpatialLayoutRow::StaticStruct();
-
-    const TArray<FString> ImportErrors = TempTable->CreateTableFromCSVString(CSVString);
-    if (ImportErrors.Num() > 0)
-    {
-        for (const FString& Error : ImportErrors)
-        {
-            UE_LOG(LogFlightProject, Error, TEXT("FlightDataSubsystem: Spatial layout import error for '%s': %s"), *AbsolutePath, *Error);
-        }
+        UE_LOG(LogFlightProject, Warning, TEXT("FlightDataSubsystem: SpatialLayoutTable not set in project settings."));
         return false;
     }
 
     const FName ActiveScenario = Settings->SpatialLayoutScenario;
-    int32 RowsAdded = 0;
 
-    for (const auto& Pair : TempTable->GetRowMap())
+    for (const auto& Pair : Table->GetRowMap())
     {
         const FFlightSpatialLayoutRow* Row = reinterpret_cast<const FFlightSpatialLayoutRow*>(Pair.Value);
         if (!Row)
@@ -118,6 +126,7 @@ bool UFlightDataSubsystem::LoadSpatialLayout()
             continue;
         }
 
+        // Filter by scenario if specified
         if (!ActiveScenario.IsNone() && Row->Scenario != ActiveScenario)
         {
             continue;
@@ -126,15 +135,18 @@ bool UFlightDataSubsystem::LoadSpatialLayout()
         FFlightSpatialLayoutRow RowCopy = *Row;
         RowCopy.RowName = Pair.Key;
         SpatialLayoutRows.Add(MoveTemp(RowCopy));
-        ++RowsAdded;
     }
 
-    if (RowsAdded == 0)
+    if (SpatialLayoutRows.Num() == 0)
     {
-        UE_LOG(LogFlightProject, Warning, TEXT("FlightDataSubsystem: No spatial layout rows matched scenario '%s'."), *ActiveScenario.ToString());
+        if (!ActiveScenario.IsNone())
+        {
+            UE_LOG(LogFlightProject, Warning, TEXT("FlightDataSubsystem: No spatial layout rows matched scenario '%s'."), *ActiveScenario.ToString());
+        }
         return false;
     }
 
+    // Sort by row name for deterministic ordering
     SpatialLayoutRows.Sort([](const FFlightSpatialLayoutRow& A, const FFlightSpatialLayoutRow& B)
     {
         return A.RowName.LexicalLess(B.RowName);
@@ -148,35 +160,19 @@ bool UFlightDataSubsystem::LoadProceduralAnchors()
     ProceduralAnchors.Reset();
 
     const UFlightProjectDeveloperSettings* Settings = GetDefault<UFlightProjectDeveloperSettings>();
-    if (!Settings || Settings->ProceduralAnchorConfigPath.IsEmpty())
+    if (!Settings)
     {
         return false;
     }
 
-    const FString ContentDir = FPaths::ProjectContentDir();
-    const FString AbsolutePath = FPaths::Combine(ContentDir, Settings->ProceduralAnchorConfigPath);
-
-    FString CSVString;
-    if (!FFileHelper::LoadFileToString(CSVString, *AbsolutePath))
+    UDataTable* Table = Settings->ProceduralAnchorTable.LoadSynchronous();
+    if (!Table)
     {
-        UE_LOG(LogFlightProject, Warning, TEXT("FlightDataSubsystem: Procedural anchor CSV '%s' not found."), *AbsolutePath);
+        // Procedural anchors are optional
         return false;
     }
 
-    UDataTable* TempTable = NewObject<UDataTable>(this);
-    TempTable->RowStruct = FFlightProceduralAnchorRow::StaticStruct();
-
-    const TArray<FString> ImportErrors = TempTable->CreateTableFromCSVString(CSVString);
-    if (ImportErrors.Num() > 0)
-    {
-        for (const FString& Error : ImportErrors)
-        {
-            UE_LOG(LogFlightProject, Error, TEXT("FlightDataSubsystem: Procedural anchor import error for '%s': %s"), *AbsolutePath, *Error);
-        }
-        return false;
-    }
-
-    for (const auto& Pair : TempTable->GetRowMap())
+    for (const auto& Pair : Table->GetRowMap())
     {
         const FFlightProceduralAnchorRow* Row = reinterpret_cast<const FFlightProceduralAnchorRow*>(Pair.Value);
         if (!Row)
@@ -236,42 +232,47 @@ const FFlightProceduralAnchorRow* UFlightDataSubsystem::FindProceduralAnchorConf
     return nullptr;
 }
 
-bool UFlightDataSubsystem::LoadTableRow(const FString& RelativePath, const FName& RowName, UScriptStruct* RowStruct, TFunctionRef<void(const uint8*)> OnRowLoaded)
+void UFlightDataSubsystem::ReloadAllConfigs()
 {
-    if (RelativePath.IsEmpty() || RowName.IsNone() || RowStruct == nullptr)
+    UE_LOG(LogFlightProject, Log, TEXT("FlightDataSubsystem: Reloading all configurations..."));
+
+    bLightingLoaded = LoadLightingConfig();
+    bAutopilotLoaded = LoadAutopilotConfig();
+    bSpatialLayoutLoaded = LoadSpatialLayout();
+    bProceduralAnchorsLoaded = LoadProceduralAnchors();
+
+    UE_LOG(LogFlightProject, Log, TEXT("FlightDataSubsystem: Reload complete. Lighting=%d, Autopilot=%d, SpatialLayout=%d (%d rows), ProceduralAnchors=%d"),
+        bLightingLoaded, bAutopilotLoaded, bSpatialLayoutLoaded, SpatialLayoutRows.Num(), bProceduralAnchorsLoaded);
+}
+
+bool UFlightDataSubsystem::ReloadConfig(const FString& ConfigName)
+{
+    if (ConfigName.Equals(TEXT("Lighting"), ESearchCase::IgnoreCase))
     {
-        return false;
+        bLightingLoaded = LoadLightingConfig();
+        return bLightingLoaded;
+    }
+    else if (ConfigName.Equals(TEXT("Autopilot"), ESearchCase::IgnoreCase))
+    {
+        bAutopilotLoaded = LoadAutopilotConfig();
+        return bAutopilotLoaded;
+    }
+    else if (ConfigName.Equals(TEXT("SpatialLayout"), ESearchCase::IgnoreCase))
+    {
+        bSpatialLayoutLoaded = LoadSpatialLayout();
+        return bSpatialLayoutLoaded;
+    }
+    else if (ConfigName.Equals(TEXT("ProceduralAnchors"), ESearchCase::IgnoreCase))
+    {
+        bProceduralAnchorsLoaded = LoadProceduralAnchors();
+        return bProceduralAnchorsLoaded;
     }
 
-    const FString ContentDir = FPaths::ProjectContentDir();
-    const FString AbsolutePath = FPaths::Combine(ContentDir, RelativePath);
-
-    FString CSVString;
-    if (!FFileHelper::LoadFileToString(CSVString, *AbsolutePath))
-    {
-        UE_LOG(LogFlightProject, Error, TEXT("FlightDataSubsystem: Failed to load CSV file '%s'."), *AbsolutePath);
-        return false;
-    }
-
-    UDataTable* TempTable = NewObject<UDataTable>(this);
-    TempTable->RowStruct = RowStruct;
-
-    const TArray<FString> ImportErrors = TempTable->CreateTableFromCSVString(CSVString);
-    if (ImportErrors.Num() > 0)
-    {
-        for (const FString& Error : ImportErrors)
-        {
-            UE_LOG(LogFlightProject, Error, TEXT("FlightDataSubsystem: CSV import error for '%s': %s"), *AbsolutePath, *Error);
-        }
-        return false;
-    }
-
-    if (const uint8* Row = TempTable->FindRowUnchecked(RowName))
-    {
-        OnRowLoaded(Row);
-        return true;
-    }
-
-    UE_LOG(LogFlightProject, Error, TEXT("FlightDataSubsystem: Row '%s' not found in '%s'."), *RowName.ToString(), *AbsolutePath);
+    UE_LOG(LogFlightProject, Warning, TEXT("FlightDataSubsystem: Unknown config name '%s'. Valid: Lighting, Autopilot, SpatialLayout, ProceduralAnchors"), *ConfigName);
     return false;
+}
+
+bool UFlightDataSubsystem::IsFullyLoaded() const
+{
+    return bLightingLoaded && bAutopilotLoaded && bSpatialLayoutLoaded && bProceduralAnchorsLoaded;
 }

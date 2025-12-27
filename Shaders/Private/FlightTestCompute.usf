@@ -1,0 +1,68 @@
+// Copyright Kelly Rey Wilson. All Rights Reserved.
+// FlightProject - Test compute shader for io_uring integration
+
+#include "/Engine/Private/Common.ush"
+
+// Output buffer - will be read back after GPU completion
+RWStructuredBuffer<uint> OutputBuffer;
+
+// Test parameters
+uint TestValue;
+uint BufferSize;
+
+/**
+ * Simple test compute shader
+ * Writes TestValue to each element of OutputBuffer
+ * Used to validate GPU -> io_uring notification path
+ */
+[numthreads(64, 1, 1)]
+void TestComputeMain(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    uint Index = DispatchThreadId.x;
+
+    if (Index < BufferSize)
+    {
+        // Simple write - just proving the GPU did work
+        OutputBuffer[Index] = TestValue + Index;
+    }
+}
+
+/**
+ * Reduction compute shader
+ * Sums all values in InputBuffer and writes result to OutputBuffer[0]
+ * More realistic workload for timing tests
+ */
+StructuredBuffer<uint> InputBuffer;
+
+groupshared uint SharedSum[64];
+
+[numthreads(64, 1, 1)]
+void ReductionComputeMain(
+    uint3 GroupId : SV_GroupID,
+    uint3 GroupThreadId : SV_GroupThreadID,
+    uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    uint LocalIndex = GroupThreadId.x;
+    uint GlobalIndex = DispatchThreadId.x;
+
+    // Load into shared memory
+    SharedSum[LocalIndex] = (GlobalIndex < BufferSize) ? InputBuffer[GlobalIndex] : 0;
+    GroupMemoryBarrierWithGroupSync();
+
+    // Parallel reduction
+    for (uint Stride = 32; Stride > 0; Stride >>= 1)
+    {
+        if (LocalIndex < Stride)
+        {
+            SharedSum[LocalIndex] += SharedSum[LocalIndex + Stride];
+        }
+        GroupMemoryBarrierWithGroupSync();
+    }
+
+    // First thread writes result
+    if (LocalIndex == 0)
+    {
+        // Atomic add for multi-group reduction
+        InterlockedAdd(OutputBuffer[0], SharedSum[0]);
+    }
+}

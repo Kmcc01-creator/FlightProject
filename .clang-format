@@ -1,0 +1,60 @@
+# Unreal Engine coding standard
+# Based on https://docs.unrealengine.com/5.0/en-US/epic-cplusplus-coding-standard-for-unreal-engine/
+
+BasedOnStyle: LLVM
+
+# Tabs, not spaces (UE standard)
+UseTab: Always
+TabWidth: 4
+IndentWidth: 4
+
+# Braces on same line (Allman is NOT UE style despite what some think)
+BreakBeforeBraces: Allman
+
+# But actually UE uses this variant
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterClass: true
+  AfterControlStatement: true
+  AfterEnum: true
+  AfterFunction: true
+  AfterNamespace: true
+  AfterStruct: true
+  AfterUnion: true
+  BeforeCatch: true
+  BeforeElse: true
+  IndentBraces: false
+
+# Line length
+ColumnLimit: 120
+
+# Pointer/reference alignment
+PointerAlignment: Left
+ReferenceAlignment: Left
+
+# Include sorting
+SortIncludes: false
+IncludeBlocks: Preserve
+
+# Access modifiers
+AccessModifierOffset: -4
+
+# Keep short functions on one line
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+
+# Align
+AlignConsecutiveAssignments: false
+AlignConsecutiveDeclarations: false
+AlignTrailingComments: true
+
+# Namespaces
+NamespaceIndentation: None
+
+# Constructor initializers
+ConstructorInitializerAllOnOneLineOrOnePerLine: true
+ConstructorInitializerIndentWidth: 4
+
+# Don't break string literals
+BreakStringLiterals: false

@@ -1,40 +1,36 @@
 #include "FlightProject.h"
 #include "Modules/ModuleManager.h"
-#include "ShaderCore.h"
+#include "Interfaces/IPluginManager.h"
 #include "Misc/Paths.h"
 #include "HAL/FileManager.h"
+#include "ShaderCore.h"
 
 DEFINE_LOG_CATEGORY(LogFlightProject);
 IMPLEMENT_PRIMARY_GAME_MODULE(FFlightProjectModule, FlightProject, "FlightProject");
-
-namespace
-{
-    constexpr const TCHAR* FlightProjectShaderVirtualPath = TEXT("/Shaders");
-}
 
 void FFlightProjectModule::StartupModule()
 {
     UE_LOG(LogFlightProject, Log, TEXT("FlightProject module initialized"));
 
-#if USING_SHADER_COMPILER
+    // Register shader directory with virtual path /FlightProject
+    // This allows shaders to be referenced as "/FlightProject/Private/ShaderName.usf"
     const FString ShaderDirectory = FPaths::Combine(FPaths::ProjectDir(), TEXT("Shaders"));
     if (IFileManager::Get().DirectoryExists(*ShaderDirectory))
     {
-        FShaderDirectories::AddShaderSourceDirectoryMapping(FlightProjectShaderVirtualPath, ShaderDirectory);
-        UE_LOG(LogFlightProject, Log, TEXT("Registered shader source directory: %s -> %s"), FlightProjectShaderVirtualPath, *ShaderDirectory);
+        AddShaderSourceDirectoryMapping(TEXT("/FlightProject"), ShaderDirectory);
+        UE_LOG(LogFlightProject, Log, TEXT("Registered shader directory: /FlightProject -> %s"), *ShaderDirectory);
     }
     else
     {
-        UE_LOG(LogFlightProject, Warning, TEXT("Expected shader directory missing at %s; custom shaders will not compile until it exists."), *ShaderDirectory);
+        UE_LOG(LogFlightProject, Warning,
+            TEXT("Shader directory not found at %s - custom shaders unavailable"), *ShaderDirectory);
     }
-#endif
 }
 
 void FFlightProjectModule::ShutdownModule()
 {
-#if USING_SHADER_COMPILER
-    FShaderDirectories::RemoveShaderSourceDirectoryMapping(FlightProjectShaderVirtualPath);
-#endif
+    // Shader compiler shutdown moved to module shutdown
+    // FShaderCompilingManager::Get().OnShaderCompilerShutdown();
 
     UE_LOG(LogFlightProject, Log, TEXT("FlightProject module shut down"));
 }

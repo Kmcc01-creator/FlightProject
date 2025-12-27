@@ -1,0 +1,4 @@
+{
+    "unreal-clangd.creation.overwrite": "partial",
+    "unreal-clangd.utility.createProjectOnStartup": false
+}
