@@ -1,0 +1,54 @@
+// Copyright Kelly Rey Wilson. All Rights Reserved.
+// FlightSwarmIntegration - Pass 4: Euler Integration and Boundary Constraints
+
+#include "/Engine/Private/Common.ush"
+#include "FlightSwarmCommon.ush"
+
+// --- Inputs ---
+StructuredBuffer<float4> ForceBlackboard;
+StructuredBuffer<float4> DroidStates;
+uint NumEntities;
+
+// Simulation parameters
+float DeltaTime;
+
+// --- Outputs ---
+RWStructuredBuffer<float4> DroidStatesRW;
+
+[numthreads(64, 1, 1)]
+void IntegrationMain(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    uint EntityIndex = DispatchThreadId.x;
+    if (EntityIndex >= NumEntities) return;
+
+    // Read from SRV
+    float3 Pos = GetDroidPosition(DroidStates, EntityIndex);
+    float3 Vel = GetDroidVelocity(DroidStates, EntityIndex);
+    float Shield = GetDroidShield(DroidStates, EntityIndex);
+    uint Status = GetDroidStatus(DroidStates, EntityIndex);
+
+    float3 Force = ForceBlackboard[EntityIndex].xyz;
+    float dt = DeltaTime;
+
+    // 1. Euler Integration
+    float3 Accel = Force;
+    float3 NewVel = Vel + Accel * dt;
+    NewVel *= 0.98f; // Damping
+    float3 NewPos = Pos + NewVel * dt;
+
+    // 2. Boundary Constraints
+    float3 MinBounds = float3(-20000, -20000, 0);
+    float3 MaxBounds = float3(20000, 20000, 10000);
+    float BounceElasticity = 0.5f;
+
+    if (NewPos.x < MinBounds.x) { NewPos.x = MinBounds.x; NewVel.x *= -BounceElasticity; }
+    if (NewPos.x > MaxBounds.x) { NewPos.x = MaxBounds.x; NewVel.x *= -BounceElasticity; }
+    if (NewPos.y < MinBounds.y) { NewPos.y = MinBounds.y; NewVel.y *= -BounceElasticity; }
+    if (NewPos.y > MaxBounds.y) { NewPos.y = MaxBounds.y; NewVel.y *= -BounceElasticity; }
+    if (NewPos.z < MinBounds.z) { NewPos.z = MinBounds.z; NewVel.z *= -BounceElasticity; }
+    if (NewPos.z > MaxBounds.z) { NewPos.z = MaxBounds.z; NewVel.z *= -BounceElasticity; }
+
+    // 3. Write back to persistent state UAV using helpers
+    SetDroidPositionShield(DroidStatesRW, EntityIndex, NewPos, Shield);
+    SetDroidVelocityStatus(DroidStatesRW, EntityIndex, NewVel, Status);
+}

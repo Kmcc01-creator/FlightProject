@@ -7,6 +7,7 @@
 
 #if WITH_EDITOR
 #include "UI/FlightLogTab.h"
+#include "UI/SwarmOrchestratorTab.h"
 #endif
 
 DEFINE_LOG_CATEGORY(LogFlightProject);
@@ -37,14 +38,18 @@ void FFlightProjectModule::StartupModule()
 #if WITH_EDITOR
     // Register Flight Log Viewer tab
     Flight::Log::RegisterLogViewerTab();
+
+    // Register Swarm Orchestrator tab
+    Flight::Swarm::RegisterSwarmOrchestrator();
 #endif
 }
 
 void FFlightProjectModule::ShutdownModule()
 {
 #if WITH_EDITOR
-    // Unregister Flight Log Viewer tab
+    // Unregister tabs
     Flight::Log::UnregisterLogViewerTab();
+    Flight::Swarm::UnregisterSwarmOrchestrator();
 #endif
 
     UE_LOG(LogFlightProject, Log, TEXT("FlightProject module shut down"));

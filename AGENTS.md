@@ -17,8 +17,11 @@ FlightProject is an Unreal Engine 5 workspace rooted at `FlightProject.uproject`
 - Register logging categories with `DEFINE_LOG_CATEGORY_STATIC` and emit actionable `UE_LOG` messages.
 
 ## Testing Guidelines
-- Lightweight actors such as `AFlightSpatialTestEntity` sit next to runtime code; keep utilities in the same module with clear filenames.
-- Run automation suites with `./Scripts/run_editor.sh -ExecCmds="Automation RunTests FlightProject.*; Quit" -unattended -nop4`.
+- The project has two primary types of tests: in-world visualizers (`AFlightSpatialTestEntity`) and standalone C++ unit tests.
+- To run all project automation tests:
+  `./Scripts/run_editor.sh -ExecCmds="Automation RunTests FlightProject.*; Quit" -unattended -nop4`
+- To run only the core functional C++ unit tests:
+  `./Scripts/run_editor.sh -ExecCmds="Automation RunTests FlightProject.Functional; Quit" -unattended -nop4`
 - For cooked validation, run `make FlightProject-Linux-Test` or append `--test` to `run_game.sh` to drive `RunUAT`’s Test configuration.
 - Document manual verification and open issues in `Docs/Troubleshooting.md` so staged builds stay reproducible.
 

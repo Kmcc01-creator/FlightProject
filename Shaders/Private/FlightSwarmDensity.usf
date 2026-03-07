@@ -1,0 +1,67 @@
+// Copyright Kelly Rey Wilson. All Rights Reserved.
+// FlightSwarmDensity - Pass 1: SPH Density and Pressure Calculation
+
+#include "/Engine/Private/Common.ush"
+#include "FlightSwarmCommon.ush"
+
+// --- Inputs ---
+StructuredBuffer<float4> DroidStates;
+StructuredBuffer<uint> GridHeadBuffer;
+StructuredBuffer<uint> GridNextBuffer;
+uint NumEntities;
+
+// Simulation parameters
+float SmoothingRadius;
+float GasConstant;
+float RestDensity;
+
+// --- Outputs ---
+RWStructuredBuffer<float2> DensityPressureBuffer;
+
+[numthreads(64, 1, 1)]
+void DensityMain(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    uint EntityIndex = DispatchThreadId.x;
+    if (EntityIndex >= NumEntities) return;
+
+    float3 PosI = GetDroidPosition(DroidStates, EntityIndex);
+    float h = SmoothingRadius;
+    float hSq = h * h;
+    
+    float Density = 0.0f;
+    uint3 CenterCell = GetGridCell(PosI);
+
+    for (int z = -1; z <= 1; ++z)
+    {
+        for (int y = -1; y <= 1; ++y)
+        {
+            for (int x = -1; x <= 1; ++x)
+            {
+                uint3 TargetCell = uint3(int3(CenterCell) + int3(x, y, z));
+                uint Hash = HashCell(TargetCell);
+
+                uint NeighborIndex = GridHeadBuffer[Hash];
+                uint SafetyCount = 0;
+                while (NeighborIndex != 0xFFFFFFFF && SafetyCount < 512)
+                {
+                    SafetyCount++;
+                    float3 PosJ = GetDroidPosition(DroidStates, NeighborIndex);
+                    float3 Diff = PosI - PosJ;
+                    float DistSq = dot(Diff, Diff);
+
+                    if (DistSq < hSq)
+                    {
+                        float R2 = hSq - DistSq;
+                        Density += R2 * R2 * R2;
+                    }
+
+                    NeighborIndex = GridNextBuffer[NeighborIndex];
+                }
+            }
+        }
+    }
+
+    Density *= GetPoly6Coefficient(h);
+    float Pressure = GasConstant * max(Density - RestDensity, 0.0f);
+    DensityPressureBuffer[EntityIndex] = float2(Density, Pressure);
+}

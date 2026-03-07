@@ -14,74 +14,69 @@ StructuredBuffer<float4> ObstacleMinBounds;
 StructuredBuffer<float4> ObstacleMaxBounds;
 
 // Output: Per-entity scan results
-// Each entity gets NUM_RAYS results packed into uint4s
 RWStructuredBuffer<uint4> ScanResults;
+
+// Output: Force Blackboard (Shared Memory)
+// Each entity accumulates forces from different passes here.
+RWStructuredBuffer<float4> ForceBlackboard;
+
+// Output: Sync Verification (Timestamp)
+// Single uint64 to verify when the shader actually ran.
+RWStructuredBuffer<uint2> TimestampBuffer; // uint2 to store uint64 (x=low, y=high)
 
 // Parameters
 uint NumEntities;
 uint NumObstacles;
 uint NumRaysPerEntity;    // Must be multiple of 4 for packing
+uint DispatchFrameIndex;  // Frame when this was sent
 
 // Constants
-#define NUM_RAYS_PER_THREAD 8
 #define MAX_SCAN_DISTANCE 10000.0f
 
 // Ray-AABB intersection test
-// Returns distance to hit, or MAX_SCAN_DISTANCE if no hit
 float RayAABBIntersect(float3 RayOrigin, float3 RayDir, float3 BoxMin, float3 BoxMax)
 {
     float3 InvDir = 1.0f / RayDir;
-
     float3 T1 = (BoxMin - RayOrigin) * InvDir;
     float3 T2 = (BoxMax - RayOrigin) * InvDir;
-
     float3 TMin = min(T1, T2);
     float3 TMax = max(T1, T2);
-
     float TEnter = max(max(TMin.x, TMin.y), TMin.z);
     float TExit = min(min(TMax.x, TMax.y), TMax.z);
-
-    if (TEnter > TExit || TExit < 0.0f)
-    {
-        return MAX_SCAN_DISTANCE;
-    }
-
+    if (TEnter > TExit || TExit < 0.0f) return MAX_SCAN_DISTANCE;
     return max(TEnter, 0.0f);
 }
 
-// Generate ray direction for a given ray index (radial pattern)
 float3 GetRayDirection(uint RayIndex, uint TotalRays)
 {
-    // Fibonacci sphere distribution for uniform coverage
     float Phi = acos(1.0f - 2.0f * (float(RayIndex) + 0.5f) / float(TotalRays));
     float Theta = 3.14159265f * (1.0f + sqrt(5.0f)) * float(RayIndex);
-
     float SinPhi = sin(Phi);
-    return float3(
-        SinPhi * cos(Theta),
-        SinPhi * sin(Theta),
-        cos(Phi)
-    );
+    return float3(SinPhi * cos(Theta), SinPhi * sin(Theta), cos(Phi));
 }
 
 [numthreads(64, 1, 1)]
-void HorizonScanMain(
-    uint3 GroupId : SV_GroupID,
-    uint3 GroupThreadId : SV_GroupThreadID,
-    uint3 DispatchThreadId : SV_DispatchThreadID)
+void HorizonScanMain(uint3 DispatchThreadId : SV_DispatchThreadID)
 {
     uint EntityIndex = DispatchThreadId.x;
 
-    if (EntityIndex >= NumEntities)
+    // Handle Timestamp for verification (only once per dispatch)
+    if (EntityIndex == 0)
     {
-        return;
+        // Store the frame index and a marker in the timestamp buffer
+        // In a real Vulkan backend, we'd use vkCmdWriteTimestamp for high-res,
+        // but for app-level logic, the frame index is our correlation key.
+        TimestampBuffer[0] = uint2(DispatchFrameIndex, 0xDEADC0DE);
     }
+
+    if (EntityIndex >= NumEntities) return;
 
     float4 EntityData = EntityPositions[EntityIndex];
     float3 Position = EntityData.xyz;
     float ScanRadius = EntityData.w;
 
-    // Each entity scans NumRaysPerEntity directions
+    float3 CombinedAvoidanceForce = float3(0, 0, 0);
+
     // Results packed as quantized distances into uint4s
     uint ResultBaseIndex = EntityIndex * (NumRaysPerEntity / 4);
 
@@ -93,35 +88,36 @@ void HorizonScanMain(
         {
             uint RayIndex = RayBlock + i;
             float3 RayDir = GetRayDirection(RayIndex, NumRaysPerEntity);
-
             float ClosestHit = min(ScanRadius, MAX_SCAN_DISTANCE);
 
-            // Test against all obstacles
             for (uint ObsIdx = 0; ObsIdx < NumObstacles; ++ObsIdx)
             {
                 float3 BoxMin = ObstacleMinBounds[ObsIdx].xyz;
                 float3 BoxMax = ObstacleMaxBounds[ObsIdx].xyz;
-
                 float HitDist = RayAABBIntersect(Position, RayDir, BoxMin, BoxMax);
                 ClosestHit = min(ClosestHit, HitDist);
             }
 
-            // Quantize distance to 16 bits (0-65535 maps to 0-ScanRadius)
+            // --- Algorithmic Accumulation ---
+            // If we hit something close, calculate an avoidance force
+            if (ClosestHit < ScanRadius)
+            {
+                float ThreatIntensity = 1.0f - (ClosestHit / ScanRadius);
+                // Force is away from hit direction, weighted by proximity
+                CombinedAvoidanceForce -= RayDir * (ThreatIntensity * ThreatIntensity);
+            }
+
             uint Quantized = uint(saturate(ClosestHit / ScanRadius) * 65535.0f);
-
-            // Pack into uint4 (4 x 16-bit values per uint4)
-            if (i < 2)
-            {
-                PackedDistances.x |= (Quantized << (i * 16));
-            }
-            else
-            {
-                PackedDistances.y |= (Quantized << ((i - 2) * 16));
-            }
+            if (i < 2) PackedDistances.x |= (Quantized << (i * 16));
+            else       PackedDistances.y |= (Quantized << ((i - 2) * 16));
         }
-
         ScanResults[ResultBaseIndex + RayBlock / 4] = PackedDistances;
     }
+
+    // Write to the Force Blackboard (Additive)
+    // In a multi-pass system, this would be an AtomicAdd or a separate pass.
+    // Here we initialize the "Perception" contribution to the blackboard.
+    ForceBlackboard[EntityIndex] = float4(CombinedAvoidanceForce, 1.0f); // W=1.0 for valid data
 }
 
 // Simpler version: just count obstacles within radius (for testing)
@@ -132,16 +128,19 @@ void ObstacleCountMain(uint3 DispatchThreadId : SV_DispatchThreadID)
 {
     uint EntityIndex = DispatchThreadId.x;
 
-    if (EntityIndex >= NumEntities)
+    if (EntityIndex == 0)
     {
-        return;
+        TimestampBuffer[0] = uint2(DispatchFrameIndex, 0xDEADC0DE);
     }
+
+    if (EntityIndex >= NumEntities) return;
 
     float3 Position = EntityPositions[EntityIndex].xyz;
     float ScanRadius = EntityPositions[EntityIndex].w;
     float ScanRadiusSq = ScanRadius * ScanRadius;
 
     uint Count = 0;
+    float3 SimpleAvoidance = float3(0, 0, 0);
 
     for (uint ObsIdx = 0; ObsIdx < NumObstacles; ++ObsIdx)
     {
@@ -155,8 +154,10 @@ void ObstacleCountMain(uint3 DispatchThreadId : SV_DispatchThreadID)
         if (DistSq < ScanRadiusSq)
         {
             ++Count;
+            SimpleAvoidance += normalize(Delta) * (1.0f - sqrt(DistSq)/ScanRadius);
         }
     }
 
     ObstacleCountResults[EntityIndex] = Count;
+    ForceBlackboard[EntityIndex] = float4(SimpleAvoidance, 1.0f);
 }

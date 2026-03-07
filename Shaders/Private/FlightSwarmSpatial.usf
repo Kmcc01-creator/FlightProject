@@ -1,0 +1,35 @@
+// Copyright Kelly Rey Wilson. All Rights Reserved.
+// FlightSwarmSpatial - Pass 0: Spatial Binning (3D Linked List Grid)
+
+#include "/Engine/Private/Common.ush"
+#include "FlightSwarmCommon.ush"
+
+// --- Inputs ---
+StructuredBuffer<float4> DroidStates;
+uint NumEntities;
+
+// --- Outputs ---
+RWStructuredBuffer<uint> GridHeadBuffer;
+RWStructuredBuffer<uint> GridNextBuffer;
+
+[numthreads(64, 1, 1)]
+void ClearGridMain(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    if (DispatchThreadId.x >= GRID_HASH_SIZE) return;
+    GridHeadBuffer[DispatchThreadId.x] = 0xFFFFFFFF;
+}
+
+[numthreads(64, 1, 1)]
+void BuildGridMain(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    uint EntityIndex = DispatchThreadId.x;
+    if (EntityIndex >= NumEntities) return;
+
+    float3 Pos = GetDroidPosition(DroidStates, EntityIndex);
+    uint3 Cell = GetGridCell(Pos);
+    uint Hash = HashCell(Cell);
+
+    uint OldHead;
+    InterlockedExchange(GridHeadBuffer[Hash], EntityIndex, OldHead);
+    GridNextBuffer[EntityIndex] = OldHead;
+}

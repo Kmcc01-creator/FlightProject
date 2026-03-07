@@ -55,6 +55,25 @@ As the project grows, we organize tests into a hierarchical structure:
 - **Development**: `WITH_DEV_AUTOMATION_TESTS=1`. Includes debug symbols and test registry.
 - **Shipping**: `WITH_DEV_AUTOMATION_TESTS=0`. Minimal overhead, no tests included.
 
-## 5. Pragma & Macro Usage
+## 5. Performance & Environment Configuration
+
+### Shader Compilation Optimization
+To handle massive shader queues (e.g., global recompiles), we maximize core utilization in `DefaultEngine.ini`:
+- **Core Allocation**: 15 out of 16 logical threads (on 8-core CPU) are assigned to workers.
+- **Batching**: `MaxShaderJobBatchSize` set to 16 to reduce worker launch overhead.
+- **Priority**: Workers run at `Below Normal` priority to keep the Editor UI responsive.
+
+### Editor Responsiveness (Linux/Wayland)
+Specific tuning in `LinuxEngine.ini` for high-performance development:
+- **UI Refresh**: `Slate.TickRate=120` for high-Hz display smoothness.
+- **Background Ticking**: `Editor.Performance.ThrottleUnfocused=0` to prevent "wake-up" lag.
+- **Task Graph**: 12 worker threads allocated for runtime tasks, 4 high-priority threads reserved for UI/Main loop.
+- **Anti-Aliasing**: Forced TAA (`r.AntiAliasingMethod=2`) and enabled `r.Editor.MovingGizmoTAA` to fix "jaggy" widgets.
+
+### Display & Resolution
+- **Native Resolution**: Forced `r.setres=1920x1200` to align with hardware and prevent Wayland compositor clipping.
+- **High DPI**: Recommended to **Disable High DPI Support** in Editor Preferences when running on Wayland to avoid coordinate scaling conflicts.
+
+## 6. Pragma & Macro Usage
 - **Optimization Guards**: Use `PRAGMA_DISABLE_OPTIMIZATION` around sensitive templates if Clang 20 recursion depth becomes an issue.
 - **Macro Semicolons**: Custom macros like `FLIGHT_REFLECT_FIELDS` provide trailing semicolons for standard C++ compatibility.

@@ -1,0 +1,125 @@
+// Copyright Kelly Rey Wilson. All Rights Reserved.
+// FlightSwarmForce - Pass 3: SPH Force Accumulation and Gameplay Logic
+
+#include "/Engine/Private/Common.ush"
+#include "FlightSwarmCommon.ush"
+
+// --- Inputs ---
+StructuredBuffer<float4> DroidStates;
+StructuredBuffer<uint> GridHeadBuffer;
+StructuredBuffer<uint> GridNextBuffer;
+StructuredBuffer<float2> DensityPressureBuffer; 
+uint NumEntities;
+
+// Parameters
+float SmoothingRadius;
+float Viscosity;
+float AvoidanceStrength;
+float MaxAcceleration;
+float DeltaTime;
+uint CommandType;
+float4 PlayerPosRadius;
+
+// --- Outputs ---
+RWStructuredBuffer<float4> ForceBlackboard;
+RWStructuredBuffer<float4> DroidStatesRW;
+
+[numthreads(64, 1, 1)]
+void ForceMain(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    uint EntityIndex = DispatchThreadId.x;
+    if (EntityIndex >= NumEntities) return;
+
+    float3 PosI = GetDroidPosition(DroidStates, EntityIndex);
+    float3 VelI = GetDroidVelocity(DroidStates, EntityIndex);
+    float ShieldI = GetDroidShield(DroidStates, EntityIndex);
+    uint StatusI = GetDroidStatus(DroidStates, EntityIndex);
+
+    float RhoI = DensityPressureBuffer[EntityIndex].x;
+    float PressureI = DensityPressureBuffer[EntityIndex].y;
+
+    float h = SmoothingRadius;
+    float hSq = h * h;
+    
+    float3 PressureForce = float3(0, 0, 0);
+    float3 ViscosityForce = float3(0, 0, 0);
+
+    uint3 CenterCell = GetGridCell(PosI);
+
+    for (int z = -1; z <= 1; ++z)
+    {
+        for (int y = -1; y <= 1; ++y)
+        {
+            for (int x = -1; x <= 1; ++x)
+            {
+                uint3 TargetCell = uint3(int3(CenterCell) + int3(x, y, z));
+                uint Hash = HashCell(TargetCell);
+
+                uint NeighborIndex = GridHeadBuffer[Hash];
+                uint SafetyCount = 0;
+                while (NeighborIndex != 0xFFFFFFFF && SafetyCount < 512)
+                {
+                    SafetyCount++;
+                    if (NeighborIndex != EntityIndex)
+                    {
+                        float3 PosJ = GetDroidPosition(DroidStates, NeighborIndex);
+                        float3 Diff = PosI - PosJ;
+                        float DistSq = dot(Diff, Diff);
+
+                        if (DistSq < hSq)
+                        {
+                            float Dist = sqrt(max(DistSq, 0.0001f));
+                            float RhoJ = DensityPressureBuffer[NeighborIndex].x;
+                            float PressureJ = DensityPressureBuffer[NeighborIndex].y;
+
+                            float PressureGradMag = (PressureI + PressureJ) / (2.0f * RhoJ) * pow(h - Dist, 2.0f);
+                            PressureForce += (Diff / Dist) * PressureGradMag;
+
+                            float3 VelJ = GetDroidVelocity(DroidStates, NeighborIndex);
+                            ViscosityForce += (VelJ - VelI) / RhoJ * (h - Dist);
+                        }
+                    }
+                    NeighborIndex = GridNextBuffer[NeighborIndex];
+                }
+            }
+        }
+    }
+
+    PressureForce *= GetSpikyGradientCoefficient(h);
+    ViscosityForce *= GetViscosityLaplacianCoefficient(h) * Viscosity;
+
+    // --- Swarm Orchestrator Injection Point ---
+    // This allows Houdini-style VEX expressions to modify VelI, StatusI, etc.
+    #define Index EntityIndex
+    #include "/FlightProject/Private/Generated/OrchestratorInjected.ush"
+    #undef Index
+
+    // 2. Gameplay Events
+    float3 PlayerForce = float3(0, 0, 0);
+    float3 ToPlayer = PosI - PlayerPosRadius.xyz;
+    float DistToPlayer = length(ToPlayer);
+
+    if (DistToPlayer < PlayerPosRadius.w)
+    {
+        if (CommandType == 1) // Repel
+        {
+            PlayerForce = normalize(ToPlayer) * AvoidanceStrength;
+        }
+        else if (CommandType == 2) // Infect
+        {
+            float Damage = (1.0f - (DistToPlayer / PlayerPosRadius.w)) * DeltaTime;
+            ShieldI = max(ShieldI - Damage, 0.0f);
+            StatusI |= 0x1; 
+            SetDroidPositionShield(DroidStatesRW, EntityIndex, PosI, ShieldI);
+            SetDroidVelocityStatus(DroidStatesRW, EntityIndex, VelI, StatusI);
+        }
+    }
+
+    float3 TotalForce = PressureForce + ViscosityForce + PlayerForce;
+    if (length(TotalForce) > MaxAcceleration)
+    {
+        TotalForce = normalize(TotalForce) * MaxAcceleration;
+    }
+
+    ForceBlackboard[EntityIndex] = float4(TotalForce, 1.0f);
+}

@@ -221,6 +221,11 @@ Requested automatically by FlightVulkanExtensions plugin:
 - `VK_KHR_external_semaphore_fd` (device)
 - `VK_KHR_external_semaphore_capabilities` (instance)
 
+**CRITICAL (Commandlet Mode):** When running in `-unattended` or commandlet mode (e.g., automation tests), the RHI often initializes before the plugin can register extensions. You **MUST** pass these explicitly via the command line to ensure `io_uring` synchronization works:
+```bash
+-vulkanextension="VK_KHR_external_semaphore_fd" -vulkanextension="VK_KHR_external_semaphore"
+```
+
 Note: `VK_KHR_timeline_semaphore` is already enabled by UE 5.7.
 
 ### Kernel Requirements
@@ -268,19 +273,25 @@ UE_LOG(LogTemp, Log, TEXT("Avg GPU time: %.2f ms"),
 
 ### Critical: io_uring Callbacks Execute on Worker Thread
 
-The io_uring subsystem processes completions on a worker thread, not the game thread. User-supplied callbacks must be marshaled back to the game thread:
+The io_uring subsystem processes completions on a worker thread, not the game thread. 
+
+1. **Marshal to Game Thread**: User-supplied callbacks that modify game state must be marshaled back to the game thread.
+2. **Render Thread Readback**: Accessing RHI buffers (`GDynamicRHI->RHILockBuffer`) **MUST** occur on the Rendering Thread.
 
 ```cpp
-// WRONG - callback runs on io_uring worker, can crash with actor access
-if (Callback)
-{
-    Callback();  // Race condition!
-}
-
-// CORRECT - marshal to game thread
-if (Callback)
-{
-    AsyncTask(ENamedThreads::GameThread, MoveTemp(Callback));
+// CORRECT Readback Pattern
+void MySubsystem::OnGpuWorkComplete(TRefCountPtr<FRDGPooledBuffer> Buffer) {
+    // 1. Jump to Render Thread to lock/read buffer
+    ENQUEUE_RENDER_COMMAND(Readback)([Buffer](FRHICommandListImmediate& RHICmdList) {
+        void* Data = GDynamicRHI->RHILockBuffer(RHICmdList, Buffer->GetRHI(), ...);
+        // ... copy data to local TArray ...
+        GDynamicRHI->RHIUnlockBuffer(RHICmdList, Buffer->GetRHI());
+        
+        // 2. Jump to Game Thread to apply results
+        AsyncTask(ENamedThreads::GameThread, [Results]() {
+            // ... apply to simulation ...
+        });
+    });
 }
 ```
 

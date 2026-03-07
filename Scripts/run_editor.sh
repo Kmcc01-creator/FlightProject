@@ -11,21 +11,8 @@ source "$SCRIPT_DIR/env_common.sh"
 VIDEO_BACKEND="${FP_VIDEO_BACKEND:-auto}"
 USE_GAMESCOPE=0
 GAMESCOPE_ARGS=()
-
-if [[ -n "${FP_USE_GAMESCOPE:-}" ]]; then
-    case "${FP_USE_GAMESCOPE,,}" in
-        1|true|yes|on)
-            USE_GAMESCOPE=1
-            ;;
-    esac
-fi
-
-if [[ -n "${FP_GAMESCOPE_ARGS:-}" ]]; then
-    # shellcheck disable=SC2206 # intentional word splitting so users can pass a string with spaces.
-    GAMESCOPE_ARGS=(${FP_GAMESCOPE_ARGS})
-fi
-
-EXTRA_EDITOR_ARGS=()
+ENABLE_TRACE=0
+ENABLE_GPU_DEBUG=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -49,6 +36,14 @@ while [[ $# -gt 0 ]]; do
             VIDEO_BACKEND="x11"
             shift
             ;;
+        --trace)
+            ENABLE_TRACE=1
+            shift
+            ;;
+        --debug-gpu)
+            ENABLE_GPU_DEBUG=1
+            shift
+            ;;
         --gamescope)
             USE_GAMESCOPE=1
             shift
@@ -65,19 +60,6 @@ while [[ $# -gt 0 ]]; do
             USE_GAMESCOPE=1
             GAMESCOPE_ARGS+=("$2")
             shift 2
-            ;;
-        --gamescope-arg=*)
-            USE_GAMESCOPE=1
-            GAMESCOPE_ARGS+=("${1#*=}")
-            shift
-            ;;
-        --gamescope-args=*)
-            USE_GAMESCOPE=1
-            IFS=',' read -r -a _fp_split_gamescope_args <<<"${1#*=}"
-            for arg in "${_fp_split_gamescope_args[@]}"; do
-                [[ -n "$arg" ]] && GAMESCOPE_ARGS+=("$arg")
-            done
-            shift
             ;;
         --)
             shift
@@ -111,7 +93,17 @@ ensure_project_file
 ensure_executable "$EDITOR_BIN" "UnrealEditor binary"
 
 CMD=("${LAUNCH_PREFIX[@]}" "$EDITOR_BIN" "$PROJECT_FILE")
-if [[ ${#EXTRA_EDITOR_ARGS[@]} -gt 0 ]]; then
+
+if (( ENABLE_TRACE )); then
+    CMD+=("-trace=cpu,gpu,frame,log,bookmark")
+fi
+
+if (( ENABLE_GPU_DEBUG )); then
+    # -d3ddebug is the generic flag for RHI validation, -gpucrashdebugging for breadcrumbs
+    CMD+=("-d3ddebug" "-gpucrashdebugging")
+fi
+
+if [[ ${#EXTRA_EDITOR_ARGS[@]:-0} -gt 0 ]]; then
     CMD+=("${EXTRA_EDITOR_ARGS[@]}")
 fi
 

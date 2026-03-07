@@ -363,12 +363,17 @@ void UFlightGpuIoUringBridge::SignalGpuCompletion(int64 TrackingId, TFunction<vo
 	VulkanRHI->RHIRunOnQueue(EVulkanRHIRunOnQueueType::Graphics,
 		[WeakThis, SharedState, UeTimelineSemaphore, UeTimelineValue](VkQueue Queue)
 		{
+			UE_LOG(LogFlightGpuBridge, Log, TEXT("SignalGpuCompletion[Queue]: Waiting for TimelineValue %llu on Semaphore %p for TrackingId %lld"), 
+				UeTimelineValue, (void*)UeTimelineSemaphore, SharedState->TrackingId);
+
 			// Signal our binary semaphore after waiting on UE's timeline value
 			bool bSignaled = SharedState->Semaphore->SignalAfterTimelineValue(
 				Queue, UeTimelineSemaphore, UeTimelineValue);
 
 			if (!bSignaled)
 			{
+				UE_LOG(LogFlightGpuBridge, Error, TEXT("SignalGpuCompletion[Queue]: SignalAfterTimelineValue FAILED for TrackingId %lld"), 
+					SharedState->TrackingId);
 				AsyncTask(ENamedThreads::GameThread, [WeakThis, TrackingId = SharedState->TrackingId]()
 				{
 					if (UFlightGpuIoUringBridge* Bridge = WeakThis.Get())
@@ -384,6 +389,8 @@ void UFlightGpuIoUringBridge::SignalGpuCompletion(int64 TrackingId, TFunction<vo
 			int32 SyncFd = SharedState->Semaphore->ExportSyncFd();
 			if (SyncFd < 0)
 			{
+				UE_LOG(LogFlightGpuBridge, Error, TEXT("SignalGpuCompletion[Queue]: ExportSyncFd FAILED for TrackingId %lld"), 
+					SharedState->TrackingId);
 				AsyncTask(ENamedThreads::GameThread, [WeakThis, TrackingId = SharedState->TrackingId]()
 				{
 					if (UFlightGpuIoUringBridge* Bridge = WeakThis.Get())
@@ -396,6 +403,8 @@ void UFlightGpuIoUringBridge::SignalGpuCompletion(int64 TrackingId, TFunction<vo
 			}
 
 			// Register with executor on game thread
+			UE_LOG(LogFlightGpuBridge, Log, TEXT("SignalGpuCompletion[Queue]: Exported SyncFd %d for TrackingId %lld. Registering with executor."), 
+				SyncFd, SharedState->TrackingId);
 			AsyncTask(ENamedThreads::GameThread,
 				[WeakThis, SharedState, SyncFd]()
 				{

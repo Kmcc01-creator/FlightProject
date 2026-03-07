@@ -11,6 +11,7 @@
 
 #include "Engine/Engine.h"
 #include "Engine/World.h"
+#include "GameFramework/WorldSettings.h"
 #include "UDynamicMesh.h"
 #include "Components/DynamicMeshComponent.h"
 #include "GameFramework/PlayerController.h"
@@ -35,31 +36,64 @@ void AFlightGameMode::StartPlay()
         return;
     }
 
-    // Step 1: Run world bootstrap (lighting, spatial layout, resume Mass simulation)
-    if (UFlightWorldBootstrapSubsystem* Bootstrap = World->GetSubsystem<UFlightWorldBootstrapSubsystem>())
+    // Check for GauntletTest tag or map name to skip default setup
+    bool bIsGauntletTest = false;
+    FString MapName = World->GetMapName();
+    
+    // Check map name (PIE often prefixes with UEDPIE_0_)
+    if (MapName.Contains(TEXT("PersistentFlightTest")))
     {
-        UE_LOG(LogFlightGameMode, Log, TEXT("Running world bootstrap..."));
-        Bootstrap->RunBootstrap();
-        UE_LOG(LogFlightGameMode, Log, TEXT("World bootstrap complete"));
+        bIsGauntletTest = true;
+    }
+
+    // Check tags as a backup
+    if (AWorldSettings* WorldSettings = World->GetWorldSettings())
+    {
+        if (WorldSettings->Tags.Contains("GauntletTest"))
+        {
+            bIsGauntletTest = true;
+        }
+    }
+
+    if (bIsGauntletTest)
+    {
+        UE_LOG(LogFlightGameMode, Log, TEXT("GauntletTest detected in map '%s': Initializing 100k GPU Swarm Simulation."), *MapName);
+        
+        // Disable default pawn and HUD spawning for a clean slate
+        DefaultPawnClass = nullptr;
+        HUDClass = nullptr;
+
+        // Initialize via scripting library for unified execution path
+        UFlightScriptingLibrary::InitializeGpuSwarm(this, 100000);
     }
     else
     {
-        UE_LOG(LogFlightGameMode, Warning, TEXT("FlightWorldBootstrapSubsystem not available"));
-    }
+        // Step 1: Run world bootstrap (lighting, spatial layout, resume Mass simulation)
+        if (UFlightWorldBootstrapSubsystem* Bootstrap = World->GetSubsystem<UFlightWorldBootstrapSubsystem>())
+        {
+            UE_LOG(LogFlightGameMode, Log, TEXT("Running world bootstrap..."));
+            Bootstrap->RunBootstrap();
+            UE_LOG(LogFlightGameMode, Log, TEXT("World bootstrap complete"));
+        }
+        else
+        {
+            UE_LOG(LogFlightGameMode, Warning, TEXT("FlightWorldBootstrapSubsystem not available"));
+        }
 
-    // Step 2: Spawn initial swarm (via scripting library - handles plugin dependency)
-    UE_LOG(LogFlightGameMode, Log, TEXT("Spawning initial swarm..."));
-    int32 SpawnedCount = UFlightScriptingLibrary::SpawnInitialSwarm(this);
-    UE_LOG(LogFlightGameMode, Log, TEXT("Spawned %d swarm entities"), SpawnedCount);
+        // Step 2: Spawn initial swarm (via scripting library - handles plugin dependency)
+        UE_LOG(LogFlightGameMode, Log, TEXT("Spawning initial swarm..."));
+        int32 SpawnedCount = UFlightScriptingLibrary::SpawnInitialSwarm(this);
+        UE_LOG(LogFlightGameMode, Log, TEXT("Spawned %d swarm entities"), SpawnedCount);
+
+        if (GEngine)
+        {
+            GEngine->AddOnScreenDebugMessage(-1, 5.f, FColor::Green,
+                FString::Printf(TEXT("Flight initialized: %d swarm entities"), SpawnedCount));
+        }
+    }
 
     // Summary
     UE_LOG(LogFlightGameMode, Log, TEXT("=== FlightGameMode initialization complete ==="));
-
-    if (GEngine)
-    {
-        GEngine->AddOnScreenDebugMessage(-1, 5.f, FColor::Green,
-            FString::Printf(TEXT("Flight initialized: %d swarm entities"), SpawnedCount));
-    }
 }
 
 void AFlightGameMode::ResetSwarm()

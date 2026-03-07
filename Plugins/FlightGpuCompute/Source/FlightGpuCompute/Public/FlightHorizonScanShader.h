@@ -28,9 +28,12 @@ public:
 		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FVector4f>, ObstacleMinBounds)
 		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FVector4f>, ObstacleMaxBounds)
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<FUintVector4>, ScanResults)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<FVector4f>, ForceBlackboard)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<FUintVector2>, TimestampBuffer)
 		SHADER_PARAMETER(uint32, NumEntities)
 		SHADER_PARAMETER(uint32, NumObstacles)
 		SHADER_PARAMETER(uint32, NumRaysPerEntity)
+		SHADER_PARAMETER(uint32, DispatchFrameIndex)
 	END_SHADER_PARAMETER_STRUCT()
 
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
@@ -57,8 +60,11 @@ public:
 		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FVector4f>, ObstacleMinBounds)
 		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FVector4f>, ObstacleMaxBounds)
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint32>, ObstacleCountResults)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<FVector4f>, ForceBlackboard)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<FUintVector2>, TimestampBuffer)
 		SHADER_PARAMETER(uint32, NumEntities)
 		SHADER_PARAMETER(uint32, NumObstacles)
+		SHADER_PARAMETER(uint32, DispatchFrameIndex)
 	END_SHADER_PARAMETER_STRUCT()
 
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
@@ -86,7 +92,9 @@ struct FLIGHTGPUCOMPUTE_API FFlightHorizonScanResults
 {
 	int64 TrackingId = 0;
 	double GpuTimeMs = 0.0;
+	uint64 GpuTimestamp = 0;
 	TArray<uint32> ObstacleCounts;  // Per-entity obstacle count
+	TArray<FVector4f> AccumulatedForces; // From Blackboard
 	// Full scan results would be unpacked from GPU buffer here
 };
 
@@ -98,9 +106,13 @@ struct FLIGHTGPUCOMPUTE_API FFlightHorizonScanResults
  * @param Input Scan parameters and entity data
  * @return RDG buffer containing per-entity obstacle counts
  */
-FLIGHTGPUCOMPUTE_API FRDGBufferRef DispatchFlightObstacleCount(
+FLIGHTGPUCOMPUTE_API void DispatchFlightObstacleCount(
 	FRDGBuilder& GraphBuilder,
-	const FFlightHorizonScanInput& Input);
+	const FFlightHorizonScanInput& Input,
+	FRDGBufferRef OutputBuffer,
+	FRDGBufferRef ForceBlackboard,
+	FRDGBufferRef TimestampBuffer,
+	uint32 FrameIndex);
 
 /**
  * Check if horizon scan shaders are ready

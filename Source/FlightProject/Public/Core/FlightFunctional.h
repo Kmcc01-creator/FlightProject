@@ -203,6 +203,13 @@ namespace Detail
 		);
 	}
 
+	/** Overload for empty tuples or variadic lambdas */
+	template<typename F>
+	auto Apply(F&& Fn, const std::tuple<>& Args)
+	{
+		return Fn();
+	}
+
 	// Extract T from TResult<T, E>
 	template<typename R> struct TResultValueType;
 	template<typename T, typename E>
@@ -739,6 +746,47 @@ TLazyChain<E, std::tuple<>> LazyValidate()
 
 
 // ============================================================================
+// Temporal Abstractions - Projected State & Control Fusion
+// ============================================================================
+
+namespace Order { struct Position {}; struct Velocity {}; struct Acceleration {}; }
+
+/**
+ * TProjectedState
+ * 
+ * Encapsulates a state value at a specific point in a time horizon.
+ * Used for Model Predictive Control (MPC) reasoning.
+ */
+template<typename T, typename DerivativeOrder, int32 HorizonStep = 0>
+struct TProjectedState
+{
+	T Value;
+
+	/** Create a new projection further into the future */
+	template<int32 Steps>
+	auto Project(T NextValue) const { return TProjectedState<T, DerivativeOrder, HorizonStep + Steps>{NextValue}; }
+};
+
+/**
+ * Control Fusion Combinator
+ * 
+ * Merges two control pipes (Reactive vs Predictive) based on a dynamic weight.
+ */
+template<typename ReactiveFn, typename PredictiveFn, typename WeightFn>
+auto Fuse(ReactiveFn&& R, PredictiveFn&& P, WeightFn&& Alpha)
+{
+	return Pipe([R = Forward<ReactiveFn>(R), P = Forward<PredictiveFn>(P), Alpha = Forward<WeightFn>(Alpha)](auto&& State) {
+		auto ReactiveResult = R(State);
+		auto PredictiveResult = P(State);
+		float a = Alpha(State);
+		
+		// Linear interpolation of control intents
+		return (ReactiveResult * a) + (PredictiveResult * (1.0f - a));
+	});
+}
+
+
+// ============================================================================
 // Pipeline Operator - Chainable transformations
 // ============================================================================
 
@@ -762,13 +810,13 @@ auto operator|(T&& Value, TPipe<F> Pipe) -> decltype(Pipe.Func(Forward<T>(Value)
 }
 
 // Common pipe operations
-inline auto Transform = [](auto Fn) {
+inline auto FunctionalTransform = [](auto Fn) {
 	return Pipe([Fn = MoveTemp(Fn)](auto&& Value) {
 		return Fn(Forward<decltype(Value)>(Value));
 	});
 };
 
-inline auto Filter = [](auto Pred) {
+inline auto FunctionalFilter = [](auto Pred) {
 	return Pipe([Pred = MoveTemp(Pred)](auto&& Container) {
 		using T = typename std::decay_t<decltype(Container)>::ElementType;
 		std::decay_t<decltype(Container)> Result;

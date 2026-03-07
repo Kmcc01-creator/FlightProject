@@ -6,6 +6,7 @@
 #include "MassCommonFragments.h"
 #include "Core/FlightSpatialField.h"
 #include "Core/FlightWindField.h"
+#include "Spatial/FlightGpuPerceptionField.h"
 #include "Core/FlightMassOptics.h"
 
 using namespace Flight::Spatial;
@@ -23,9 +24,15 @@ UMassSpatialForceProcessor::UMassSpatialForceProcessor()
 
 void UMassSpatialForceProcessor::ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager)
 {
-	// Configure query requirements (EntityManager provided for initialization)
+	// In UE 5.7, we must initialize the query with the manager before adding requirements.
+	// This sets bInitialized = true.
+	EntityQuery.Initialize(EntityManager);
+
 	EntityQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
 	EntityQuery.AddRequirement<FMassSpatialQueryFragment>(EMassFragmentAccess::ReadWrite);
+
+	// Finalize query by caching matching archetypes
+	EntityQuery.CacheArchetypes();
 }
 
 void UMassSpatialForceProcessor::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
@@ -70,7 +77,10 @@ void UFlightSpatialSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	// Register a default procedural wind field for testing
 	RegisterField(MakeShared<FProceduralWindField>(FVector(1, 0, 0), 500.0f, 0.01f));
 
-	UE_LOG(LogTemp, Log, TEXT("FlightSpatialSubsystem initialized with default Wind field"));
+	// Register the GPU perception field
+	RegisterField(MakeShared<FGpuPerceptionField>(GetWorld()));
+
+	UE_LOG(LogTemp, Log, TEXT("FlightSpatialSubsystem initialized with default Wind and GPU Perception fields"));
 }
 
 void UFlightSpatialSubsystem::Deinitialize()

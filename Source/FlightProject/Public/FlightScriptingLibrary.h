@@ -46,6 +46,10 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Flight|Scripting|Bootstrap", meta = (WorldContext = "WorldContextObject"))
     static int32 SpawnInitialSwarm(const UObject* WorldContextObject);
 
+    /** Initialize the new GPU-driven swarm simulation. */
+    UFUNCTION(BlueprintCallable, Category = "Flight|Scripting|Bootstrap", meta = (WorldContext = "WorldContextObject"))
+    static void InitializeGpuSwarm(const UObject* WorldContextObject, int32 EntityCount = 500000);
+
     // ============================================================================
     // Spatial Layout
     // ============================================================================

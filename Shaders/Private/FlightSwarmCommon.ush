@@ -1,0 +1,96 @@
+// Copyright Kelly Rey Wilson. All Rights Reserved.
+// FlightSwarmCommon - Shared structures and math for SPH simulation
+
+#ifndef FLIGHT_SWARM_COMMON
+#define FLIGHT_SWARM_COMMON
+
+// We use float4 for RHI compatibility in StructuredBuffers
+// Each FDroidState is 2x float4
+// float4 [0] = (pos.x, pos.y, pos.z, shield)
+// float4 [1] = (vel.x, vel.y, vel.z, status)
+
+float3 GetDroidPosition(StructuredBuffer<float4> Buffer, uint Index)
+{
+    return Buffer[Index * 2].xyz;
+}
+
+float GetDroidShield(StructuredBuffer<float4> Buffer, uint Index)
+{
+    return Buffer[Index * 2].w;
+}
+
+float3 GetDroidVelocity(StructuredBuffer<float4> Buffer, uint Index)
+{
+    return Buffer[Index * 2 + 1].xyz;
+}
+
+uint GetDroidStatus(StructuredBuffer<float4> Buffer, uint Index)
+{
+    return asuint(Buffer[Index * 2 + 1].w);
+}
+
+// Write helpers for RWStructuredBuffer
+void SetDroidPositionShield(RWStructuredBuffer<float4> Buffer, uint Index, float3 Pos, float Shield)
+{
+    Buffer[Index * 2] = float4(Pos, Shield);
+}
+
+void SetDroidVelocityStatus(RWStructuredBuffer<float4> Buffer, uint Index, float3 Vel, uint Status)
+{
+    Buffer[Index * 2 + 1] = float4(Vel, asfloat(Status));
+}
+
+// The Command UBO - must match SwarmSimulationTypes.h
+struct FSwarmGlobalCommand
+{
+    float4 PlayerPosRadius;
+    float4 BeaconPosStrength;
+    
+    float SmoothingRadius;
+    float GasConstant;
+    float RestDensity;
+    float Viscosity;
+
+    float AvoidanceStrength;
+    float MaxAcceleration;
+    float DeltaTime;
+    uint  CommandType;
+
+    uint  FrameIndex;
+    uint  PredictionHorizon; // Number of rollout steps
+    uint2 Padding;
+};
+
+// 3D Grid Parameters
+#define GRID_HASH_SIZE 4194304 // 2^22
+#define GRID_CELL_SIZE 500.0f  // Matches default SmoothingRadius
+#define PI 3.14159265359f
+
+uint3 GetGridCell(float3 WorldPos)
+{
+    return uint3(floor(WorldPos / GRID_CELL_SIZE));
+}
+
+uint HashCell(uint3 Cell)
+{
+    // Standard large-prime spatial hash
+    return ((Cell.x * 73856093u) ^ (Cell.y * 19349663u) ^ (Cell.z * 83492791u)) % GRID_HASH_SIZE;
+}
+
+// SPH Kernel Coefficients
+float GetPoly6Coefficient(float h)
+{
+    return 315.0f / (64.0f * PI * pow(abs(h), 9));
+}
+
+float GetSpikyGradientCoefficient(float h)
+{
+    return -45.0f / (PI * pow(abs(h), 6));
+}
+
+float GetViscosityLaplacianCoefficient(float h)
+{
+    return 45.0f / (PI * pow(abs(h), 6));
+}
+
+#endif

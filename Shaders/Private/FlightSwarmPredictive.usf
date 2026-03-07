@@ -1,0 +1,69 @@
+// Copyright Kelly Rey Wilson. All Rights Reserved.
+// FlightSwarmPredictive - Pass 5: Future Rollout (Model Predictive Control)
+
+#include "/Engine/Private/Common.ush"
+#include "FlightSwarmCommon.ush"
+
+// --- Inputs ---
+StructuredBuffer<float4> DroidStates;
+uint NumEntities;
+
+// Parameters
+float DeltaTime;
+float AvoidanceStrength;
+uint PredictionHorizon;
+
+// --- Outputs ---
+RWStructuredBuffer<float4> ForceBlackboard;
+
+// HACK: Simple SDF Placeholder
+float SampleSDF(float3 Pos)
+{
+    float2 Dist2D = Pos.xy;
+    float DistToCenter = length(Dist2D);
+    return 5000.0f - DistToCenter;
+}
+
+float3 GetSDFGradient(float3 Pos)
+{
+    const float eps = 1.0f;
+    float3 Grad;
+    Grad.x = SampleSDF(Pos + float3(eps, 0, 0)) - SampleSDF(Pos - float3(eps, 0, 0));
+    Grad.y = SampleSDF(Pos + float3(0, eps, 0)) - SampleSDF(Pos - float3(0, eps, 0));
+    Grad.z = SampleSDF(Pos + float3(0, 0, eps)) - SampleSDF(Pos - float3(0, 0, eps));
+    return normalize(Grad);
+}
+
+[numthreads(64, 1, 1)]
+void PredictiveRolloutMain(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    uint EntityIndex = DispatchThreadId.x;
+    if (EntityIndex >= NumEntities) return;
+
+    float3 CurrentPos = GetDroidPosition(DroidStates, EntityIndex);
+    float3 CurrentVel = GetDroidVelocity(DroidStates, EntityIndex);
+    
+    float3 AnticipatoryForce = float3(0, 0, 0);
+    uint Horizon = PredictionHorizon;
+    float dt = DeltaTime;
+
+    float3 ProjectedPos = CurrentPos;
+    float3 ProjectedVel = CurrentVel;
+
+    for (uint k = 1; k <= Horizon; ++k)
+    {
+        ProjectedPos += ProjectedVel * dt;
+        float Dist = SampleSDF(ProjectedPos);
+
+        if (Dist < 500.0f)
+        {
+            float3 Normal = GetSDFGradient(ProjectedPos);
+            float TimeWeight = 1.0f / float(k);
+            float ThreatIntensity = (500.0f - max(Dist, 0.1f)) / 500.0f;
+            AnticipatoryForce += Normal * (ThreatIntensity * TimeWeight * AvoidanceStrength * 2.0f);
+            if (Dist < 0) break;
+        }
+    }
+
+    ForceBlackboard[EntityIndex] += float4(AnticipatoryForce, 0.0f);
+}

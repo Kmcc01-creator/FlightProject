@@ -6,6 +6,9 @@
 #include "Engine/World.h"
 #include "RenderGraphBuilder.h"
 #include "RenderGraphUtils.h"
+#include "Async/Async.h"
+#include "DynamicRHI.h"
+#include "RHIResources.h"
 
 #if WITH_FLIGHT_COMPUTE_SHADERS
 #include "FlightHorizonScanShader.h"
@@ -26,8 +29,12 @@ void UFlightGpuPerceptionSubsystem::Initialize(FSubsystemCollectionBase& Collect
 {
 	Super::Initialize(Collection);
 
-	if (IsRunningCommandlet())
+	// Capability-based initialization:
+	if (GMaxRHIFeatureLevel < ERHIFeatureLevel::SM5)
 	{
+		UE_LOG(LogFlightPerception, Warning, 
+			TEXT("FlightGpuPerceptionSubsystem: Insufficient RHI Feature Level (%d). GPU paths disabled."), 
+			(int32)GMaxRHIFeatureLevel);
 		return;
 	}
 
@@ -84,70 +91,58 @@ int64 UFlightGpuPerceptionSubsystem::SubmitPerceptionRequest(
 	const FFlightPerceptionRequest& Request,
 	TFunction<void(const FFlightPerceptionResult&)> Callback)
 {
-	if (!IsAvailable())
-	{
-		UE_LOG(LogFlightPerception, Warning,
-			TEXT("SubmitPerceptionRequest: Subsystem not available"));
-		return 0;
-	}
+	int64 RequestId = ++NextRequestId;
 
-	if (Request.EntityPositions.Num() == 0)
-	{
-		UE_LOG(LogFlightPerception, Warning,
-			TEXT("SubmitPerceptionRequest: No entities in request"));
-		return 0;
-	}
-
-	// Create pending request
 	TSharedPtr<FPendingPerceptionRequest> Pending = MakeShared<FPendingPerceptionRequest>();
-	Pending->RequestId = NextRequestId++;
+	Pending->RequestId = RequestId;
 	Pending->Request = Request;
-	Pending->Request.RequestId = Pending->RequestId;
 	Pending->Request.SubmitTime = FPlatformTime::Seconds();
-	Pending->Callback = MoveTemp(Callback);
+	Pending->Callback = Callback;
 
 	{
 		FScopeLock Lock(&PendingRequestsMutex);
-		PendingRequests.Add(Pending->RequestId, Pending);
+		PendingRequests.Add(RequestId, Pending);
 	}
 
-	++TotalRequestsSubmitted;
+	TotalRequestsSubmitted++;
 
-	UE_LOG(LogFlightPerception, Log,
-		TEXT("Submitting perception request %lld: %d entities, %d obstacles"),
-		Pending->RequestId,
-		Request.EntityPositions.Num(),
-		Request.ObstacleMinBounds.Num());
-
-	// Dispatch to render thread
+	// Kick off the work on the render thread
 	DispatchOnRenderThread(Pending);
 
-	return Pending->RequestId;
+	return RequestId;
 }
 
-int64 UFlightGpuPerceptionSubsystem::SubmitPerceptionRequestBP(const FFlightPerceptionRequest& Request)
+void UFlightGpuPerceptionSubsystem::SubmitPerceptionRequestBP(const FFlightPerceptionRequest& Request)
 {
-	return SubmitPerceptionRequest(Request,
-		[this](const FFlightPerceptionResult& Result)
-		{
-			// Fire Blueprint delegate
-			OnPerceptionResultReady.Broadcast(Result);
-		});
+	SubmitPerceptionRequest(Request, [this](const FFlightPerceptionResult& Result)
+	{
+		OnPerceptionResultReady.Broadcast(Result);
+	});
 }
 
 void UFlightGpuPerceptionSubsystem::DispatchOnRenderThread(TSharedPtr<FPendingPerceptionRequest> Request)
 {
 #if WITH_FLIGHT_COMPUTE_SHADERS
-	// Capture what we need for the render thread lambda
 	int64 RequestId = Request->RequestId;
 	double SubmitTime = Request->Request.SubmitTime;
 	TWeakObjectPtr<UFlightGpuPerceptionSubsystem> WeakThis(this);
 
-	// Enqueue RDG work on render thread
 	ENQUEUE_RENDER_COMMAND(FlightPerceptionDispatch)(
 		[WeakThis, Request, RequestId, SubmitTime](FRHICommandListImmediate& RHICmdList)
 		{
 			FRDGBuilder GraphBuilder(RHICmdList);
+
+			const uint32 NumEntities = Request->Request.EntityPositions.Num();
+
+			// Allocate Results Buffers in RDG
+			FRDGBufferDesc CountDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), NumEntities);
+			FRDGBufferRef OutputBuffer = GraphBuilder.CreateBuffer(CountDesc, TEXT("FlightScan.ObstacleCounts"));
+
+			FRDGBufferDesc ForceDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FVector4f), NumEntities);
+			FRDGBufferRef ForceBuffer = GraphBuilder.CreateBuffer(ForceDesc, TEXT("FlightScan.ForceBlackboard"));
+
+			FRDGBufferDesc TimeDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FUintVector2), 1);
+			FRDGBufferRef TimeBuffer = GraphBuilder.CreateBuffer(TimeDesc, TEXT("FlightScan.Timestamp"));
 
 			// Build input for shader
 			FFlightHorizonScanInput Input;
@@ -156,153 +151,155 @@ void UFlightGpuPerceptionSubsystem::DispatchOnRenderThread(TSharedPtr<FPendingPe
 			Input.ObstacleMaxBounds = Request->Request.ObstacleMaxBounds;
 
 			// Dispatch compute shader
-			FRDGBufferRef OutputBuffer = DispatchFlightObstacleCount(GraphBuilder, Input);
+			uint32 FrameIndex = static_cast<uint32>(GFrameCounter);
+			DispatchFlightObstacleCount(GraphBuilder, Input, OutputBuffer, ForceBuffer, TimeBuffer, FrameIndex);
 
-			if (OutputBuffer)
+			// Extract pooled buffers
+			TRefCountPtr<FRDGPooledBuffer> PooledOutput;
+			GraphBuilder.QueueBufferExtraction(OutputBuffer, &PooledOutput);
+
+			TRefCountPtr<FRDGPooledBuffer> PooledForce;
+			GraphBuilder.QueueBufferExtraction(ForceBuffer, &PooledForce);
+
+			TRefCountPtr<FRDGPooledBuffer> PooledTime;
+			GraphBuilder.QueueBufferExtraction(TimeBuffer, &PooledTime);
+
+			GraphBuilder.Execute();
+
+			// Readback Capture
+			struct FReadbackCapture
 			{
-				// Execute the graph
-				GraphBuilder.Execute();
+				TRefCountPtr<FRDGPooledBuffer> PooledOutput;
+				TRefCountPtr<FRDGPooledBuffer> PooledForce;
+				TRefCountPtr<FRDGPooledBuffer> PooledTime;
+			};
+			TSharedPtr<FReadbackCapture> Capture = MakeShared<FReadbackCapture>();
+			Capture->PooledOutput = PooledOutput;
+			Capture->PooledForce = PooledForce;
+			Capture->PooledTime = PooledTime;
 
-				// Now signal io_uring that we want notification when this completes
-				// This is the KEY INTEGRATION POINT!
-				AsyncTask(ENamedThreads::GameThread,
-					[WeakThis, RequestId, SubmitTime]()
+			AsyncTask(ENamedThreads::GameThread,
+				[WeakThis, RequestId, SubmitTime, Capture]()
+				{
+					if (UFlightGpuPerceptionSubsystem* Self = WeakThis.Get())
 					{
-						if (UFlightGpuPerceptionSubsystem* Self = WeakThis.Get())
+						if (Self->GpuBridge && Self->GpuBridge->IsAvailable())
 						{
-							if (Self->GpuBridge && Self->GpuBridge->IsUsingExportableSemaphores())
-							{
-								// Zero-syscall path: GPU completion → io_uring CQE → callback
-								Self->GpuBridge->SignalGpuCompletion(RequestId,
-									[WeakThis, RequestId, SubmitTime]()
+							Self->GpuBridge->SignalGpuCompletion(RequestId,
+								[WeakThis, RequestId, SubmitTime, Capture]()
+								{
+									if (UFlightGpuPerceptionSubsystem* SubSelf = WeakThis.Get())
 									{
-										if (UFlightGpuPerceptionSubsystem* S = WeakThis.Get())
-										{
-											S->OnGpuWorkComplete(RequestId, SubmitTime);
-										}
-									});
-
-								UE_LOG(LogFlightPerception, Verbose,
-									TEXT("Request %lld: GPU work submitted, awaiting io_uring notification"),
-									RequestId);
-							}
-							else
-							{
-								// Fallback: immediate callback (for testing without exportable semaphores)
-								UE_LOG(LogFlightPerception, Warning,
-									TEXT("Request %lld: Exportable semaphores unavailable, using immediate callback"),
-									RequestId);
-								Self->OnGpuWorkComplete(RequestId, SubmitTime);
-							}
+										SubSelf->OnGpuWorkCompleteEx(RequestId, SubmitTime, 
+											Capture->PooledOutput, Capture->PooledForce, Capture->PooledTime);
+									}
+								});
 						}
-					});
-			}
-			else
-			{
-				UE_LOG(LogFlightPerception, Error,
-					TEXT("Request %lld: Failed to dispatch compute shader"), RequestId);
-			}
+					}
+				});
 		});
 #endif
 }
 
-void UFlightGpuPerceptionSubsystem::OnGpuWorkComplete(int64 RequestId, double SubmitTime)
+void UFlightGpuPerceptionSubsystem::OnGpuWorkCompleteEx(
+	int64 RequestId, 
+	double SubmitTime,
+	TRefCountPtr<FRDGPooledBuffer> PooledOutput,
+	TRefCountPtr<FRDGPooledBuffer> PooledForce,
+	TRefCountPtr<FRDGPooledBuffer> PooledTime)
 {
-	double GpuTimeMs = (FPlatformTime::Seconds() - SubmitTime) * 1000.0;
-
 	TSharedPtr<FPendingPerceptionRequest> Pending;
 	{
 		FScopeLock Lock(&PendingRequestsMutex);
-		if (TSharedPtr<FPendingPerceptionRequest>* Found = PendingRequests.Find(RequestId))
+		PendingRequests.RemoveAndCopyValue(RequestId, Pending);
+	}
+
+	if (!Pending.IsValid()) return;
+
+	TWeakObjectPtr<UFlightGpuPerceptionSubsystem> WeakThis(this);
+	const uint32 NumEntities = Pending->Request.EntityPositions.Num();
+
+	// FIX: Access RHI buffers ONLY on the Rendering Thread!
+	ENQUEUE_RENDER_COMMAND(FlightPerceptionReadback)(
+		[WeakThis, RequestId, SubmitTime, PooledOutput, PooledForce, PooledTime, NumEntities, Pending](FRHICommandListImmediate& RHICmdList)
 		{
-			Pending = *Found;
-			PendingRequests.Remove(RequestId);
-		}
-	}
+			FFlightPerceptionResult Result;
+			Result.RequestId = RequestId;
+			Result.bSuccess = true;
+			Result.GpuTimeMs = (float)((FPlatformTime::Seconds() - SubmitTime) * 1000.0);
 
-	if (!Pending)
-	{
-		UE_LOG(LogFlightPerception, Warning,
-			TEXT("OnGpuWorkComplete: Unknown request %lld"), RequestId);
-		return;
-	}
+			// Buffer Readback (Render Thread safe)
+			if (PooledOutput.IsValid())
+			{
+				Result.ObstacleCounts.SetNumUninitialized(NumEntities);
+				void* Data = GDynamicRHI->RHILockBuffer(RHICmdList, PooledOutput->GetRHI(), 0, NumEntities * sizeof(uint32), RLM_ReadOnly);
+				FMemory::Memcpy(Result.ObstacleCounts.GetData(), Data, NumEntities * sizeof(uint32));
+				GDynamicRHI->RHIUnlockBuffer(RHICmdList, PooledOutput->GetRHI());
+			}
 
-	++TotalRequestsCompleted;
-	TotalGpuTimeMs += GpuTimeMs;
+			if (PooledForce.IsValid())
+			{
+				Result.AccumulatedForces.SetNumUninitialized(NumEntities);
+				void* Data = GDynamicRHI->RHILockBuffer(RHICmdList, PooledForce->GetRHI(), 0, NumEntities * sizeof(FVector4f), RLM_ReadOnly);
+				FMemory::Memcpy(Result.AccumulatedForces.GetData(), Data, NumEntities * sizeof(FVector4f));
+				GDynamicRHI->RHIUnlockBuffer(RHICmdList, PooledForce->GetRHI());
+			}
 
-	UE_LOG(LogFlightPerception, Log,
-		TEXT("Request %lld completed in %.2f ms (io_uring zero-syscall path)"),
-		RequestId, GpuTimeMs);
+			if (PooledTime.IsValid())
+			{
+				FUintVector2 GpuTimeData;
+				void* Data = GDynamicRHI->RHILockBuffer(RHICmdList, PooledTime->GetRHI(), 0, sizeof(FUintVector2), RLM_ReadOnly);
+				FMemory::Memcpy(&GpuTimeData, Data, sizeof(FUintVector2));
+				GDynamicRHI->RHIUnlockBuffer(RHICmdList, PooledTime->GetRHI());
+				Result.GpuTimestamp = (int64)GpuTimeData.X;
+			}
 
-	// Build result
-	FFlightPerceptionResult Result;
-	Result.RequestId = RequestId;
-	Result.GpuTimeMs = static_cast<float>(GpuTimeMs);
-	Result.bSuccess = true;
+			// Final callback MUST be on Game Thread
+			AsyncTask(ENamedThreads::GameThread, [WeakThis, Result, Pending]()
+			{
+				if (UFlightGpuPerceptionSubsystem* Self = WeakThis.Get())
+				{
+					Self->TotalRequestsCompleted++;
+					Self->TotalGpuTimeMs += Result.GpuTimeMs;
 
-	// TODO: Read back actual GPU results here
-	// For now, just simulate with entity count
-	Result.ObstacleCounts.SetNum(Pending->Request.EntityPositions.Num());
-	for (int32& Count : Result.ObstacleCounts)
-	{
-		Count = 0;  // Would be populated from GPU readback
-	}
+					UE_LOG(LogFlightPerception, Log, 
+						TEXT("GPU Work Complete: Request %lld, %.2f ms, Frame %lld"), 
+						Result.RequestId, Result.GpuTimeMs, Result.GpuTimestamp);
 
-	// Invoke callback
-	if (Pending->Callback)
-	{
-		Pending->Callback(Result);
-	}
+					if (Pending->Callback)
+					{
+						Pending->Callback(Result);
+					}
+				}
+			});
+		});
 }
 
 void UFlightGpuPerceptionSubsystem::RunTestQuery(int32 NumEntities, int32 NumObstacles)
 {
-	UE_LOG(LogFlightPerception, Log,
-		TEXT("Running test query: %d entities, %d obstacles"), NumEntities, NumObstacles);
-
 	FFlightPerceptionRequest Request;
-
-	// Generate random entity positions
-	Request.EntityPositions.Reserve(NumEntities);
+	Request.EntityPositions.SetNum(NumEntities);
 	for (int32 i = 0; i < NumEntities; ++i)
 	{
-		Request.EntityPositions.Add(FVector4f(
-			FMath::FRandRange(-10000.0f, 10000.0f),
-			FMath::FRandRange(-10000.0f, 10000.0f),
-			FMath::FRandRange(0.0f, 5000.0f),
-			1000.0f  // Scan radius
-		));
+		Request.EntityPositions[i] = FVector4f(i * 100.0f, 0, 0, 1000.0f);
 	}
 
-	// Generate random obstacle AABBs
-	Request.ObstacleMinBounds.Reserve(NumObstacles);
-	Request.ObstacleMaxBounds.Reserve(NumObstacles);
+	Request.ObstacleMinBounds.SetNum(NumObstacles);
+	Request.ObstacleMaxBounds.SetNum(NumObstacles);
 	for (int32 i = 0; i < NumObstacles; ++i)
 	{
-		FVector3f Center(
-			FMath::FRandRange(-10000.0f, 10000.0f),
-			FMath::FRandRange(-10000.0f, 10000.0f),
-			FMath::FRandRange(0.0f, 3000.0f)
-		);
-		FVector3f HalfExtent(
-			FMath::FRandRange(50.0f, 500.0f),
-			FMath::FRandRange(50.0f, 500.0f),
-			FMath::FRandRange(50.0f, 500.0f)
-		);
-
-		Request.ObstacleMinBounds.Add(FVector4f(Center - HalfExtent, 0.0f));
-		Request.ObstacleMaxBounds.Add(FVector4f(Center + HalfExtent, 0.0f));
+		Request.ObstacleMinBounds[i] = FVector4f(i * 200.0f - 50.0f, -50.0f, -50.0f, 0);
+		Request.ObstacleMaxBounds[i] = FVector4f(i * 200.0f + 50.0f, 50.0f, 50.0f, 0);
 	}
 
-	// Submit with logging callback
-	SubmitPerceptionRequest(Request,
-		[NumEntities, NumObstacles](const FFlightPerceptionResult& Result)
-		{
-			UE_LOG(LogFlightPerception, Log,
-				TEXT("TEST COMPLETE: Request %lld, %.2f ms, %d entities, %d obstacles"),
-				Result.RequestId,
-				Result.GpuTimeMs,
-				NumEntities,
-				NumObstacles);
-		});
+	SubmitPerceptionRequest(Request, [NumEntities, NumObstacles](const FFlightPerceptionResult& Result)
+	{
+		UE_LOG(LogFlightPerception, Log,
+			TEXT("TEST COMPLETE: Request %lld, %.2f ms, %d entities, %d obstacles, GpuFrame %lld"),
+			Result.RequestId,
+			Result.GpuTimeMs,
+			NumEntities,
+			NumObstacles,
+			Result.GpuTimestamp);
+	});
 }

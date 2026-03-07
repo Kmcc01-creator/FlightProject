@@ -43,6 +43,20 @@ def spawn_swarm() -> int:
         return 0
 
 
+def initialize_gpu_swarm(entity_count: int = 500000):
+    """Initialize the 3D GPU SPH simulation with massive entity scale."""
+    try:
+        world = unreal.EditorLevelLibrary.get_editor_world()
+        if world:
+            unreal.FlightScriptingLibrary.initialize_gpu_swarm(world, entity_count)
+            unreal.log(f"GPU Swarm initialized with {entity_count} entities")
+            return True
+        return False
+    except AttributeError:
+        unreal.log_warning("FlightScriptingLibrary not available")
+        return False
+
+
 def clear_swarm():
     """Destroy all swarm entities."""
     try:

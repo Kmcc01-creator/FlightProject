@@ -5,6 +5,7 @@
 #include "FlightWorldBootstrapSubsystem.h"
 #include "FlightSpatialLayoutDirector.h"
 #include "FlightProjectDeveloperSettings.h"
+#include "Swarm/FlightSwarmSubsystem.h"
 
 #include "MassEntitySubsystem.h"
 #include "MassExecutionContext.h"
@@ -165,6 +166,30 @@ int32 UFlightScriptingLibrary::SpawnInitialSwarm(const UObject* WorldContextObje
 
     UE_LOG(LogFlightProject, Warning, TEXT("FlightScriptingLibrary: SpawnInitialSwarm function not found"));
     return 0;
+}
+
+void UFlightScriptingLibrary::InitializeGpuSwarm(const UObject* WorldContextObject, int32 EntityCount)
+{
+    if (!WorldContextObject)
+    {
+        return;
+    }
+
+    UWorld* World = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull);
+    if (!World)
+    {
+        return;
+    }
+
+    if (UFlightSwarmSubsystem* SwarmSubsystem = World->GetSubsystem<UFlightSwarmSubsystem>())
+    {
+        SwarmSubsystem->InitializeSwarm(EntityCount);
+        UE_LOG(LogFlightProject, Log, TEXT("FlightScriptingLibrary: InitializeGpuSwarm called for %d entities"), EntityCount);
+    }
+    else
+    {
+        UE_LOG(LogFlightProject, Warning, TEXT("FlightScriptingLibrary: FlightSwarmSubsystem not found"));
+    }
 }
 
 // ============================================================================

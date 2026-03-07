@@ -96,11 +96,28 @@ namespace Flight::Log
             , Timestamp(InTimestamp)
             , Verbosity(InVerbosity)
             , Category(InCategory)
-            , Message(MoveTemp(InMessage))
+            , Message(SanitizeMessage(MoveTemp(InMessage)))
             , Line(0)
             , ThreadId(FPlatformTLS::GetCurrentThreadId())
             , FrameNumber(GFrameNumber)
         {}
+
+        static FString SanitizeMessage(FString InMessage)
+        {
+            // Remove non-printable control characters that trigger Slate font warnings (e.g., U+15)
+            // We keep \t (9), \n (10), \r (13)
+            FString Sanitized;
+            Sanitized.Reserve(InMessage.Len());
+            for (TCHAR C : InMessage)
+            {
+                if (C < 32 && C != 9 && C != 10 && C != 13)
+                {
+                    continue;
+                }
+                Sanitized.AppendChar(C);
+            }
+            return Sanitized;
+        }
 
         // Format timestamp as HH:MM:SS.mmm
         FString FormatTimestamp() const

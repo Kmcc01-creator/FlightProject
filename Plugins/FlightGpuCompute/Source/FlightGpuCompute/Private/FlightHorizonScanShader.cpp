@@ -28,14 +28,18 @@ IMPLEMENT_GLOBAL_SHADER(FFlightObstacleCountShader,
 // Dispatch Functions
 // ============================================================================
 
-FRDGBufferRef DispatchFlightObstacleCount(
+void DispatchFlightObstacleCount(
 	FRDGBuilder& GraphBuilder,
-	const FFlightHorizonScanInput& Input)
+	const FFlightHorizonScanInput& Input,
+	FRDGBufferRef OutputBuffer,
+	FRDGBufferRef ForceBlackboard,
+	FRDGBufferRef TimestampBuffer,
+	uint32 FrameIndex)
 {
 	if (Input.EntityPositions.Num() == 0)
 	{
 		UE_LOG(LogFlightHorizonScan, Warning, TEXT("DispatchFlightObstacleCount: No entities"));
-		return nullptr;
+		return;
 	}
 
 	const uint32 NumEntities = Input.EntityPositions.Num();
@@ -92,17 +96,13 @@ FRDGBufferRef DispatchFlightObstacleCount(
 			sizeof(FVector4f));
 	}
 
-	// Create output buffer
-	FRDGBufferDesc OutputDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), NumEntities);
-	FRDGBufferRef OutputBuffer = GraphBuilder.CreateBuffer(OutputDesc, TEXT("FlightScan.ObstacleCounts"));
-
 	// Get shader map
 	FGlobalShaderMap* GlobalShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
 	if (!GlobalShaderMap || !GlobalShaderMap->HasShader(&FFlightObstacleCountShader::GetStaticType(), 0))
 	{
 		UE_LOG(LogFlightHorizonScan, Error,
 			TEXT("DispatchFlightObstacleCount: Shader not found in GlobalShaderMap"));
-		return OutputBuffer;
+		return;
 	}
 
 	// Get shader
@@ -112,7 +112,7 @@ FRDGBufferRef DispatchFlightObstacleCount(
 	{
 		UE_LOG(LogFlightHorizonScan, Error,
 			TEXT("DispatchFlightObstacleCount: Shader not compiled"));
-		return OutputBuffer;
+		return;
 	}
 
 	// Setup parameters
@@ -123,8 +123,11 @@ FRDGBufferRef DispatchFlightObstacleCount(
 	Parameters->ObstacleMinBounds = GraphBuilder.CreateSRV(ObstacleMinBuffer);
 	Parameters->ObstacleMaxBounds = GraphBuilder.CreateSRV(ObstacleMaxBuffer);
 	Parameters->ObstacleCountResults = GraphBuilder.CreateUAV(OutputBuffer);
+	Parameters->ForceBlackboard = GraphBuilder.CreateUAV(ForceBlackboard);
+	Parameters->TimestampBuffer = GraphBuilder.CreateUAV(TimestampBuffer);
 	Parameters->NumEntities = NumEntities;
 	Parameters->NumObstacles = NumObstacles;
+	Parameters->DispatchFrameIndex = FrameIndex;
 
 	// Dispatch (64 threads per group)
 	uint32 ThreadGroupCount = FMath::DivideAndRoundUp(NumEntities, 64u);
@@ -139,8 +142,6 @@ FRDGBufferRef DispatchFlightObstacleCount(
 	UE_LOG(LogFlightHorizonScan, Verbose,
 		TEXT("Dispatched ObstacleCount: %u entities, %u obstacles, %u groups"),
 		NumEntities, NumObstacles, ThreadGroupCount);
-
-	return OutputBuffer;
 }
 
 bool AreFlightHorizonScanShadersReady()

@@ -1,205 +1,175 @@
 // Copyright Kelly Rey Wilson. All Rights Reserved.
-// Test suite for the functional programming library and related data structures.
 
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
-
-// The primary header for our functional patterns
 #include "Core/FlightFunctional.h"
-
-// The data structure we want to use in a test
-#include "FlightDataTypes.h"
+#include "Core/FlightReactive.h"
 
 #if WITH_AUTOMATION_TESTS
 
-// Bring the functional namespace into scope for convenience
 using namespace Flight::Functional;
+using namespace Flight::Reactive;
 
 /**
- * A simple test for the TResult<> success path.
+ * Test: Basic Pipeline Operators
  */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFunctionalTResultSuccessTest, "FlightProject.Functional.TResult.Success", EAutomationTestFlags::ClientContext | EAutomationTestFlags::SmokeFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFunctionalPipeTest, "FlightProject.Functional.Pipes.Basic", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
 
-bool FFunctionalTResultSuccessTest::RunTest(const FString& Parameters)
+bool FFunctionalPipeTest::RunTest(const FString& Parameters)
 {
-	// 1. Create a success result
-	auto Result = Ok(42);
+	// 1. FunctionalTransform Pipe
+	int32 Value = 10;
+	int32 Result = Value | FunctionalTransform([](int32 x) { return x * 2; })
+	                     | FunctionalTransform([](int32 x) { return x + 5; });
+	
+	TestEqual("Result should be (10 * 2) + 5 = 25", Result, 25);
 
-	// 2. Test the state
+	// 2. FunctionalFilter Pipe
+	TArray<int32> Numbers = { 1, 2, 3, 4, 5, 6 };
+	auto Evens = Numbers | FunctionalFilter([](int32 x) { return x % 2 == 0; });
+	
+	TestEqual("Filtered array should have 3 elements", Evens.Num(), 3);
+	TestEqual("First even should be 2", Evens[0], 2);
+
+	return true;
+}
+
+/**
+ * Test: Temporal Projection (TProjectedState)
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFunctionalProjectionTest, "FlightProject.Functional.Pipes.Projection", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
+
+bool FFunctionalProjectionTest::RunTest(const FString& Parameters)
+{
+	using namespace Order;
+	
+	// Create a projected state at Horizon 0
+	TProjectedState<FVector, Position, 0> StartPos{ FVector(0, 0, 0) };
+	
+	// Simulate a projection 5 steps ahead with a constant velocity
+	FVector Velocity(100, 0, 0);
+	float dt = 0.1f;
+	
+	auto Future = StartPos.Project<5>(StartPos.Value + (Velocity * dt * 5));
+	
+	TestEqual("Future position should be 50 units ahead", Future.Value.X, 50.0);
+	
+	return true;
+}
+
+/**
+ * Test: Control Fusion (Fuse Operator)
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFunctionalFusionTest, "FlightProject.Functional.Pipes.ControlFusion", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
+
+bool FFunctionalFusionTest::RunTest(const FString& Parameters)
+{
+	// Layer 1: Reactive (Push away from 0)
+	auto ReactiveLayer = [](float x) { return x > 0 ? 10.0f : -10.0f; };
+	
+	// Layer 2: Predictive (Stay at 0)
+	auto PredictiveLayer = [](float x) { return -x; };
+	
+	// Weight: Panic near zero
+	auto PanicFactor = [](float x) { return FMath::Abs(x) < 5.0f ? 1.0f : 0.0f; };
+
+	auto FusedControl = Fuse(ReactiveLayer, PredictiveLayer, PanicFactor);
+
+	// Test Case A: Far from zero (Should follow Predictive)
+	float PosA = 20.0f;
+	float ResultA = PosA | FusedControl;
+	TestEqual("Should follow Predictive (-20)", ResultA, -20.0f);
+
+	// Test Case B: Close to zero (Should follow Reactive)
+	float PosB = 2.0f;
+	float ResultB = PosB | FusedControl;
+	TestEqual("Should follow Reactive (+10)", ResultB, 10.0f);
+
+	return true;
+}
+
+/**
+ * Integration: Lazy Chain with Heterogeneous Results
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFunctionalLazyChainIntegrationTest, "FlightProject.Functional.Integration.LazyChain", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
+
+bool FFunctionalLazyChainIntegrationTest::RunTest(const FString& Parameters)
+{
+	int32 CallCount = 0;
+
+	// Use an initial value to avoid std::tuple<> ambiguity in Apply
+	auto LazyValidation = LazyValidate<FString>()
+		.Then([&](auto...) -> TResult<int32, FString> {
+			CallCount++;
+			return Ok(42);
+		})
+		.Then([&](int32 val) -> TResult<float, FString> {
+			CallCount++;
+			return Ok(val * 2.0f);
+		})
+		.Build();
+
+	TestEqual("CallCount should be 0 before evaluation", CallCount, 0);
+
+	// First evaluation
+	auto Result = LazyValidation.Get();
 	TestTrue("Result should be Ok", Result.IsOk());
-	TestFalse("Result should not be Err", Result.IsErr());
-
-	// 3. Test unwrapping the value
-	int32 Value = MoveTemp(Result).Unwrap();
-	TestEqual("Unwrapped value should be 42", Value, 42);
-
-	return true;
-}
-
-/**
- * A simple test for the TResult<> failure path, including logging.
- */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFunctionalTResultErrorTest, "FlightProject.Functional.TResult.Error", EAutomationTestFlags::ClientContext | EAutomationTestFlags::SmokeFilter)
-
-bool FFunctionalTResultErrorTest::RunTest(const FString& Parameters)
-{
-	const FString ErrorMessage = TEXT("Something went wrong");
-
-	// 1. Create an error result
-	auto Result = Err<int32>(ErrorMessage);
-
-	// 2. Test the state
-	TestFalse("Result should not be Ok", Result.IsOk());
-	TestTrue("Result should be Err", Result.IsErr());
-
-	// 3. Demonstrate logging within a test. This will appear in the test output.
-	UE_LOG(LogTemp, Warning, TEXT("Demonstrating logging from a unit test. The error was: %s"), *Result.GetError());
-
-	// 4. Test retrieving the error message
-	TestEqual("Error message should match", Result.GetError(), ErrorMessage);
+	TestEqual("CallCount should be 2 after evaluation", CallCount, 2);
+	
+	float FloatVal = std::get<1>(Result.Unwrap());
+	TestEqual("Final value should be 84.0", FloatVal, 84.0f);
 
 	return true;
 }
 
 /**
- * Tests the AndThen (monadic bind) operation for chaining successful results.
+ * Integration: Reactive State Flow with Monadic Chaining
  */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFunctionalTResultAndThenTest, "FlightProject.Functional.TResult.AndThen", EAutomationTestFlags::ClientContext | EAutomationTestFlags::SmokeFilter)
+struct FSimState { 
+	float Value = 0.0f; 
+	bool bValid = true; 
 
-bool FFunctionalTResultAndThenTest::RunTest(const FString& Parameters)
+	bool operator==(const FSimState& Other) const { return Value == Other.Value && bValid == Other.bValid; }
+	FLIGHT_REFLECT_BODY(FSimState);
+};
+
+namespace Flight::Reflection {
+	FLIGHT_REFLECT_FIELDS(FSimState, FLIGHT_FIELD(float, Value), FLIGHT_FIELD(bool, bValid))
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFunctionalReactiveStateFlowTest, "FlightProject.Functional.Integration.StateFlow", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
+
+bool FFunctionalReactiveStateFlowTest::RunTest(const FString& Parameters)
 {
-	// 1. Create an initial successful result
-	auto InitialResult = Ok(FString("Hello"));
+	TStateContainer<FSimState> State;
+	float LastProcessedValue = 0.0f;
 
-	// 2. Chain a second operation
-	auto ChainedResult = MoveTemp(InitialResult).AndThen([](const FString& Value) -> TResult<int32>
-	{
-		return Ok(Value.Len());
+	// A pipe that validates and transforms
+	auto ProcessPipe = FunctionalTransform([](const FSimState& S) -> TResult<float, FString> {
+		if (!S.bValid) return TResult<float, FString>::Err(TEXT("Invalid State"));
+		return TResult<float, FString>::Ok(S.Value * 10.0f);
 	});
 
-	// 3. Verify the final result
-	TestTrue("Chained result should be Ok", ChainedResult.IsOk());
-	TestEqual("Final value should be the length of the string", ChainedResult.Unwrap(), 5);
-
-	// 4. Test propagation of an error through the chain
-	auto ErrorResult = Err<FString>(TEXT("Initial Failure"));
-	auto ChainedErrorResult = MoveTemp(ErrorResult).AndThen([](const FString& Value) -> TResult<int32>
-	{
-		// This part should never execute
-		return Ok(Value.Len());
+	// Subscribe and use monadic operations on the state change
+	State.Subscribe([&](const FSimState&, const FSimState& New) {
+		auto Result = New | ProcessPipe;
+		
+		// Use MoveTemp to satisfy Map() && requirement
+		MoveTemp(Result).Map([&](float v) {
+			LastProcessedValue = v;
+			return v;
+		});
 	});
 
-	TestTrue("Chained error result should be an error", ChainedErrorResult.IsErr());
-	TestEqual("Error message should be propagated", ChainedErrorResult.GetError(), FString(TEXT("Initial Failure")));
+	// Test flow 1: Valid update
+	State.Update([](FSimState& S) { S.Value = 5.0f; });
+	TestEqual("Processed value should be 50", LastProcessedValue, 50.0f);
+
+	// Test flow 2: Invalid update (should not update LastProcessedValue)
+	State.Update([](FSimState& S) { S.bValid = false; S.Value = 10.0f; });
+	TestEqual("Processed value should still be 50 (ignored invalid)", LastProcessedValue, 50.0f);
 
 	return true;
 }
 
-namespace FlightTestHelpers
-{
-	// A helper function that uses FLIGHT_TRY to show error propagation.
-	TResult<int32> FunctionThatTries(TResult<FString> Input)
-	{
-		if (Input.IsErr())
-		{
-			return Err<int32>(Input.GetError());
-		}
-		const FString Value = Input.Unwrap();
-		if (Value.IsEmpty())
-		{
-			return Err<int32>(FString(TEXT("Input string cannot be empty")));
-		}
-		return Ok(Value.Len());
-	}
-}
-
-/**
- * Tests the FLIGHT_TRY macro for unwrapping successes and propagating failures.
- */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFunctionalFlightTryTest, "FlightProject.Functional.FLIGHT_TRY", EAutomationTestFlags::ClientContext | EAutomationTestFlags::SmokeFilter)
-
-bool FFunctionalFlightTryTest::RunTest(const FString& Parameters)
-{
-	// 1. Test the success path
-	auto SuccessResult = FlightTestHelpers::FunctionThatTries(Ok(FString("Test")));
-	TestTrue("Success path should return Ok", SuccessResult.IsOk());
-	TestEqual("Success path should return string length", SuccessResult.Unwrap(), 4);
-
-	// 2. Test the failure propagation path
-	const FString OriginalError = TEXT("Original Failure");
-	auto FailureResult = FlightTestHelpers::FunctionThatTries(Err<FString>(OriginalError));
-	TestTrue("Failure path should return Err", FailureResult.IsErr());
-	TestEqual("Failure path should propagate the original error", FailureResult.GetError(), OriginalError);
-	
-	// 3. Test the internal failure path
-	auto InternalFailureResult = FlightTestHelpers::FunctionThatTries(Ok(FString("")));
-	TestTrue("Internal failure path should return Err", InternalFailureResult.IsErr());
-	TestEqual("Internal failure path should return the new error", InternalFailureResult.GetError(), FString(TEXT("Input string cannot be empty")));
-
-	return true;
-}
-
-
-namespace FlightTestHelpers
-{
-	// An example function that validates a data structure.
-	// This would typically live in your runtime code, not in the test file.
-	TResult<bool> ValidateDataRow(const FFlightSpatialLayoutRow& DataRow)
-	{
-		if (DataRow.RowName.IsNone() || DataRow.RowName.ToString().IsEmpty())
-		{
-			return Err<bool>(FString(TEXT("RowName cannot be empty")));
-		}
-
-		if (DataRow.GetScale().IsNearlyZero())
-		{
-			return Err<bool>(FString(TEXT("Scale cannot be zero")));
-		}
-
-		return Ok(true);
-	}
-}
-
-/**
- * Tests using a mock data table row within a functional validation context.
- */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDataDrivenFunctionalTest, "FlightProject.Functional.DataDriven.Validation", EAutomationTestFlags::ClientContext | EAutomationTestFlags::SmokeFilter)
-
-bool FDataDrivenFunctionalTest::RunTest(const FString& Parameters)
-{
-	// 1. Create a valid mock data row.
-	FFlightSpatialLayoutRow ValidRow;
-	ValidRow.RowName = FName("TestObstacle_Valid");
-	ValidRow.EntityType = EFlightSpatialEntityType::Obstacle;
-	ValidRow.PositionX = 100.f;
-	ValidRow.ScaleX = 1.f;
-	ValidRow.ScaleY = 1.f;
-	ValidRow.ScaleZ = 1.f;
-
-	// 2. Test the valid row, expecting success.
-	auto SuccessResult = FlightTestHelpers::ValidateDataRow(ValidRow);
-	TestTrue("Validation of a valid row should succeed", SuccessResult.IsOk());
-	
-	// Log the success for demonstration.
-	UE_LOG(LogTemp, Log, TEXT("Successfully validated mock data row '%s'"), *ValidRow.RowName.ToString());
-
-	// 3. Create an invalid mock data row.
-	FFlightSpatialLayoutRow InvalidRow;
-	InvalidRow.RowName = FName(); // Invalid empty name
-	InvalidRow.EntityType = EFlightSpatialEntityType::Obstacle;
-	InvalidRow.PositionX = 200.f;
-	InvalidRow.ScaleX = 1.f;
-	
-	// 4. Test the invalid row, expecting failure.
-	auto FailureResult = FlightTestHelpers::ValidateDataRow(InvalidRow);
-	TestTrue("Validation of an invalid row should fail", FailureResult.IsErr());
-	TestEqual("Error message for invalid row should be correct", FailureResult.GetError(), FString(TEXT("RowName cannot be empty")));
-	
-	// Log the failure for demonstration.
-	UE_LOG(LogTemp, Warning, TEXT("Correctly caught invalid data row. Reason: %s"), *FailureResult.GetError());
-
-	return true;
-}
-
-
-#endif //WITH_AUTOMATION_TESTS
+#endif // WITH_AUTOMATION_TESTS

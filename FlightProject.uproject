@@ -1,214 +1,544 @@
 {
-    "FileVersion": 3,
-    "EngineAssociation": "5F9B7F2C-6733-46F8-8CDF-2E962DA75B9C",
-    "Category": "Simulation",
-    "Description": "Autonomous flight sandbox with large-scale swarm support and GPU-driven systems.",
-    "Modules": [
-        {
-            "Name": "FlightProject",
-            "Type": "Runtime",
-            "LoadingPhase": "Default"
-        }
-    ],
-    "Plugins": [
-        {
-            "Name": "FlightVulkanExtensions",
-            "Enabled": true,
-            "PlatformAllowList": ["Linux"]
-        },
-        {
-            "Name": "EnhancedInput",
-            "Enabled": true
-        },
-        {
-            "Name": "Niagara",
-            "Enabled": true
-        },
-        {
-            "Name": "MassGameplay",
-            "Enabled": true
-        },
-        {
-            "Name": "MassAI",
-            "Enabled": true
-        },
-        {
-            "Name": "StateTree",
-            "Enabled": true
-        },
-        {
-            "Name": "ComputeFramework",
-            "Enabled": true
-        },
-        {
-            "Name": "GeometryScripting",
-            "Enabled": true
-        },
-        {
-            "Name": "GeometryProcessing",
-            "Enabled": true
-        },
-        {
-            "Name": "ModelingToolsEditorMode",
-            "Enabled": true,
-            "TargetAllowList": ["Editor"]
-        },
-        {
-            "Name": "PythonScriptPlugin",
-            "Enabled": true
-        },
-        {
-            "Name": "EditorScriptingUtilities",
-            "Enabled": true,
-            "TargetAllowList": ["Editor"]
-        },
-        {
-            "Name": "ZoneGraph",
-            "Enabled": true
-        },
-        {
-            "Name": "SmartObjects",
-            "Enabled": true
-        },
-
-        {"Name": "ChaosCloth", "Enabled": false},
-        {"Name": "ChaosInsights", "Enabled": false},
-        {"Name": "ChaosVD", "Enabled": false},
-        {"Name": "ChaosCaching", "Enabled": false},
-        {"Name": "ChaosNiagara", "Enabled": false},
-        {"Name": "ChaosEditor", "Enabled": false},
-        {"Name": "ChaosSolverPlugin", "Enabled": false},
-        {"Name": "ChaosUserDataPT", "Enabled": false},
-        {"Name": "Fracture", "Enabled": false},
-        {"Name": "PlanarCut", "Enabled": false},
-        {"Name": "GeometryCollectionPlugin", "Enabled": false},
-
-        {"Name": "Paper2D", "Enabled": false},
-        {"Name": "Cascade", "Enabled": false},
-
-        {"Name": "MetaHumanSDK", "Enabled": false},
-        {"Name": "HairStrands", "Enabled": false},
-        {"Name": "RigLogic", "Enabled": false},
-
-        {"Name": "AndroidFileServer", "Enabled": false},
-        {"Name": "AndroidPermission", "Enabled": false},
-        {"Name": "AndroidDeviceProfileSelector", "Enabled": false},
-        {"Name": "AndroidMedia", "Enabled": false},
-        {"Name": "AndroidMoviePlayer", "Enabled": false},
-        {"Name": "GooglePAD", "Enabled": false},
-        {"Name": "GoogleCloudMessaging", "Enabled": false},
-        {"Name": "OnlineSubsystemGooglePlay", "Enabled": false},
-        {"Name": "LauncherChunkInstaller", "Enabled": false},
-
-        {"Name": "AppleImageUtils", "Enabled": false},
-        {"Name": "AppleMoviePlayer", "Enabled": false},
-        {"Name": "AvfMedia", "Enabled": false},
-        {"Name": "IOSDeviceProfileSelector", "Enabled": false},
-        {"Name": "OnlineSubsystemIOS", "Enabled": false},
-
-        {"Name": "WindowsDeviceProfileSelector", "Enabled": false},
-        {"Name": "WindowsMoviePlayer", "Enabled": false},
-        {"Name": "WmfMedia", "Enabled": false},
-        {"Name": "XInputDevice", "Enabled": false},
-        {"Name": "PixWinPlugin", "Enabled": false},
-
-        {"Name": "SteamVR", "Enabled": false},
-        {"Name": "OculusVR", "Enabled": false},
-        {"Name": "OpenXR", "Enabled": false},
-
-        {"Name": "OnlineBase", "Enabled": false},
-        {"Name": "OnlineServices", "Enabled": false},
-        {"Name": "OnlineSubsystem", "Enabled": false},
-        {"Name": "OnlineSubsystemNull", "Enabled": false},
-        {"Name": "OnlineSubsystemUtils", "Enabled": false},
-        {"Name": "EOSShared", "Enabled": false},
-
-        {"Name": "CodeLiteSourceCodeAccess", "Enabled": false},
-        {"Name": "KDevelopSourceCodeAccess", "Enabled": false},
-        {"Name": "N10XSourceCodeAccess", "Enabled": false},
-        {"Name": "NullSourceCodeAccess", "Enabled": false},
-        {"Name": "RiderSourceCodeAccess", "Enabled": false},
-        {"Name": "CLionSourceCodeAccess", "Enabled": false},
-        {"Name": "VisualStudioSourceCodeAccess", "Enabled": false},
-        {"Name": "VisualStudioCodeSourceCodeAccess", "Enabled": false},
-        {"Name": "XCodeSourceCodeAccess", "Enabled": false},
-
-        {"Name": "GitSourceControl", "Enabled": false},
-        {"Name": "PerforceSourceControl", "Enabled": false},
-        {"Name": "PlasticSourceControl", "Enabled": false},
-        {"Name": "SubversionSourceControl", "Enabled": false},
-
-        {"Name": "Fab", "Enabled": false},
-        {"Name": "ArchVisCharacter", "Enabled": false},
-        {"Name": "DatasmithContent", "Enabled": false},
-        {"Name": "WebBrowserWidget", "Enabled": false},
-        {"Name": "GLTFExporter", "Enabled": false},
-        {"Name": "VariantManager", "Enabled": false},
-        {"Name": "VariantManagerContent", "Enabled": false},
-        {"Name": "AlembicImporter", "Enabled": false},
-        {"Name": "SpeedTreeImporter", "Enabled": false},
-
-        {"Name": "Takes", "Enabled": false},
-        {"Name": "ActorSequence", "Enabled": false},
-        {"Name": "TemplateSequence", "Enabled": false},
-
-        {"Name": "ImgMedia", "Enabled": false},
-        {"Name": "MediaCompositing", "Enabled": false},
-        {"Name": "MediaPlate", "Enabled": false},
-        {"Name": "WebMMedia", "Enabled": false},
-        {"Name": "WebMMoviePlayer", "Enabled": false},
-
-        {"Name": "AudioCapture", "Enabled": false},
-        {"Name": "AudioSynesthesia", "Enabled": false},
-        {"Name": "ResonanceAudio", "Enabled": false},
-        {"Name": "SoundFields", "Enabled": false},
-        {"Name": "Synthesis", "Enabled": false},
-        {"Name": "WaveTable", "Enabled": false},
-        {"Name": "Metasound", "Enabled": false},
-
-        {"Name": "MobilePatchingUtils", "Enabled": false},
-        {"Name": "MobileLauncherProfileWizard", "Enabled": false},
-        {"Name": "ChunkDownloader", "Enabled": false},
-
-        {"Name": "FacialAnimation", "Enabled": false},
-        {"Name": "AnimationSharing", "Enabled": false},
-        {"Name": "ControlRigSpline", "Enabled": false},
-        {"Name": "BlendSpaceMotionAnalysis", "Enabled": false},
-        {"Name": "FullBodyIK", "Enabled": false},
-
-        {"Name": "CableComponent", "Enabled": false},
-        {"Name": "CustomMeshComponent", "Enabled": false},
-        {"Name": "ProceduralMeshComponent", "Enabled": false},
-
-        {"Name": "UdpMessaging", "Enabled": false},
-        {"Name": "TcpMessaging", "Enabled": false},
-        {"Name": "BackChannel", "Enabled": false},
-        {"Name": "MsQuic", "Enabled": false},
-        {"Name": "LowLevelNetTrace", "Enabled": false},
-
-        {"Name": "OodleNetwork", "Enabled": false},
-        {"Name": "TextureFormatOodle", "Enabled": false},
-
-        {"Name": "GameplayAbilities", "Enabled": false},
-        {"Name": "TargetingSystem", "Enabled": false},
-        {"Name": "CharacterAI", "Enabled": false},
-        {"Name": "NavCorridor", "Enabled": false},
-
-        {"Name": "NNERuntimeORT", "Enabled": false},
-        {"Name": "NNEDenoiser", "Enabled": false},
-        {"Name": "NFORDenoise", "Enabled": false},
-        {"Name": "GPUReshape", "Enabled": false},
-
-        {"Name": "StylusInput", "Enabled": false},
-        {"Name": "LocationServicesBPLibrary", "Enabled": false},
-
-        {"Name": "CryptoKeys", "Enabled": false},
-        {"Name": "PlatformCrypto", "Enabled": false},
-
-        {"Name": "InterchangeTests", "Enabled": false},
-
-        {"Name": "WorldPartitionHLODUtilities", "Enabled": false},
-        {"Name": "DataValidation", "Enabled": false},
-        {"Name": "AssetReferenceRestrictions", "Enabled": false}
-    ]
+	"FileVersion": 3,
+	"EngineAssociation": "5F9B7F2C-6733-46F8-8CDF-2E962DA75B9C",
+	"Category": "Simulation",
+	"Description": "Autonomous flight sandbox with large-scale swarm support and GPU-driven systems.",
+	"Modules": [
+		{
+			"Name": "FlightProject",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "FlightVulkanExtensions",
+			"Enabled": true,
+			"PlatformAllowList": [
+				"Linux"
+			]
+		},
+		{
+			"Name": "EnhancedInput",
+			"Enabled": true
+		},
+		{
+			"Name": "Niagara",
+			"Enabled": true
+		},
+		{
+			"Name": "MassGameplay",
+			"Enabled": true
+		},
+		{
+			"Name": "MassAI",
+			"Enabled": true
+		},
+		{
+			"Name": "StateTree",
+			"Enabled": true
+		},
+		{
+			"Name": "ComputeFramework",
+			"Enabled": true
+		},
+		{
+			"Name": "GeometryScripting",
+			"Enabled": true
+		},
+		{
+			"Name": "GeometryProcessing",
+			"Enabled": true
+		},
+		{
+			"Name": "ModelingToolsEditorMode",
+			"Enabled": true,
+			"TargetAllowList": [
+				"Editor"
+			]
+		},
+		{
+			"Name": "PythonScriptPlugin",
+			"Enabled": true
+		},
+		{
+			"Name": "EditorScriptingUtilities",
+			"Enabled": true,
+			"TargetAllowList": [
+				"Editor"
+			]
+		},
+		{
+			"Name": "ZoneGraph",
+			"Enabled": true
+		},
+		{
+			"Name": "SmartObjects",
+			"Enabled": true
+		},
+		{
+			"Name": "ChaosCloth",
+			"Enabled": false
+		},
+		{
+			"Name": "ChaosInsights",
+			"Enabled": false
+		},
+		{
+			"Name": "ChaosVD",
+			"Enabled": false
+		},
+		{
+			"Name": "ChaosCaching",
+			"Enabled": false
+		},
+		{
+			"Name": "ChaosNiagara",
+			"Enabled": false
+		},
+		{
+			"Name": "ChaosEditor",
+			"Enabled": false
+		},
+		{
+			"Name": "ChaosSolverPlugin",
+			"Enabled": false
+		},
+		{
+			"Name": "ChaosUserDataPT",
+			"Enabled": false
+		},
+		{
+			"Name": "Fracture",
+			"Enabled": false
+		},
+		{
+			"Name": "PlanarCut",
+			"Enabled": false
+		},
+		{
+			"Name": "GeometryCollectionPlugin",
+			"Enabled": false
+		},
+		{
+			"Name": "Paper2D",
+			"Enabled": false
+		},
+		{
+			"Name": "Cascade",
+			"Enabled": false
+		},
+		{
+			"Name": "MetaHumanSDK",
+			"Enabled": false
+		},
+		{
+			"Name": "HairStrands",
+			"Enabled": false
+		},
+		{
+			"Name": "RigLogic",
+			"Enabled": false
+		},
+		{
+			"Name": "AndroidFileServer",
+			"Enabled": false
+		},
+		{
+			"Name": "AndroidPermission",
+			"Enabled": false
+		},
+		{
+			"Name": "AndroidDeviceProfileSelector",
+			"Enabled": false
+		},
+		{
+			"Name": "AndroidMedia",
+			"Enabled": false
+		},
+		{
+			"Name": "AndroidMoviePlayer",
+			"Enabled": false
+		},
+		{
+			"Name": "GooglePAD",
+			"Enabled": false
+		},
+		{
+			"Name": "GoogleCloudMessaging",
+			"Enabled": false
+		},
+		{
+			"Name": "OnlineSubsystemGooglePlay",
+			"Enabled": false
+		},
+		{
+			"Name": "LauncherChunkInstaller",
+			"Enabled": false
+		},
+		{
+			"Name": "AppleImageUtils",
+			"Enabled": false
+		},
+		{
+			"Name": "AppleMoviePlayer",
+			"Enabled": false
+		},
+		{
+			"Name": "AvfMedia",
+			"Enabled": false
+		},
+		{
+			"Name": "IOSDeviceProfileSelector",
+			"Enabled": false
+		},
+		{
+			"Name": "OnlineSubsystemIOS",
+			"Enabled": false
+		},
+		{
+			"Name": "WindowsDeviceProfileSelector",
+			"Enabled": false
+		},
+		{
+			"Name": "WindowsMoviePlayer",
+			"Enabled": false
+		},
+		{
+			"Name": "WmfMedia",
+			"Enabled": false
+		},
+		{
+			"Name": "XInputDevice",
+			"Enabled": false
+		},
+		{
+			"Name": "PixWinPlugin",
+			"Enabled": false
+		},
+		{
+			"Name": "SteamVR",
+			"Enabled": false
+		},
+		{
+			"Name": "OculusVR",
+			"Enabled": false
+		},
+		{
+			"Name": "OpenXR",
+			"Enabled": false
+		},
+		{
+			"Name": "OnlineBase",
+			"Enabled": false
+		},
+		{
+			"Name": "OnlineServices",
+			"Enabled": false
+		},
+		{
+			"Name": "OnlineSubsystem",
+			"Enabled": false
+		},
+		{
+			"Name": "OnlineSubsystemNull",
+			"Enabled": false
+		},
+		{
+			"Name": "OnlineSubsystemUtils",
+			"Enabled": false
+		},
+		{
+			"Name": "EOSShared",
+			"Enabled": false
+		},
+		{
+			"Name": "CodeLiteSourceCodeAccess",
+			"Enabled": false
+		},
+		{
+			"Name": "KDevelopSourceCodeAccess",
+			"Enabled": false
+		},
+		{
+			"Name": "N10XSourceCodeAccess",
+			"Enabled": false
+		},
+		{
+			"Name": "NullSourceCodeAccess",
+			"Enabled": false
+		},
+		{
+			"Name": "RiderSourceCodeAccess",
+			"Enabled": false
+		},
+		{
+			"Name": "CLionSourceCodeAccess",
+			"Enabled": false
+		},
+		{
+			"Name": "VisualStudioSourceCodeAccess",
+			"Enabled": false
+		},
+		{
+			"Name": "VisualStudioCodeSourceCodeAccess",
+			"Enabled": false
+		},
+		{
+			"Name": "XCodeSourceCodeAccess",
+			"Enabled": false
+		},
+		{
+			"Name": "GitSourceControl",
+			"Enabled": false
+		},
+		{
+			"Name": "PerforceSourceControl",
+			"Enabled": false
+		},
+		{
+			"Name": "PlasticSourceControl",
+			"Enabled": false
+		},
+		{
+			"Name": "SubversionSourceControl",
+			"Enabled": false
+		},
+		{
+			"Name": "Fab",
+			"Enabled": false
+		},
+		{
+			"Name": "ArchVisCharacter",
+			"Enabled": false
+		},
+		{
+			"Name": "DatasmithContent",
+			"Enabled": false
+		},
+		{
+			"Name": "WebBrowserWidget",
+			"Enabled": false
+		},
+		{
+			"Name": "GLTFExporter",
+			"Enabled": false
+		},
+		{
+			"Name": "VariantManager",
+			"Enabled": false
+		},
+		{
+			"Name": "VariantManagerContent",
+			"Enabled": false
+		},
+		{
+			"Name": "AlembicImporter",
+			"Enabled": false
+		},
+		{
+			"Name": "SpeedTreeImporter",
+			"Enabled": false
+		},
+		{
+			"Name": "Takes",
+			"Enabled": false
+		},
+		{
+			"Name": "ActorSequence",
+			"Enabled": false
+		},
+		{
+			"Name": "TemplateSequence",
+			"Enabled": false
+		},
+		{
+			"Name": "ImgMedia",
+			"Enabled": false
+		},
+		{
+			"Name": "MediaCompositing",
+			"Enabled": false
+		},
+		{
+			"Name": "MediaPlate",
+			"Enabled": false
+		},
+		{
+			"Name": "WebMMedia",
+			"Enabled": false
+		},
+		{
+			"Name": "WebMMoviePlayer",
+			"Enabled": false
+		},
+		{
+			"Name": "AudioCapture",
+			"Enabled": false
+		},
+		{
+			"Name": "AudioSynesthesia",
+			"Enabled": false
+		},
+		{
+			"Name": "ResonanceAudio",
+			"Enabled": false
+		},
+		{
+			"Name": "SoundFields",
+			"Enabled": false
+		},
+		{
+			"Name": "Synthesis",
+			"Enabled": false
+		},
+		{
+			"Name": "WaveTable",
+			"Enabled": false
+		},
+		{
+			"Name": "Metasound",
+			"Enabled": false
+		},
+		{
+			"Name": "MobilePatchingUtils",
+			"Enabled": false
+		},
+		{
+			"Name": "MobileLauncherProfileWizard",
+			"Enabled": false
+		},
+		{
+			"Name": "ChunkDownloader",
+			"Enabled": false
+		},
+		{
+			"Name": "FacialAnimation",
+			"Enabled": false
+		},
+		{
+			"Name": "AnimationSharing",
+			"Enabled": false
+		},
+		{
+			"Name": "ControlRigSpline",
+			"Enabled": false
+		},
+		{
+			"Name": "BlendSpaceMotionAnalysis",
+			"Enabled": false
+		},
+		{
+			"Name": "FullBodyIK",
+			"Enabled": false
+		},
+		{
+			"Name": "CableComponent",
+			"Enabled": false
+		},
+		{
+			"Name": "CustomMeshComponent",
+			"Enabled": false
+		},
+		{
+			"Name": "ProceduralMeshComponent",
+			"Enabled": false
+		},
+		{
+			"Name": "UdpMessaging",
+			"Enabled": false
+		},
+		{
+			"Name": "TcpMessaging",
+			"Enabled": false
+		},
+		{
+			"Name": "BackChannel",
+			"Enabled": false
+		},
+		{
+			"Name": "MsQuic",
+			"Enabled": false
+		},
+		{
+			"Name": "LowLevelNetTrace",
+			"Enabled": false
+		},
+		{
+			"Name": "OodleNetwork",
+			"Enabled": false
+		},
+		{
+			"Name": "TextureFormatOodle",
+			"Enabled": false
+		},
+		{
+			"Name": "GameplayAbilities",
+			"Enabled": false
+		},
+		{
+			"Name": "TargetingSystem",
+			"Enabled": false
+		},
+		{
+			"Name": "CharacterAI",
+			"Enabled": false
+		},
+		{
+			"Name": "NavCorridor",
+			"Enabled": false
+		},
+		{
+			"Name": "NNERuntimeORT",
+			"Enabled": false
+		},
+		{
+			"Name": "NNEDenoiser",
+			"Enabled": false
+		},
+		{
+			"Name": "NFORDenoise",
+			"Enabled": false
+		},
+		{
+			"Name": "GPUReshape",
+			"Enabled": false
+		},
+		{
+			"Name": "StylusInput",
+			"Enabled": false
+		},
+		{
+			"Name": "LocationServicesBPLibrary",
+			"Enabled": false
+		},
+		{
+			"Name": "CryptoKeys",
+			"Enabled": false
+		},
+		{
+			"Name": "PlatformCrypto",
+			"Enabled": false
+		},
+		{
+			"Name": "InterchangeTests",
+			"Enabled": false
+		},
+		{
+			"Name": "WorldPartitionHLODUtilities",
+			"Enabled": false
+		},
+		{
+			"Name": "DataValidation",
+			"Enabled": false
+		},
+		{
+			"Name": "AssetReferenceRestrictions",
+			"Enabled": false
+		}
+	],
+	"TargetPlatforms": [
+		"Linux",
+		"LinuxArm64"
+	]
 }
