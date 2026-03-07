@@ -12,6 +12,7 @@ class UFlightIoUringSubsystem;
 class FRHIGPUBufferReadback;
 
 #if PLATFORM_LINUX
+#include "IoUring/FlightExportableSemaphore.h"
 namespace Flight::IoUring
 {
 	class FRing;
@@ -24,17 +25,19 @@ namespace Flight::IoUring
  * Bridges GPU compute work completion to io_uring notifications.
  * Enables game thread to be woken by io_uring when GPU work completes.
  *
- * Architecture:
+ * Architecture (when VK_KHR_external_semaphore_fd is available):
  * 1. Game thread submits compute work via RDG
- * 2. RDG executes and returns a GPU fence
- * 3. Bridge tracks fence, signals eventfd when complete
- * 4. io_uring polls eventfd, wakes game thread
- * 5. Game thread reads back results
+ * 2. After GraphBuilder.Execute(), call SignalExportableSemaphoreForWork()
+ * 3. RHIRunOnQueue creates binary semaphore, waits on UE's timeline, signals binary
+ * 4. Export sync_fd from binary semaphore
+ * 5. io_uring POLL_ADD on sync_fd
+ * 6. CQE arrives when GPU work completes - zero syscalls in steady state
  *
- * Future optimization path:
- * - Export Vulkan fence directly via VK_KHR_external_fence_fd
- * - Poll fence fd directly (no intermediate eventfd)
- * - Zero-copy buffer access via external memory
+ * Each pending GPU job gets its own binary semaphore and sync_fd (per Vulkan spec,
+ * SYNC_FD can only be exported from binary semaphores, not timeline).
+ *
+ * Fallback (when extension unavailable):
+ * - Uses eventfd + polling as placeholder
  */
 UCLASS()
 class FLIGHTPROJECT_API UFlightGpuIoUringBridge : public UWorldSubsystem
@@ -43,6 +46,7 @@ class FLIGHTPROJECT_API UFlightGpuIoUringBridge : public UWorldSubsystem
 
 public:
 	UFlightGpuIoUringBridge();
+	virtual ~UFlightGpuIoUringBridge();
 
 	// USubsystem interface
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
@@ -53,25 +57,19 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Flight|GpuBridge")
 	bool IsAvailable() const;
 
-	/**
-	 * Submit test compute shader and track completion
-	 *
-	 * @param BufferSize Number of uint32 elements
-	 * @param TestValue Value to write to buffer
-	 * @param Callback Called when GPU work completes with result buffer
-	 * @return Tracking ID (0 on failure)
-	 */
+	/** Check if the zero-syscall path (exportable semaphores) is active */
 	UFUNCTION(BlueprintCallable, Category = "Flight|GpuBridge")
-	int64 SubmitTestCompute(int32 BufferSize, int32 TestValue);
+	bool IsUsingExportableSemaphores() const { return bExportableSemaphoresAvailable; }
 
 	/**
-	 * Register callback for compute completion
+	 * Signal GPU completion for a tracking ID.
+	 * Call this after GraphBuilder.Execute() returns.
+	 * Creates a binary semaphore that waits on UE's timeline and exports sync_fd.
 	 *
-	 * @param TrackingId ID from SubmitTestCompute
-	 * @param Callback Called with result data
+	 * @param TrackingId Unique ID for this GPU work
+	 * @param Callback Called on game thread when GPU work completes
 	 */
-	void RegisterCompletionCallback(int64 TrackingId,
-		TFunction<void(TArrayView<uint32> Results, double ElapsedMs)> Callback);
+	void SignalGpuCompletion(int64 TrackingId, TFunction<void()> Callback);
 
 	/**
 	 * Poll for GPU completions (call each frame)
@@ -86,37 +84,58 @@ public:
 
 	// Statistics
 	UFUNCTION(BlueprintCallable, Category = "Flight|GpuBridge")
-	int32 GetPendingCount() const { return PendingWork.Num(); }
+	int32 GetPendingCount() const;
 
 	UFUNCTION(BlueprintCallable, Category = "Flight|GpuBridge")
-	int64 GetTotalSubmissions() const { return TotalSubmissions; }
+	int64 GetTotalSubmissions() const { return TotalSubmissions.load(std::memory_order_relaxed); }
 
 	UFUNCTION(BlueprintCallable, Category = "Flight|GpuBridge")
-	int64 GetTotalCompletions() const { return TotalCompletions; }
+	int64 GetTotalCompletions() const { return TotalCompletions.load(std::memory_order_relaxed); }
 
 private:
-	struct FPendingGpuWork
-	{
-		int64 Id;
-		FGPUFenceRHIRef Fence;
-		TFunction<void(TArrayView<uint32>, double)> Callback;
-		double SubmitTime;
-		TArray<uint32> ResultBuffer;
-		FRHIGPUBufferReadback* Readback;
-	};
-
-	TArray<FPendingGpuWork> PendingWork;
-	int64 NextId = 1;
-	int64 TotalSubmissions = 0;
-	int64 TotalCompletions = 0;
+	// Atomic counters - incremented from io_uring worker thread, read from game thread
+	std::atomic<int64> TotalSubmissions{0};
+	std::atomic<int64> TotalCompletions{0};
 
 #if PLATFORM_LINUX
+	/**
+	 * Per-job synchronization state.
+	 * Each pending GPU job gets its own binary semaphore and sync_fd.
+	 */
+	struct FPendingSyncState
+	{
+		int64 TrackingId = 0;
+		TUniquePtr<Flight::IoUring::FExportableSemaphore> Semaphore;
+		int32 SyncFd = -1;
+		uint64 IoUringUserData = 0;
+		TFunction<void()> Callback;
+		double SubmitTime = 0.0;
+	};
+
+	// Map of TrackingId -> pending sync state
+	TMap<int64, TSharedPtr<FPendingSyncState>> PendingSyncStates;
+	FCriticalSection PendingSyncStatesMutex;
+
 	int32 EventFd = -1;
 	UFlightIoUringSubsystem* IoUringSubsystem = nullptr;
+	bool bExportableSemaphoresAvailable = false;
+
+	// Counter for generating unique io_uring user data
+	std::atomic<uint64> NextUserDataId{1};
 
 	void SetupIoUringIntegration();
 	void OnEventFdReadable(int32 Result, uint32 Flags);
-#endif
+	void OnSyncFdReadable(int64 TrackingId, int32 Result, uint32 Flags);
 
-	void HandleCompletion(FPendingGpuWork& Work);
+	/**
+	 * Clean up a pending sync state (close fd, remove from map).
+	 * Must be called with PendingSyncStatesMutex held.
+	 */
+	void CleanupPendingState_Locked(int64 TrackingId);
+
+	/**
+	 * Close sync_fd if valid and reset to -1.
+	 */
+	static void CloseSyncFdIfValid(int32& Fd);
+#endif
 };

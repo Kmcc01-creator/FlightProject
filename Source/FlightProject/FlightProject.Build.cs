@@ -6,7 +6,7 @@ public class FlightProject : ModuleRules
     {
         PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 
-        // Use C++23 standard for modern language features
+        // Use C++23 standard for modern language features.
         CppStandard = CppStandardVersion.Cpp23;
 
         PublicDependencyModuleNames.AddRange(new string[]
@@ -23,6 +23,11 @@ public class FlightProject : ModuleRules
             "Chaos",
             "PhysicsCore",
             "MassEntity",
+            "MassCommon",
+            "MassSignals",
+            "MassNavigation",
+            "MassMovement",
+            "MassLOD",
             "MassActors",
             "MassSpawner",
             "MassSimulation",
@@ -32,14 +37,18 @@ public class FlightProject : ModuleRules
             // Geometry/Modeling support for MeshIR system
             "GeometryCore",
             "GeometryFramework",
-            "GeometryScriptingCore"
+            "GeometryScriptingCore",
+            // Slate UI
+            "Slate",
+            "SlateCore"
         });
 
         PrivateDependencyModuleNames.AddRange(new string[]
         {
             "RenderCore",
             "RHI",
-            "Projects"
+            "Projects",
+            "FlightGpuCompute"  // Compute shaders with PostConfigInit registration
         });
 
         // Linux-specific io_uring and Vulkan integration
@@ -58,7 +67,9 @@ public class FlightProject : ModuleRules
                 "LevelEditor",
                 "NiagaraEditor",
                 "MassEntityEditor",
-                "WorldPartitionEditor"
+                "WorldPartitionEditor",
+                "ToolMenus",
+                "WorkspaceMenuStructure"
             });
         }
 

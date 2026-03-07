@@ -1,88 +1,27 @@
 // Copyright Kelly Rey Wilson. All Rights Reserved.
-// FlightProject - Test compute shader for io_uring integration
+// FlightProject - GPU completion tracking for io_uring integration
+//
+// NOTE: Compute shader classes have moved to the FlightGpuCompute plugin.
+// Use #include "FlightTestComputeShader.h" from FlightGpuCompute for:
+//   - FFlightTestComputeShader
+//   - FFlightReductionComputeShader
+//   - DispatchFlightTestCompute()
+//
+// This file retains FFlightGpuCompletionTracker which doesn't need PostConfigInit.
 
 #pragma once
 
 #include "CoreMinimal.h"
-#include "GlobalShader.h"
-#include "ShaderParameterStruct.h"
-#include "RenderGraphBuilder.h"
-#include "RenderGraphUtils.h"
-
-// NOTE: Shader classes disabled because game modules load too late for shader
-// registration. To enable, move to a plugin with LoadingPhase::PostConfigInit.
-// See FlightTestComputeShader.cpp for details.
-
-#if 0 // DISABLED - Shaders cannot be registered from game modules
-/**
- * FFlightTestComputeShader
- *
- * Simple compute shader for testing GPU -> io_uring notification path.
- * Writes sequential values to a buffer that can be read back for verification.
- */
-class FFlightTestComputeShader : public FGlobalShader
-{
-public:
-	DECLARE_GLOBAL_SHADER(FFlightTestComputeShader);
-	SHADER_USE_PARAMETER_STRUCT(FFlightTestComputeShader, FGlobalShader);
-
-	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
-		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, OutputBuffer)
-		SHADER_PARAMETER(uint32, TestValue)
-		SHADER_PARAMETER(uint32, BufferSize)
-	END_SHADER_PARAMETER_STRUCT()
-
-	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
-	{
-		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
-	}
-
-	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters,
-		FShaderCompilerEnvironment& OutEnvironment)
-	{
-		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
-		OutEnvironment.SetDefine(TEXT("THREADGROUP_SIZE"), 64);
-	}
-};
-
-/**
- * FFlightReductionComputeShader
- *
- * Reduction shader for more realistic workload testing.
- * Sums input buffer and writes result to output.
- */
-class FFlightReductionComputeShader : public FGlobalShader
-{
-public:
-	DECLARE_GLOBAL_SHADER(FFlightReductionComputeShader);
-	SHADER_USE_PARAMETER_STRUCT(FFlightReductionComputeShader, FGlobalShader);
-
-	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
-		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, InputBuffer)
-		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint>, OutputBuffer)
-		SHADER_PARAMETER(uint32, BufferSize)
-	END_SHADER_PARAMETER_STRUCT()
-
-	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
-	{
-		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
-	}
-};
-
-/**
- * Dispatch test compute shader via RDG
- */
-FLIGHTPROJECT_API FRDGBufferRef DispatchFlightTestCompute(
-	FRDGBuilder& GraphBuilder,
-	uint32 BufferSize,
-	uint32 TestValue);
-#endif
+#include "RHI.h"
 
 /**
  * FFlightGpuCompletionTracker
  *
  * Tracks GPU work completion and bridges to io_uring notification.
- * Uses a polling approach initially (can be optimized with fence export later).
+ * Uses RHI fence polling with optional eventfd signaling.
+ *
+ * NOTE: For zero-syscall GPU completion notification via exportable semaphores,
+ * use UFlightGpuIoUringBridge::SignalGpuCompletion() instead.
  */
 class FLIGHTPROJECT_API FFlightGpuCompletionTracker
 {

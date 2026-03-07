@@ -12,6 +12,11 @@
     ],
     "Plugins": [
         {
+            "Name": "FlightVulkanExtensions",
+            "Enabled": true,
+            "PlatformAllowList": ["Linux"]
+        },
+        {
             "Name": "EnhancedInput",
             "Enabled": true
         },

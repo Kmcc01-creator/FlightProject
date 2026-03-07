@@ -1,0 +1,20 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"FriendlyName": "Flight GPU Compute",
+	"Description": "RDG compute shaders for FlightProject (PostConfigInit phase for shader registration)",
+	"Category": "Flight",
+	"CreatedBy": "Kelly",
+	"EnabledByDefault": true,
+	"CanContainContent": false,
+	"IsBetaVersion": true,
+	"Modules": [
+		{
+			"Name": "FlightGpuCompute",
+			"Type": "Runtime",
+			"LoadingPhase": "PostConfigInit",
+			"PlatformAllowList": ["Linux"]
+		}
+	]
+}

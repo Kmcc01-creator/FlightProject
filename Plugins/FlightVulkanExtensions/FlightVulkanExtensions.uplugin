@@ -1,0 +1,20 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"FriendlyName": "Flight Vulkan Extensions",
+	"Description": "Registers VK_KHR_external_semaphore_fd for io_uring GPU sync integration",
+	"Category": "Flight",
+	"CreatedBy": "Kelly",
+	"EnabledByDefault": true,
+	"CanContainContent": false,
+	"IsBetaVersion": true,
+	"Modules": [
+		{
+			"Name": "FlightVulkanExtensions",
+			"Type": "Runtime",
+			"LoadingPhase": "PostConfigInit",
+			"PlatformAllowList": ["Linux"]
+		}
+	]
+}

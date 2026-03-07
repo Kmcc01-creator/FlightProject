@@ -47,17 +47,21 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Flight|Test")
 	bool TestExternalFenceSupport();
 
-	/** Test 3: Create and export a fence */
+	/** Test 3: Verify Vulkan external semaphore support */
+	UFUNCTION(BlueprintCallable, Category = "Flight|Test")
+	bool TestExportableSemaphoreSupport();
+
+	/** Test 4: Create and export a fence */
 	UFUNCTION(BlueprintCallable, Category = "Flight|Test")
 	bool TestFenceExport();
 
-	/** Test 4: Poll exported fence via io_uring */
+	/** Test 5: Poll exported fence via io_uring */
 	UFUNCTION(BlueprintCallable, Category = "Flight|Test")
 	bool TestFencePoll();
 
-	/** Test 5: Full compute shader lifecycle */
+	/** Test 6: GPU completion signal via io_uring (zero-syscall path) */
 	UFUNCTION(BlueprintCallable, Category = "Flight|Test")
-	bool TestComputeLifecycle();
+	bool TestGpuCompletionSignal();
 
 	/** Enable stress testing mode */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flight|Test")

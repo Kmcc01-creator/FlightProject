@@ -1,9 +1,9 @@
 // Copyright Kelly Rey Wilson. All Rights Reserved.
-// FlightProject - Experimental io_uring integration
+// FlightProject - Experimental io_uring integration (Executor Refactored)
 
 #include "IoUring/FlightIoUringTestComponent.h"
 #include "IoUring/FlightIoUringSubsystem.h"
-#include "IoUring/FlightIoRing.h"
+#include "Core/FlightAsyncExecutor.h"
 #include "Engine/World.h"
 
 #if PLATFORM_LINUX
@@ -14,6 +14,8 @@
 #endif
 
 DEFINE_LOG_CATEGORY_STATIC(LogFlightIoUringTest, Log, All);
+
+using namespace Flight::Async;
 
 UFlightIoUringTestComponent::UFlightIoUringTestComponent()
 {
@@ -89,19 +91,18 @@ void UFlightIoUringTestComponent::EndPlay(const EEndPlayReason::Type EndPlayReas
 
 void UFlightIoUringTestComponent::RunAllTests()
 {
-	UE_LOG(LogFlightIoUringTest, Log, TEXT("=== Running io_uring Tests ==="));
+	UE_LOG(LogFlightIoUringTest, Log, TEXT("=== Running Executor Tests ==="));
 
 	TestSubsystemAvailable();
-	TestNopOperation();
+	// TestNopOperation(); // NOP is backend-specific, use Read for generic check
 	TestEventfdPoll();
-	// TestFileReadWrite(); // More complex, enable when ready
+	TestFileReadWrite();
 }
 
 bool UFlightIoUringTestComponent::TestSubsystemAvailable()
 {
 	UE_LOG(LogFlightIoUringTest, Log, TEXT("Test: Subsystem Available"));
 
-#if PLATFORM_LINUX
 	UWorld* World = GetWorld();
 	if (!World)
 	{
@@ -118,80 +119,29 @@ bool UFlightIoUringTestComponent::TestSubsystemAvailable()
 		return false;
 	}
 
-	if (!Subsystem->IsAvailable())
+	if (!Subsystem->IsAvailable() || !Subsystem->GetExecutor())
 	{
-		UE_LOG(LogFlightIoUringTest, Error,
-			TEXT("  FAIL: Subsystem not available (error: %d)"),
-			Subsystem->GetLastError());
+		UE_LOG(LogFlightIoUringTest, Error, TEXT("  FAIL: Executor not available"));
 		++FailedTests;
 		return false;
 	}
 
-	UE_LOG(LogFlightIoUringTest, Log, TEXT("  PASS: Subsystem available"));
+	UE_LOG(LogFlightIoUringTest, Log, TEXT("  PASS: Subsystem available. Backend: %s"), 
+		Subsystem->GetExecutor()->GetBackendName());
 	++PassedTests;
 	return true;
-#else
-	return false;
-#endif
 }
 
 bool UFlightIoUringTestComponent::TestNopOperation()
 {
-	UE_LOG(LogFlightIoUringTest, Log, TEXT("Test: NOP Operation"));
-
-#if PLATFORM_LINUX
-	UFlightIoUringSubsystem* Subsystem = GetWorld()->GetSubsystem<UFlightIoUringSubsystem>();
-	if (!Subsystem || !Subsystem->IsAvailable())
-	{
-		UE_LOG(LogFlightIoUringTest, Error, TEXT("  SKIP: Subsystem not available"));
-		return false;
-	}
-
-	Flight::IoUring::FRing* Ring = Subsystem->GetMainRing();
-	if (!Ring)
-	{
-		UE_LOG(LogFlightIoUringTest, Error, TEXT("  FAIL: No main ring"));
-		++FailedTests;
-		return false;
-	}
-
-	// Submit NOP
-	Flight::IoUring::FSqe* Sqe = Ring->GetSqe();
-	if (!Sqe)
-	{
-		UE_LOG(LogFlightIoUringTest, Error, TEXT("  FAIL: Could not get SQE"));
-		++FailedTests;
-		return false;
-	}
-
-	Sqe->PrepNop(UserDataNop);
-
-	// Register callback
-	Subsystem->RegisterCallback(UserDataNop,
-		[this](int32 Result, uint32 Flags) { OnNopComplete(Result, Flags); });
-
-	++PendingTests;
-
-	int32 Submitted = Ring->Submit();
-	if (Submitted < 0)
-	{
-		UE_LOG(LogFlightIoUringTest, Error,
-			TEXT("  FAIL: Submit failed (error: %d)"), Ring->GetLastError());
-		++FailedTests;
-		--PendingTests;
-		return false;
-	}
-
-	UE_LOG(LogFlightIoUringTest, Log, TEXT("  Submitted NOP, waiting for completion..."));
+	// NOP was removed from generic interface as it's an implementation detail of io_uring.
+	// We'll use Read/Write for generic testing.
 	return true;
-#else
-	return false;
-#endif
 }
 
 bool UFlightIoUringTestComponent::TestEventfdPoll()
 {
-	UE_LOG(LogFlightIoUringTest, Log, TEXT("Test: Eventfd Poll"));
+	UE_LOG(LogFlightIoUringTest, Log, TEXT("Test: Eventfd Poll (EventWait)"));
 
 #if PLATFORM_LINUX
 	UFlightIoUringSubsystem* Subsystem = GetWorld()->GetSubsystem<UFlightIoUringSubsystem>();
@@ -200,6 +150,8 @@ bool UFlightIoUringTestComponent::TestEventfdPoll()
 		UE_LOG(LogFlightIoUringTest, Error, TEXT("  SKIP: Subsystem not available"));
 		return false;
 	}
+
+	IFlightAsyncExecutor* Executor = Subsystem->GetExecutor();
 
 	// Create eventfd for testing
 	EventFd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
@@ -211,18 +163,19 @@ bool UFlightIoUringTestComponent::TestEventfdPoll()
 		return false;
 	}
 
-	// Register poll callback
-	Subsystem->RegisterCallback(UserDataEventfd,
-		[this](int32 Result, uint32 Flags) { OnEventfdPollComplete(Result, Flags); });
-
 	++PendingTests;
 
-	// Submit poll
-	if (!Subsystem->SubmitPoll(EventFd, POLLIN, UserDataEventfd, false))
+	// Submit event wait
+	FAsyncHandle Handle = FAsyncHandle::FromLinuxFd(EventFd);
+	bool bSubmitted = Executor->SubmitEventWait(Handle, [this](const FAsyncResult& Result) {
+		OnEventfdPollComplete(Result.ErrorCode, Result.Flags);
+	});
+
+	if (!bSubmitted)
 	{
 		UE_LOG(LogFlightIoUringTest, Error,
-			TEXT("  FAIL: Could not submit poll (error: %d)"),
-			Subsystem->GetLastError());
+			TEXT("  FAIL: Could not submit event wait (error: %d)"),
+			Executor->GetLastError());
 		++FailedTests;
 		--PendingTests;
 		close(EventFd);
@@ -239,7 +192,7 @@ bool UFlightIoUringTestComponent::TestEventfdPoll()
 	}
 
 	UE_LOG(LogFlightIoUringTest, Log,
-		TEXT("  Submitted poll on eventfd %d, waiting for completion..."), EventFd);
+		TEXT("  Submitted wait on eventfd %d, waiting for completion..."), EventFd);
 	return true;
 #else
 	return false;
@@ -258,9 +211,11 @@ bool UFlightIoUringTestComponent::TestFileReadWrite()
 		return false;
 	}
 
+	IFlightAsyncExecutor* Executor = Subsystem->GetExecutor();
+
 	// Create temp file
 	FString TempPath = FPaths::CreateTempFilename(
-		*FPaths::ProjectIntermediateDir(), TEXT("iouring_test_"), TEXT(".tmp"));
+		*FPaths::ProjectIntermediateDir(), TEXT("async_test_"), TEXT(".tmp"));
 
 	TempFileFd = open(TCHAR_TO_UTF8(*TempPath),
 		O_RDWR | O_CREAT | O_TRUNC, 0644);
@@ -273,7 +228,7 @@ bool UFlightIoUringTestComponent::TestFileReadWrite()
 	}
 
 	// Write test data synchronously first
-	const char* TestData = "io_uring test data from FlightProject";
+	const char* TestData = "Async Executor Test Data";
 	ssize_t Written = write(TempFileFd, TestData, strlen(TestData));
 	if (Written != (ssize_t)strlen(TestData))
 	{
@@ -287,19 +242,20 @@ bool UFlightIoUringTestComponent::TestFileReadWrite()
 	// Prepare read buffer
 	ReadBuffer.SetNumZeroed(strlen(TestData) + 1);
 
-	// Register callback
-	Subsystem->RegisterCallback(UserDataFileRead,
-		[this](int32 Result, uint32 Flags) { OnFileReadComplete(Result, Flags); });
-
 	++PendingTests;
 
 	// Submit async read
-	if (!Subsystem->SubmitRead(TempFileFd, ReadBuffer.GetData(),
-		ReadBuffer.Num() - 1, 0, UserDataFileRead))
+	FAsyncHandle Handle = FAsyncHandle::FromLinuxFd(TempFileFd);
+	bool bSubmitted = Executor->SubmitRead(Handle, ReadBuffer.GetData(), ReadBuffer.Num() - 1, 0, 
+		[this](const FAsyncResult& Result) {
+			OnFileReadComplete(Result.ErrorCode, Result.Flags);
+		});
+
+	if (!bSubmitted)
 	{
 		UE_LOG(LogFlightIoUringTest, Error,
 			TEXT("  FAIL: Could not submit read (error: %d)"),
-			Subsystem->GetLastError());
+			Executor->GetLastError());
 		++FailedTests;
 		--PendingTests;
 		close(TempFileFd);
@@ -317,21 +273,17 @@ bool UFlightIoUringTestComponent::TestFileReadWrite()
 
 void UFlightIoUringTestComponent::OnNopComplete(int32 Result, uint32 Flags)
 {
-#if PLATFORM_LINUX
 	--PendingTests;
-
 	if (Result == 0)
 	{
-		UE_LOG(LogFlightIoUringTest, Log, TEXT("  NOP PASS: Completed successfully"));
+		UE_LOG(LogFlightIoUringTest, Log, TEXT("  NOP PASS"));
 		++PassedTests;
 	}
 	else
 	{
-		UE_LOG(LogFlightIoUringTest, Error,
-			TEXT("  NOP FAIL: Unexpected result %d"), Result);
+		UE_LOG(LogFlightIoUringTest, Error, TEXT("  NOP FAIL"));
 		++FailedTests;
 	}
-#endif
 }
 
 void UFlightIoUringTestComponent::OnEventfdPollComplete(int32 Result, uint32 Flags)
@@ -339,25 +291,20 @@ void UFlightIoUringTestComponent::OnEventfdPollComplete(int32 Result, uint32 Fla
 #if PLATFORM_LINUX
 	--PendingTests;
 
-	if (Result > 0)
+	if (Result >= 0)
 	{
 		// Read the eventfd value
 		uint64 Value = 0;
 		read(EventFd, &Value, sizeof(Value));
 
 		UE_LOG(LogFlightIoUringTest, Log,
-			TEXT("  Eventfd Poll PASS: Signaled with value %llu"), Value);
+			TEXT("  Eventfd PASS: Signaled with value %llu"), Value);
 		++PassedTests;
-	}
-	else if (Result == 0)
-	{
-		UE_LOG(LogFlightIoUringTest, Warning,
-			TEXT("  Eventfd Poll: No events (timeout?)"));
 	}
 	else
 	{
 		UE_LOG(LogFlightIoUringTest, Error,
-			TEXT("  Eventfd Poll FAIL: Error %d"), -Result);
+			TEXT("  Eventfd FAIL: Error %d"), -Result);
 		++FailedTests;
 	}
 
@@ -381,11 +328,6 @@ void UFlightIoUringTestComponent::OnFileReadComplete(int32 Result, uint32 Flags)
 		UE_LOG(LogFlightIoUringTest, Log,
 			TEXT("  File Read PASS: Read %d bytes: '%s'"), Result, *ReadData);
 		++PassedTests;
-	}
-	else if (Result == 0)
-	{
-		UE_LOG(LogFlightIoUringTest, Warning,
-			TEXT("  File Read: EOF (0 bytes)"));
 	}
 	else
 	{

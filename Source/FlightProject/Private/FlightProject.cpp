@@ -5,6 +5,10 @@
 #include "HAL/FileManager.h"
 #include "ShaderCore.h"
 
+#if WITH_EDITOR
+#include "UI/FlightLogTab.h"
+#endif
+
 DEFINE_LOG_CATEGORY(LogFlightProject);
 IMPLEMENT_PRIMARY_GAME_MODULE(FFlightProjectModule, FlightProject, "FlightProject");
 
@@ -17,20 +21,31 @@ void FFlightProjectModule::StartupModule()
     const FString ShaderDirectory = FPaths::Combine(FPaths::ProjectDir(), TEXT("Shaders"));
     if (IFileManager::Get().DirectoryExists(*ShaderDirectory))
     {
-        AddShaderSourceDirectoryMapping(TEXT("/FlightProject"), ShaderDirectory);
-        UE_LOG(LogFlightProject, Log, TEXT("Registered shader directory: /FlightProject -> %s"), *ShaderDirectory);
+        const FString VirtualPath = TEXT("/FlightProject");
+        if (!AllShaderSourceDirectoryMappings().Contains(VirtualPath))
+        {
+            AddShaderSourceDirectoryMapping(VirtualPath, ShaderDirectory);
+            UE_LOG(LogFlightProject, Log, TEXT("Registered shader directory: %s -> %s"), *VirtualPath, *ShaderDirectory);
+        }
     }
     else
     {
         UE_LOG(LogFlightProject, Warning,
             TEXT("Shader directory not found at %s - custom shaders unavailable"), *ShaderDirectory);
     }
+
+#if WITH_EDITOR
+    // Register Flight Log Viewer tab
+    Flight::Log::RegisterLogViewerTab();
+#endif
 }
 
 void FFlightProjectModule::ShutdownModule()
 {
-    // Shader compiler shutdown moved to module shutdown
-    // FShaderCompilingManager::Get().OnShaderCompilerShutdown();
+#if WITH_EDITOR
+    // Unregister Flight Log Viewer tab
+    Flight::Log::UnregisterLogViewerTab();
+#endif
 
     UE_LOG(LogFlightProject, Log, TEXT("FlightProject module shut down"));
 }

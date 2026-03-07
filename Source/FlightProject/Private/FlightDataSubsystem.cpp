@@ -5,6 +5,8 @@
 
 #include "Engine/DataTable.h"
 
+using namespace Flight::Functional;
+
 void UFlightDataSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
     Super::Initialize(Collection);
@@ -33,6 +35,41 @@ void UFlightDataSubsystem::Initialize(FSubsystemCollectionBase& Collection)
         bLightingLoaded, bAutopilotLoaded, bSpatialLayoutLoaded, SpatialLayoutRows.Num(), bProceduralAnchorsLoaded);
 }
 
+// Helper: Load a single-row config from a DataTable using TResult
+template<typename TRow>
+static TResult<TRow, FString> LoadConfigRow(
+    const TSoftObjectPtr<UDataTable>& TableRef,
+    FName RowName,
+    const TCHAR* TableName,
+    const TCHAR* Context)
+{
+    // Chain: Settings -> Table -> RowName -> Row
+    return TResult<UDataTable*, FString>::Ok(TableRef.LoadSynchronous())
+        .AndThen([TableName](UDataTable* Table) -> TResult<UDataTable*, FString>
+        {
+            if (!Table)
+            {
+                return Err<UDataTable*>(FString::Printf(TEXT("%s not set in project settings"), TableName));
+            }
+            return Ok(Table);
+        })
+        .AndThen([RowName, TableName, Context](UDataTable* Table) -> TResult<TRow, FString>
+        {
+            if (RowName.IsNone())
+            {
+                return Err<TRow>(FString::Printf(TEXT("%s row name not specified"), TableName));
+            }
+
+            const TRow* Row = Table->FindRow<TRow>(RowName, Context);
+            if (!Row)
+            {
+                return Err<TRow>(FString::Printf(TEXT("Row '%s' not found in %s"), *RowName.ToString(), TableName));
+            }
+
+            return Ok(*Row);
+        });
+}
+
 bool UFlightDataSubsystem::LoadLightingConfig()
 {
     const UFlightProjectDeveloperSettings* Settings = GetDefault<UFlightProjectDeveloperSettings>();
@@ -41,29 +78,22 @@ bool UFlightDataSubsystem::LoadLightingConfig()
         return false;
     }
 
-    UDataTable* Table = Settings->LightingConfigTable.LoadSynchronous();
-    if (!Table)
-    {
-        UE_LOG(LogFlightProject, Warning, TEXT("FlightDataSubsystem: LightingConfigTable not set in project settings."));
-        return false;
-    }
-
-    const FName RowName = Settings->LightingConfigRow;
-    if (RowName.IsNone())
-    {
-        UE_LOG(LogFlightProject, Warning, TEXT("FlightDataSubsystem: LightingConfigRow not specified."));
-        return false;
-    }
-
-    const FFlightLightingConfigRow* Row = Table->FindRow<FFlightLightingConfigRow>(RowName, TEXT("LoadLightingConfig"));
-    if (!Row)
-    {
-        UE_LOG(LogFlightProject, Error, TEXT("FlightDataSubsystem: Row '%s' not found in LightingConfigTable."), *RowName.ToString());
-        return false;
-    }
-
-    LightingConfig = *Row;
-    return true;
+    return LoadConfigRow<FFlightLightingConfigRow>(
+        Settings->LightingConfigTable,
+        Settings->LightingConfigRow,
+        TEXT("LightingConfigTable"),
+        TEXT("LoadLightingConfig"))
+    .Match(
+        [this](FFlightLightingConfigRow Row)
+        {
+            LightingConfig = MoveTemp(Row);
+            return true;
+        },
+        [](const FString& Error)
+        {
+            UE_LOG(LogFlightProject, Warning, TEXT("FlightDataSubsystem: %s"), *Error);
+            return false;
+        });
 }
 
 bool UFlightDataSubsystem::LoadAutopilotConfig()
@@ -74,29 +104,66 @@ bool UFlightDataSubsystem::LoadAutopilotConfig()
         return false;
     }
 
-    UDataTable* Table = Settings->AutopilotConfigTable.LoadSynchronous();
+    return LoadConfigRow<FFlightAutopilotConfigRow>(
+        Settings->AutopilotConfigTable,
+        Settings->AutopilotConfigRow,
+        TEXT("AutopilotConfigTable"),
+        TEXT("LoadAutopilotConfig"))
+    .Match(
+        [this](FFlightAutopilotConfigRow Row)
+        {
+            AutopilotConfig = MoveTemp(Row);
+            return true;
+        },
+        [](const FString& Error)
+        {
+            UE_LOG(LogFlightProject, Warning, TEXT("FlightDataSubsystem: %s"), *Error);
+            return false;
+        });
+}
+
+// Helper: Load multi-row table with filtering
+template<typename TRow>
+static TResult<TArray<TRow>, FString> LoadTableRows(
+    const TSoftObjectPtr<UDataTable>& TableRef,
+    const TCHAR* TableName,
+    TFunction<bool(const TRow&)> RowFilter,
+    TFunction<void(TRow&, FName)> OnRow)
+{
+    UDataTable* Table = TableRef.LoadSynchronous();
     if (!Table)
     {
-        UE_LOG(LogFlightProject, Warning, TEXT("FlightDataSubsystem: AutopilotConfigTable not set in project settings."));
-        return false;
+        return Err<TArray<TRow>>(FString::Printf(TEXT("%s not set in project settings"), TableName));
     }
 
-    const FName RowName = Settings->AutopilotConfigRow;
-    if (RowName.IsNone())
+    TArray<TRow> Result;
+    for (const auto& Pair : Table->GetRowMap())
     {
-        UE_LOG(LogFlightProject, Warning, TEXT("FlightDataSubsystem: AutopilotConfigRow not specified."));
-        return false;
+        const TRow* Row = reinterpret_cast<const TRow*>(Pair.Value);
+        if (!Row)
+        {
+            continue;
+        }
+
+        if (RowFilter && !RowFilter(*Row))
+        {
+            continue;
+        }
+
+        TRow RowCopy = *Row;
+        if (OnRow)
+        {
+            OnRow(RowCopy, Pair.Key);
+        }
+        Result.Add(MoveTemp(RowCopy));
     }
 
-    const FFlightAutopilotConfigRow* Row = Table->FindRow<FFlightAutopilotConfigRow>(RowName, TEXT("LoadAutopilotConfig"));
-    if (!Row)
+    if (Result.Num() == 0)
     {
-        UE_LOG(LogFlightProject, Error, TEXT("FlightDataSubsystem: Row '%s' not found in AutopilotConfigTable."), *RowName.ToString());
-        return false;
+        return Err<TArray<TRow>>(FString::Printf(TEXT("No rows matched filter in %s"), TableName));
     }
 
-    AutopilotConfig = *Row;
-    return true;
+    return Ok(MoveTemp(Result));
 }
 
 bool UFlightDataSubsystem::LoadSpatialLayout()
@@ -109,50 +176,45 @@ bool UFlightDataSubsystem::LoadSpatialLayout()
         return false;
     }
 
-    UDataTable* Table = Settings->SpatialLayoutTable.LoadSynchronous();
-    if (!Table)
-    {
-        UE_LOG(LogFlightProject, Warning, TEXT("FlightDataSubsystem: SpatialLayoutTable not set in project settings."));
-        return false;
-    }
-
     const FName ActiveScenario = Settings->SpatialLayoutScenario;
 
-    for (const auto& Pair : Table->GetRowMap())
-    {
-        const FFlightSpatialLayoutRow* Row = reinterpret_cast<const FFlightSpatialLayoutRow*>(Pair.Value);
-        if (!Row)
+    return LoadTableRows<FFlightSpatialLayoutRow>(
+        Settings->SpatialLayoutTable,
+        TEXT("SpatialLayoutTable"),
+        // Filter: match scenario (or all if no scenario specified)
+        [ActiveScenario](const FFlightSpatialLayoutRow& Row)
         {
-            continue;
-        }
-
-        // Filter by scenario if specified
-        if (!ActiveScenario.IsNone() && Row->Scenario != ActiveScenario)
+            return ActiveScenario.IsNone() || Row.Scenario == ActiveScenario;
+        },
+        // OnRow: capture the row name
+        [](FFlightSpatialLayoutRow& Row, FName RowName)
         {
-            continue;
-        }
-
-        FFlightSpatialLayoutRow RowCopy = *Row;
-        RowCopy.RowName = Pair.Key;
-        SpatialLayoutRows.Add(MoveTemp(RowCopy));
-    }
-
-    if (SpatialLayoutRows.Num() == 0)
+            Row.RowName = RowName;
+        })
+    .Map([](TArray<FFlightSpatialLayoutRow> Rows)
     {
-        if (!ActiveScenario.IsNone())
+        // Sort by row name for deterministic ordering
+        Rows.Sort([](const FFlightSpatialLayoutRow& A, const FFlightSpatialLayoutRow& B)
         {
-            UE_LOG(LogFlightProject, Warning, TEXT("FlightDataSubsystem: No spatial layout rows matched scenario '%s'."), *ActiveScenario.ToString());
-        }
-        return false;
-    }
-
-    // Sort by row name for deterministic ordering
-    SpatialLayoutRows.Sort([](const FFlightSpatialLayoutRow& A, const FFlightSpatialLayoutRow& B)
-    {
-        return A.RowName.LexicalLess(B.RowName);
-    });
-
-    return true;
+            return A.RowName.LexicalLess(B.RowName);
+        });
+        return Rows;
+    })
+    .Match(
+        [this](TArray<FFlightSpatialLayoutRow> Rows)
+        {
+            SpatialLayoutRows = MoveTemp(Rows);
+            return true;
+        },
+        [Settings](const FString& Error)
+        {
+            if (!Settings->SpatialLayoutScenario.IsNone())
+            {
+                UE_LOG(LogFlightProject, Warning, TEXT("FlightDataSubsystem: %s for scenario '%s'"),
+                    *Error, *Settings->SpatialLayoutScenario.ToString());
+            }
+            return false;
+        });
 }
 
 bool UFlightDataSubsystem::LoadProceduralAnchors()
@@ -165,31 +227,39 @@ bool UFlightDataSubsystem::LoadProceduralAnchors()
         return false;
     }
 
-    UDataTable* Table = Settings->ProceduralAnchorTable.LoadSynchronous();
-    if (!Table)
-    {
-        // Procedural anchors are optional
-        return false;
-    }
-
-    for (const auto& Pair : Table->GetRowMap())
-    {
-        const FFlightProceduralAnchorRow* Row = reinterpret_cast<const FFlightProceduralAnchorRow*>(Pair.Value);
-        if (!Row)
+    // Load all rows, then group by AnchorId
+    return LoadTableRows<FFlightProceduralAnchorRow>(
+        Settings->ProceduralAnchorTable,
+        TEXT("ProceduralAnchorTable"),
+        nullptr,  // No filter - load all
+        [](FFlightProceduralAnchorRow& Row, FName RowName)
         {
-            continue;
-        }
-
-        FFlightProceduralAnchorRow RowCopy = *Row;
-        if (RowCopy.AnchorId.IsNone())
+            if (Row.AnchorId.IsNone())
+            {
+                Row.AnchorId = RowName;
+            }
+        })
+    .Map([](TArray<FFlightProceduralAnchorRow> Rows)
+    {
+        // Group by AnchorId
+        TMap<FName, TArray<FFlightProceduralAnchorRow>> Grouped;
+        for (FFlightProceduralAnchorRow& Row : Rows)
         {
-            RowCopy.AnchorId = Pair.Key;
+            Grouped.FindOrAdd(Row.AnchorId).Add(MoveTemp(Row));
         }
-
-        ProceduralAnchors.FindOrAdd(RowCopy.AnchorId).Add(MoveTemp(RowCopy));
-    }
-
-    return ProceduralAnchors.Num() > 0;
+        return Grouped;
+    })
+    .Match(
+        [this](TMap<FName, TArray<FFlightProceduralAnchorRow>> Grouped)
+        {
+            ProceduralAnchors = MoveTemp(Grouped);
+            return true;
+        },
+        [](const FString&)
+        {
+            // Procedural anchors are optional - silently return false
+            return false;
+        });
 }
 
 const FFlightProceduralAnchorRow* UFlightDataSubsystem::FindProceduralAnchorConfig(FName AnchorId, EFlightProceduralAnchorType AnchorType) const

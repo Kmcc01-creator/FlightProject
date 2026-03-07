@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "FlightDataTypes.h"
+#include "Core/FlightFunctional.h"
 #include "FlightDataSubsystem.generated.h"
 
 /**

@@ -1,0 +1,162 @@
+// Copyright Kelly Rey Wilson. All Rights Reserved.
+// FlightProject - GPU horizon scan for swarm perception
+//
+// Performs radial raycasts from entity positions to detect obstacles.
+// Results are written to a structured buffer for async readback.
+
+#include "/Engine/Private/Common.ush"
+
+// Input: Entity positions to scan from
+StructuredBuffer<float4> EntityPositions;  // xyz = position, w = scan radius
+
+// Input: Obstacle AABBs for intersection testing
+StructuredBuffer<float4> ObstacleMinBounds;
+StructuredBuffer<float4> ObstacleMaxBounds;
+
+// Output: Per-entity scan results
+// Each entity gets NUM_RAYS results packed into uint4s
+RWStructuredBuffer<uint4> ScanResults;
+
+// Parameters
+uint NumEntities;
+uint NumObstacles;
+uint NumRaysPerEntity;    // Must be multiple of 4 for packing
+
+// Constants
+#define NUM_RAYS_PER_THREAD 8
+#define MAX_SCAN_DISTANCE 10000.0f
+
+// Ray-AABB intersection test
+// Returns distance to hit, or MAX_SCAN_DISTANCE if no hit
+float RayAABBIntersect(float3 RayOrigin, float3 RayDir, float3 BoxMin, float3 BoxMax)
+{
+    float3 InvDir = 1.0f / RayDir;
+
+    float3 T1 = (BoxMin - RayOrigin) * InvDir;
+    float3 T2 = (BoxMax - RayOrigin) * InvDir;
+
+    float3 TMin = min(T1, T2);
+    float3 TMax = max(T1, T2);
+
+    float TEnter = max(max(TMin.x, TMin.y), TMin.z);
+    float TExit = min(min(TMax.x, TMax.y), TMax.z);
+
+    if (TEnter > TExit || TExit < 0.0f)
+    {
+        return MAX_SCAN_DISTANCE;
+    }
+
+    return max(TEnter, 0.0f);
+}
+
+// Generate ray direction for a given ray index (radial pattern)
+float3 GetRayDirection(uint RayIndex, uint TotalRays)
+{
+    // Fibonacci sphere distribution for uniform coverage
+    float Phi = acos(1.0f - 2.0f * (float(RayIndex) + 0.5f) / float(TotalRays));
+    float Theta = 3.14159265f * (1.0f + sqrt(5.0f)) * float(RayIndex);
+
+    float SinPhi = sin(Phi);
+    return float3(
+        SinPhi * cos(Theta),
+        SinPhi * sin(Theta),
+        cos(Phi)
+    );
+}
+
+[numthreads(64, 1, 1)]
+void HorizonScanMain(
+    uint3 GroupId : SV_GroupID,
+    uint3 GroupThreadId : SV_GroupThreadID,
+    uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    uint EntityIndex = DispatchThreadId.x;
+
+    if (EntityIndex >= NumEntities)
+    {
+        return;
+    }
+
+    float4 EntityData = EntityPositions[EntityIndex];
+    float3 Position = EntityData.xyz;
+    float ScanRadius = EntityData.w;
+
+    // Each entity scans NumRaysPerEntity directions
+    // Results packed as quantized distances into uint4s
+    uint ResultBaseIndex = EntityIndex * (NumRaysPerEntity / 4);
+
+    for (uint RayBlock = 0; RayBlock < NumRaysPerEntity; RayBlock += 4)
+    {
+        uint4 PackedDistances = uint4(0, 0, 0, 0);
+
+        for (uint i = 0; i < 4; ++i)
+        {
+            uint RayIndex = RayBlock + i;
+            float3 RayDir = GetRayDirection(RayIndex, NumRaysPerEntity);
+
+            float ClosestHit = min(ScanRadius, MAX_SCAN_DISTANCE);
+
+            // Test against all obstacles
+            for (uint ObsIdx = 0; ObsIdx < NumObstacles; ++ObsIdx)
+            {
+                float3 BoxMin = ObstacleMinBounds[ObsIdx].xyz;
+                float3 BoxMax = ObstacleMaxBounds[ObsIdx].xyz;
+
+                float HitDist = RayAABBIntersect(Position, RayDir, BoxMin, BoxMax);
+                ClosestHit = min(ClosestHit, HitDist);
+            }
+
+            // Quantize distance to 16 bits (0-65535 maps to 0-ScanRadius)
+            uint Quantized = uint(saturate(ClosestHit / ScanRadius) * 65535.0f);
+
+            // Pack into uint4 (4 x 16-bit values per uint4)
+            if (i < 2)
+            {
+                PackedDistances.x |= (Quantized << (i * 16));
+            }
+            else
+            {
+                PackedDistances.y |= (Quantized << ((i - 2) * 16));
+            }
+        }
+
+        ScanResults[ResultBaseIndex + RayBlock / 4] = PackedDistances;
+    }
+}
+
+// Simpler version: just count obstacles within radius (for testing)
+RWStructuredBuffer<uint> ObstacleCountResults;
+
+[numthreads(64, 1, 1)]
+void ObstacleCountMain(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    uint EntityIndex = DispatchThreadId.x;
+
+    if (EntityIndex >= NumEntities)
+    {
+        return;
+    }
+
+    float3 Position = EntityPositions[EntityIndex].xyz;
+    float ScanRadius = EntityPositions[EntityIndex].w;
+    float ScanRadiusSq = ScanRadius * ScanRadius;
+
+    uint Count = 0;
+
+    for (uint ObsIdx = 0; ObsIdx < NumObstacles; ++ObsIdx)
+    {
+        float3 BoxMin = ObstacleMinBounds[ObsIdx].xyz;
+        float3 BoxMax = ObstacleMaxBounds[ObsIdx].xyz;
+        float3 BoxCenter = (BoxMin + BoxMax) * 0.5f;
+
+        float3 Delta = Position - BoxCenter;
+        float DistSq = dot(Delta, Delta);
+
+        if (DistSq < ScanRadiusSq)
+        {
+            ++Count;
+        }
+    }
+
+    ObstacleCountResults[EntityIndex] = Count;
+}
