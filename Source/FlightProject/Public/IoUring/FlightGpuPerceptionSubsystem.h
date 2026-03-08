@@ -149,6 +149,7 @@ private:
 	UFlightGpuIoUringBridge* GpuBridge = nullptr;
 
 	void DispatchOnRenderThread(TSharedPtr<FPendingPerceptionRequest> Request);
+	void CompletePendingRequestWithFailure(int64 RequestId, const TCHAR* Reason);
 
 public:
 	/** Internal use only: Handles completion with buffer data */

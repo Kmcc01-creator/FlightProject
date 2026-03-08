@@ -115,9 +115,15 @@ public:
 		{
 			if (auto* Bridge = World->GetSubsystem<UFlightGpuIoUringBridge>())
 			{
-				Bridge->SignalGpuCompletion(TrackingId, [Status]() {
-					*Status = true;
-				});
+				const bool bSubmitted = Bridge->SignalGpuCompletion(
+					TrackingId,
+					[Status]() { *Status = true; },
+					[Status]() { *Status = false; });
+
+				if (!bSubmitted)
+				{
+					*Status = false;
+				}
 			}
 		}
 
@@ -198,6 +204,16 @@ void UFlightIoUringSubsystem::Deinitialize()
 {
 	Executor.Reset();
 	Super::Deinitialize();
+}
+
+void UFlightIoUringSubsystem::Tick(float DeltaTime)
+{
+	ProcessCompletions();
+}
+
+TStatId UFlightIoUringSubsystem::GetStatId() const
+{
+	RETURN_QUICK_DECLARE_CYCLE_STAT(UFlightIoUringSubsystem, STATGROUP_Tickables);
 }
 
 bool UFlightIoUringSubsystem::IsAvailable() const

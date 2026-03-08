@@ -1,0 +1,108 @@
+// Copyright Kelly Rey Wilson. All Rights Reserved.
+// FlightLightLattice - SCSL Light Propagation System
+
+#include "/Engine/Private/Common.ush"
+
+// --- Injection Pass ---
+StructuredBuffer<float4> DroidStates;
+RWTexture3D<uint> OutLatticeRArray;
+RWTexture3D<uint> OutLatticeGArray;
+RWTexture3D<uint> OutLatticeBArray;
+
+float3 GridCenter;
+float GridExtent;
+uint GridResolution;
+uint NumEntities;
+
+static const float FixedPointScale = 1000.0f;
+
+[numthreads(64, 1, 1)]
+void LightInjectionMain(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    uint EntityIndex = DispatchThreadId.x;
+    if (EntityIndex >= NumEntities) return;
+
+    // Load State
+    uint StateIndex = EntityIndex * 2;
+    float4 PosShield = DroidStates[StateIndex];
+    float4 VelStatus = DroidStates[StateIndex + 1];
+
+    float3 WorldPos = PosShield.xyz;
+    float Shield = PosShield.w;
+    uint Status = asuint(VelStatus.w);
+
+    // Calculate Voxel Coord
+    float3 RelativePos = (WorldPos - GridCenter) / GridExtent + 0.5f;
+    if (any(RelativePos < 0.0f) || any(RelativePos > 1.0f)) return;
+
+    uint3 VoxelCoord = (uint3)(RelativePos * (float)GridResolution);
+    if (any(VoxelCoord >= GridResolution)) return;
+
+    // Emissive logic
+    float3 BaseColor = float3(0.1f, 0.5f, 1.0f);
+    if ((Status & 1) != 0) BaseColor = float3(0.0f, 1.0f, 0.0f);
+    else if (Shield < 0.2f) BaseColor = float3(1.0f, 0.2f, 0.0f);
+
+    float Intensity = 10.0f;
+    uint3 FixedColor = (uint3)(BaseColor * Intensity * FixedPointScale);
+
+    // Atomic Inject
+    InterlockedAdd(OutLatticeRArray[VoxelCoord], FixedColor.r);
+    InterlockedAdd(OutLatticeGArray[VoxelCoord], FixedColor.g);
+    InterlockedAdd(OutLatticeBArray[VoxelCoord], FixedColor.b);
+}
+
+// --- Convert Pass ---
+Texture3D<uint> InLatticeRArray;
+Texture3D<uint> InLatticeGArray;
+Texture3D<uint> InLatticeBArray;
+Texture3D<float4> PrevLatticeArray;
+RWTexture3D<float4> OutLatticeArray;
+uint bUsePrevLattice;
+
+[numthreads(4, 4, 4)]
+void LatticeConvertMain(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    if (any(DispatchThreadId >= GridResolution)) return;
+    
+    int4 Coord = int4(DispatchThreadId, 0);
+
+    uint R = InLatticeRArray.Load(Coord);
+    uint G = InLatticeGArray.Load(Coord);
+    uint B = InLatticeBArray.Load(Coord);
+
+    float3 Color = float3(R, G, B) / FixedPointScale;
+    float4 Prev = (bUsePrevLattice != 0) ? PrevLatticeArray.Load(Coord) : float4(0, 0, 0, 0);
+    OutLatticeArray[DispatchThreadId] = Prev + float4(Color, 1.0f);
+}
+
+// --- Propagation Pass ---
+Texture3D<float4> ReadLatticeArray;
+RWTexture3D<float4> WriteLatticeArray;
+float DecayRate;
+float PropagationStrength;
+
+[numthreads(4, 4, 4)]
+void LightPropagationMain(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    if (any(DispatchThreadId >= GridResolution)) return;
+
+    int4 Coord = int4(DispatchThreadId, 0);
+
+    float4 Center = ReadLatticeArray.Load(Coord);
+    
+    // 6-tap diffusion (cross)
+    float4 Neighbors = float4(0,0,0,0);
+    Neighbors += ReadLatticeArray.Load(Coord + int4(1, 0, 0, 0));
+    Neighbors += ReadLatticeArray.Load(Coord - int4(1, 0, 0, 0));
+    Neighbors += ReadLatticeArray.Load(Coord + int4(0, 1, 0, 0));
+    Neighbors += ReadLatticeArray.Load(Coord - int4(0, 1, 0, 0));
+    Neighbors += ReadLatticeArray.Load(Coord + int4(0, 0, 1, 0));
+    Neighbors += ReadLatticeArray.Load(Coord - int4(0, 0, 1, 0));
+
+    float4 Average = Neighbors / 6.0f;
+    
+    float4 Propagated = lerp(Center, Average, PropagationStrength) * DecayRate;
+
+    WriteLatticeArray[DispatchThreadId] = Propagated;
+}

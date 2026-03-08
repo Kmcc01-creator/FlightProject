@@ -47,6 +47,62 @@ bool FReactiveCoreTest::RunTest(const FString& Parameters)
 }
 
 /**
+ * Test: Lambda subscription ownership and cleanup
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FReactiveSubscriptionLifecycleTest, "FlightProject.Reactive.Core.SubscriptionLifecycle", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
+
+bool FReactiveSubscriptionLifecycleTest::RunTest(const FString& Parameters)
+{
+	TReactiveValue<int32> Value(0);
+
+	TSharedPtr<int32> Sentinel = MakeShared<int32>(42);
+	TWeakPtr<int32> WeakSentinel = Sentinel;
+
+	const auto Id = Value.SubscribeLambda([Sentinel](const int32&, const int32&) {});
+	Sentinel.Reset();
+
+	TestTrue("Captured object should stay alive while subscription exists", WeakSentinel.IsValid());
+
+	Value.Unsubscribe(Id);
+	TestFalse("Captured object should be released after unsubscribe", WeakSentinel.IsValid());
+
+	TSharedPtr<int32> Sentinel2 = MakeShared<int32>(77);
+	TWeakPtr<int32> WeakSentinel2 = Sentinel2;
+	Value.SubscribeLambda([Sentinel2](const int32&, const int32&) {});
+	Sentinel2.Reset();
+
+	TestTrue("Second captured object should stay alive while subscribed", WeakSentinel2.IsValid());
+	Value.UnsubscribeAll();
+	TestFalse("Second captured object should be released after unsubscribe all", WeakSentinel2.IsValid());
+
+	return true;
+}
+
+/**
+ * Test: Effect teardown removes dependency subscriptions
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FReactiveEffectTeardownTest, "FlightProject.Reactive.Core.EffectTeardown", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
+
+bool FReactiveEffectTeardownTest::RunTest(const FString& Parameters)
+{
+	TReactiveValue<int32> Dependency(0);
+	int32 EffectRunCount = 0;
+
+	{
+		TEffect<int32> Effect([&]() { ++EffectRunCount; }, Dependency);
+		TestEqual("Effect should run immediately on construction", EffectRunCount, 1);
+
+		Dependency = 1;
+		TestEqual("Effect should run while alive when dependency changes", EffectRunCount, 2);
+	}
+
+	Dependency = 2;
+	TestEqual("Effect should not run after destruction", EffectRunCount, 2);
+
+	return true;
+}
+
+/**
  * Test: Slate Integration and Cleanup
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FReactiveSlateTest, "FlightProject.Reactive.UI.SlateBindings", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)

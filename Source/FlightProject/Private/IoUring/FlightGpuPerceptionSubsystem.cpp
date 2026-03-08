@@ -87,6 +87,36 @@ float UFlightGpuPerceptionSubsystem::GetAverageGpuTimeMs() const
 	return static_cast<float>(TotalGpuTimeMs / TotalRequestsCompleted);
 }
 
+void UFlightGpuPerceptionSubsystem::CompletePendingRequestWithFailure(int64 RequestId, const TCHAR* Reason)
+{
+	TSharedPtr<FPendingPerceptionRequest> Pending;
+	{
+		FScopeLock Lock(&PendingRequestsMutex);
+		PendingRequests.RemoveAndCopyValue(RequestId, Pending);
+	}
+
+	if (!Pending.IsValid())
+	{
+		return;
+	}
+
+	FFlightPerceptionResult FailedResult;
+	FailedResult.RequestId = RequestId;
+	FailedResult.bSuccess = false;
+	FailedResult.GpuTimeMs = static_cast<float>((FPlatformTime::Seconds() - Pending->Request.SubmitTime) * 1000.0);
+
+	TotalRequestsCompleted++;
+	UE_LOG(LogFlightPerception, Warning,
+		TEXT("GPU perception request %lld failed: %s"),
+		RequestId,
+		Reason ? Reason : TEXT("unknown"));
+
+	if (Pending->Callback)
+	{
+		Pending->Callback(FailedResult);
+	}
+}
+
 int64 UFlightGpuPerceptionSubsystem::SubmitPerceptionRequest(
 	const FFlightPerceptionRequest& Request,
 	TFunction<void(const FFlightPerceptionResult&)> Callback)
@@ -183,17 +213,33 @@ void UFlightGpuPerceptionSubsystem::DispatchOnRenderThread(TSharedPtr<FPendingPe
 				{
 					if (UFlightGpuPerceptionSubsystem* Self = WeakThis.Get())
 					{
-						if (Self->GpuBridge && Self->GpuBridge->IsAvailable())
+						if (!Self->GpuBridge || !Self->GpuBridge->IsAvailable())
 						{
-							Self->GpuBridge->SignalGpuCompletion(RequestId,
-								[WeakThis, RequestId, SubmitTime, Capture]()
+							Self->CompletePendingRequestWithFailure(RequestId, TEXT("GPU bridge unavailable"));
+							return;
+						}
+
+						const bool bSubmitted = Self->GpuBridge->SignalGpuCompletion(
+							RequestId,
+							[WeakThis, RequestId, SubmitTime, Capture]()
+							{
+								if (UFlightGpuPerceptionSubsystem* SubSelf = WeakThis.Get())
 								{
-									if (UFlightGpuPerceptionSubsystem* SubSelf = WeakThis.Get())
-									{
-										SubSelf->OnGpuWorkCompleteEx(RequestId, SubmitTime, 
-											Capture->PooledOutput, Capture->PooledForce, Capture->PooledTime);
-									}
-								});
+									SubSelf->OnGpuWorkCompleteEx(RequestId, SubmitTime,
+										Capture->PooledOutput, Capture->PooledForce, Capture->PooledTime);
+								}
+							},
+							[WeakThis, RequestId]()
+							{
+								if (UFlightGpuPerceptionSubsystem* SubSelf = WeakThis.Get())
+								{
+									SubSelf->CompletePendingRequestWithFailure(RequestId, TEXT("GPU completion signal setup failed"));
+								}
+							});
+
+						if (!bSubmitted)
+						{
+							Self->CompletePendingRequestWithFailure(RequestId, TEXT("GPU completion signal rejected"));
 						}
 					}
 				});
@@ -225,7 +271,7 @@ void UFlightGpuPerceptionSubsystem::OnGpuWorkCompleteEx(
 		{
 			FFlightPerceptionResult Result;
 			Result.RequestId = RequestId;
-			Result.bSuccess = true;
+			Result.bSuccess = PooledOutput.IsValid();
 			Result.GpuTimeMs = (float)((FPlatformTime::Seconds() - SubmitTime) * 1000.0);
 
 			// Buffer Readback (Render Thread safe)
@@ -235,6 +281,11 @@ void UFlightGpuPerceptionSubsystem::OnGpuWorkCompleteEx(
 				void* Data = GDynamicRHI->RHILockBuffer(RHICmdList, PooledOutput->GetRHI(), 0, NumEntities * sizeof(uint32), RLM_ReadOnly);
 				FMemory::Memcpy(Result.ObstacleCounts.GetData(), Data, NumEntities * sizeof(uint32));
 				GDynamicRHI->RHIUnlockBuffer(RHICmdList, PooledOutput->GetRHI());
+			}
+			else
+			{
+				UE_LOG(LogFlightPerception, Warning,
+					TEXT("Perception readback missing obstacle output buffer for request %lld"), RequestId);
 			}
 
 			if (PooledForce.IsValid())

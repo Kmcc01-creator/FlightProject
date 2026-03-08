@@ -1,0 +1,29 @@
+// NPR Stylization Sample: Field-Driven Toon Shading
+// This script demonstrates the use of field gradients and LERP-based NPR.
+
+// 1. Calculate the geometric "normal" from the Structure SDF
+float3 Normal = @position | sample_sdf() | gradient();
+
+// 2. Get the dominant light direction from the Radiance Lattice
+float3 LightDir = normalize(sample_lattice(@position) + 0.001);
+
+// 3. Calculate alignment potential (N dot L)
+float alignment = dot(Normal, LightDir);
+
+// 4. Create a hard toon shadow step using smoothstep
+float shadow_mask = alignment | smoothstep(0.4, 0.45);
+
+// 5. Stylized Depth: Use cloud density to simplify background entities
+float cloud_density = sample_cloud(@position);
+float atmosphere_mask = cloud_density | smoothstep(0.1, 0.8);
+
+// 6. Dynamic Shield: Pulse based on light intensity and phase
+float intensity = length(sample_lattice(@position));
+@shield = (intensity * 2.0) | clamp(0.2, 1.0);
+
+// 7. Velocity Alignment: Drones bank toward the flow gradient
+float3 flow = sample_cloud(@position) | gradient();
+@velocity += flow * 10.0 * DeltaTime;
+
+// Result: The final render pass (in SplatResolve) will use these 
+// accumulated potentials to LERP between the Shadow and Lit themes.

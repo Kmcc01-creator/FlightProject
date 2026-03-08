@@ -100,12 +100,18 @@ void UFlightGpuIoUringIntegrationTest::RunTests()
 				int64 TrackingId = 2000000 + i;
 				double StartTime = FPlatformTime::Seconds();
 
-				GpuBridge->SignalGpuCompletion(TrackingId,
+				const bool bSubmitted = GpuBridge->SignalGpuCompletion(
+					TrackingId,
 					[this, i, StartTime]()
 					{
 						double ElapsedMs = (FPlatformTime::Seconds() - StartTime) * 1000.0;
 						OnComputeComplete(i, ElapsedMs, true);
 					});
+
+				if (!bSubmitted)
+				{
+					OnComputeComplete(i, 0.0, false);
+				}
 			}
 		}
 		else
@@ -322,7 +328,7 @@ bool UFlightGpuIoUringIntegrationTest::TestGpuCompletionSignal()
 	static int64 TestIdCounter = 1000000;
 	int64 TrackingId = TestIdCounter++;
 
-	GpuBridge->SignalGpuCompletion(TrackingId,
+	const bool bSubmitted = GpuBridge->SignalGpuCompletion(TrackingId,
 		[TrackingId]()
 		{
 			UE_LOG(LogFlightIntegrationTest, Log,
@@ -330,11 +336,18 @@ bool UFlightGpuIoUringIntegrationTest::TestGpuCompletionSignal()
 				TrackingId);
 		});
 
-	UE_LOG(LogFlightIntegrationTest, Log,
-		TEXT("  PASS: GPU completion signal submitted (TrackingId=%lld)"), TrackingId);
+	if (bSubmitted)
+	{
+		UE_LOG(LogFlightIntegrationTest, Log,
+			TEXT("  PASS: GPU completion signal submitted (TrackingId=%lld)"), TrackingId);
+		++PassedTests;
+		return true;
+	}
 
-	++PassedTests;
-	return true;
+	UE_LOG(LogFlightIntegrationTest, Error,
+		TEXT("  FAIL: GPU completion signal submission failed (TrackingId=%lld)"), TrackingId);
+	++FailedTests;
+	return false;
 }
 
 void UFlightGpuIoUringIntegrationTest::OnComputeComplete(int32 TestIndex,

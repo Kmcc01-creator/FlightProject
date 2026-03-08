@@ -19,6 +19,7 @@
 
 #include "Serialization/MemoryWriter.h"
 #include "Serialization/MemoryReader.h"
+#include "Vex/FlightVexTypes.h"
 
 namespace Flight::Reflection
 {
@@ -75,6 +76,14 @@ template<typename T>
 concept CSerializable = CReflectable<T> && requires(T& t, FArchive& Ar) {
 	{ TReflectionTraits<T>::Serialize(t, Ar) };
 };
+
+// Forward declarations for policy checks used before full attribute definitions.
+namespace Attr
+{
+	struct Transient;
+	struct DuplicateTransient;
+	struct SkipSerialization;
+}
 
 
 // ============================================================================
@@ -284,28 +293,46 @@ concept CHasArchiveOperator = requires(T& t, FArchive& Ar) {
 	{ Ar << t } -> std::same_as<FArchive&>;
 };
 
+namespace Policy
+{
+	template<typename Descriptor, typename Attribute>
+	inline constexpr bool HasAttr = requires {
+		{ Descriptor::template HasAttr<Attribute> } -> std::convertible_to<bool>;
+	} && Descriptor::template HasAttr<Attribute>;
+
+	template<typename Descriptor>
+	inline constexpr bool IsSerializableField =
+		!HasAttr<Descriptor, Attr::Transient> &&
+		!HasAttr<Descriptor, Attr::DuplicateTransient> &&
+		!HasAttr<Descriptor, Attr::SkipSerialization>;
+}
+
 template<CReflectable T>
 void Serialize(T& Value, FArchive& Ar)
 {
 	if constexpr (CHasFields<T>)
 	{
 		TReflectionTraits<T>::Fields::ForEachValue(Value, [&Ar](auto& FieldValue, auto Descriptor) {
+			using DescType = decltype(Descriptor);
 			using FieldType = std::decay_t<decltype(FieldValue)>;
 
-			// Recursively serialize nested reflectable types
-			if constexpr (CReflectable<FieldType>)
+			if constexpr (Policy::IsSerializableField<DescType>)
 			{
-				Serialize(FieldValue, Ar);
-			}
-			// Use archive operator if available
-			else if constexpr (CHasArchiveOperator<FieldType>)
-			{
-				Ar << FieldValue;
-			}
-			// POD types: raw memory copy
-			else if constexpr (CPod<FieldType>)
-			{
-				Ar.Serialize(&FieldValue, sizeof(FieldType));
+				// Recursively serialize nested reflectable types
+				if constexpr (CReflectable<FieldType>)
+				{
+					Serialize(FieldValue, Ar);
+				}
+				// Use archive operator if available
+				else if constexpr (CHasArchiveOperator<FieldType>)
+				{
+					Ar << FieldValue;
+				}
+				// POD types: raw memory copy
+				else if constexpr (CPod<FieldType>)
+				{
+					Ar.Serialize(&FieldValue, sizeof(FieldType));
+				}
 			}
 			// else: skip unserializable fields (could add warning)
 		});
@@ -580,6 +607,43 @@ struct ToolTip
 	static constexpr std::string_view Value{Str};
 };
 
+// VEX/Scripting integration attributes
+template<TStaticString Str>
+struct VexSymbol
+{
+	static constexpr std::string_view Value{Str};
+};
+
+template<TStaticString Str>
+struct HlslIdentifier
+{
+	static constexpr std::string_view Value{Str};
+};
+
+template<TStaticString Str>
+struct VerseIdentifier
+{
+	static constexpr std::string_view Value{Str};
+};
+
+template<TStaticString Str>
+struct VersePackage
+{
+	static constexpr std::string_view Value{Str};
+};
+
+template<EFlightVexSymbolResidency Residency>
+struct VexResidency
+{
+	static constexpr EFlightVexSymbolResidency Value = Residency;
+};
+
+template<EFlightVexSymbolAffinity Affinity>
+struct ThreadAffinity
+{
+	static constexpr EFlightVexSymbolAffinity Value = Affinity;
+};
+
 // Meta specifiers
 struct AllowPrivateAccess {};
 struct ExposeOnSpawn {};
@@ -786,6 +850,19 @@ struct TAttributedFieldDescriptor
 		static constexpr const char* Name = #TypeName; \
 	};
 
+// Reflection with struct-level attributes (e.g. for VersePackage)
+#define FLIGHT_REFLECT_FIELDS_VEX(TypeName, AttrSet, ...) \
+	template<> \
+	struct ::Flight::Reflection::TReflectionTraits<TypeName> \
+	{ \
+		using FlightReflectSelf = TypeName; \
+		static constexpr bool IsReflectable = true; \
+		using Type = TypeName; \
+		using Attributes = AttrSet; \
+		using Fields = ::Flight::Reflection::TFieldList<__VA_ARGS__>; \
+		static constexpr const char* Name = #TypeName; \
+	};
+
 
 // ============================================================================
 // Property Change Notifications
@@ -925,37 +1002,40 @@ TStructPatch<T> Diff(const T& Old, const T& New)
 			using FieldType = std::decay_t<decltype(OldField)>;
 			const auto& NewField = DescType::Get(New);
 
-			// Check if field changed (requires operator==)
-			if constexpr (requires { OldField == NewField; })
+			if constexpr (Policy::IsSerializableField<DescType>)
 			{
-				if (!(OldField == NewField))
+				// Check if field changed (requires operator==)
+				if constexpr (requires { OldField == NewField; })
 				{
-					FFieldPatchData PatchData;
-					PatchData.FieldName = DescType::Name;
+					if (!(OldField == NewField))
+					{
+						FFieldPatchData PatchData;
+						PatchData.FieldName = DescType::Name;
 
-					// POD types: direct memory copy
-					if constexpr (CPod<FieldType>)
-					{
-						PatchData.SerializedValue.SetNumUninitialized(sizeof(FieldType));
-						FMemory::Memcpy(PatchData.SerializedValue.GetData(), &NewField, sizeof(FieldType));
-					}
-					// Types with archive operator
-					else if constexpr (CHasArchiveOperator<FieldType>)
-					{
-						FMemoryWriter Writer(PatchData.SerializedValue);
-						FieldType Copy = NewField;
-						Writer << Copy;
-					}
-					// Non-serializable: use type-erased applier
-					else
-					{
-						// Capture the new value for later application
-						PatchData.Applier = [NewField](void* Target) {
-							*static_cast<FieldType*>(Target) = NewField;
-						};
-					}
+						// POD types: direct memory copy
+						if constexpr (CPod<FieldType>)
+						{
+							PatchData.SerializedValue.SetNumUninitialized(sizeof(FieldType));
+							FMemory::Memcpy(PatchData.SerializedValue.GetData(), &NewField, sizeof(FieldType));
+						}
+						// Types with archive operator
+						else if constexpr (CHasArchiveOperator<FieldType>)
+						{
+							FMemoryWriter Writer(PatchData.SerializedValue);
+							FieldType Copy = NewField;
+							Writer << Copy;
+						}
+						// Non-serializable: use type-erased applier
+						else
+						{
+							// Capture the new value for later application
+							PatchData.Applier = [NewField](void* Target) {
+								*static_cast<FieldType*>(Target) = NewField;
+							};
+						}
 
-					Patch.ChangedFields.Add(MoveTemp(PatchData));
+						Patch.ChangedFields.Add(MoveTemp(PatchData));
+					}
 				}
 			}
 		});
@@ -976,28 +1056,31 @@ void Apply(T& Target, const TStructPatch<T>& Patch)
 				using DescType = decltype(Descriptor);
 				using FieldType = typename DescType::FieldType;
 
-				if (DescType::Name == PatchData.FieldName)
+				if constexpr (Policy::IsSerializableField<DescType>)
 				{
-					// Use applier if available (non-serializable types)
-					if (PatchData.Applier)
+					if (DescType::Name == PatchData.FieldName)
 					{
-						PatchData.Applier(&DescType::Get(Target));
-					}
-					// POD types: direct memory copy
-					else if constexpr (CPod<FieldType>)
-					{
-						if (PatchData.SerializedValue.Num() == sizeof(FieldType))
+						// Use applier if available (non-serializable types)
+						if (PatchData.Applier)
 						{
-							FMemory::Memcpy(&DescType::Get(Target), PatchData.SerializedValue.GetData(), sizeof(FieldType));
+							PatchData.Applier(&DescType::Get(Target));
 						}
-					}
-					// Types with archive operator
-					else if constexpr (CHasArchiveOperator<FieldType>)
-					{
-						FMemoryReader Reader(PatchData.SerializedValue);
-						FieldType Value;
-						Reader << Value;
-						DescType::Set(Target, MoveTemp(Value));
+						// POD types: direct memory copy
+						else if constexpr (CPod<FieldType>)
+						{
+							if (PatchData.SerializedValue.Num() == sizeof(FieldType))
+							{
+								FMemory::Memcpy(&DescType::Get(Target), PatchData.SerializedValue.GetData(), sizeof(FieldType));
+							}
+						}
+						// Types with archive operator
+						else if constexpr (CHasArchiveOperator<FieldType>)
+						{
+							FMemoryReader Reader(PatchData.SerializedValue);
+							FieldType Value;
+							Reader << Value;
+							DescType::Set(Target, MoveTemp(Value));
+						}
 					}
 				}
 			});
@@ -1031,7 +1114,10 @@ void ReplicateFields(T& Value, FArchive& Ar, TBitArray<>& DirtyFlags)
 			using DescType = decltype(Descriptor);
 
 			// Only replicate fields marked as Replicated
-			if constexpr (DescType::IsReplicated)
+			if constexpr (
+				requires { { DescType::IsReplicated } -> std::convertible_to<bool>; } &&
+				DescType::IsReplicated &&
+				Policy::IsSerializableField<DescType>)
 			{
 				// Ensure DirtyFlags is large enough
 				if (DirtyFlags.Num() <= FieldIndex)

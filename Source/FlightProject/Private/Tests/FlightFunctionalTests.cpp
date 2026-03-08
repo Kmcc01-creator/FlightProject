@@ -172,4 +172,34 @@ bool FFunctionalReactiveStateFlowTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * Test: Async continuation chain propagation
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFunctionalAsyncChainTest, "FlightProject.Functional.Async.ChainPropagation", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
+
+bool FFunctionalAsyncChainTest::RunTest(const FString& Parameters)
+{
+	TAsyncOp<int32> Root;
+	int32 FinalValue = 0;
+	int32 LateSubscriberValue = 0;
+
+	auto Chain = Root
+		.Then([](int32 Value) { return Value + 1; })
+		.Then([](int32 Value) { return Value * 2; });
+
+	Chain.OnComplete([&](int32 Value) {
+		FinalValue = Value;
+	});
+
+	Root.Complete(10);
+	TestEqual("Async chain should propagate transformed value", FinalValue, 22);
+
+	Chain.OnComplete([&](int32 Value) {
+		LateSubscriberValue = Value;
+	});
+	TestEqual("Late subscriber should receive completed value", LateSubscriberValue, 22);
+
+	return true;
+}
+
 #endif // WITH_AUTOMATION_TESTS

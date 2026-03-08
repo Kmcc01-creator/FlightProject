@@ -68,10 +68,10 @@ namespace Flight::Log
             Entry.ThreadId = FPlatformTLS::GetCurrentThreadId();
 
             // Add to buffer
-            Buffer.Add(Entry);
+            const FLogEntry CapturedEntry = Buffer.Add(MoveTemp(Entry));
 
             // Notify subscribers
-            OnLogReceived.Broadcast(Buffer.GetFiltered(FLogFilter{})[Buffer.Num() - 1]);
+            OnLogReceived.Broadcast(CapturedEntry);
         }
 
         virtual void Serialize(const TCHAR* V, ELogVerbosity::Type Verbosity, const FName& Category,
@@ -99,6 +99,7 @@ namespace Flight::Log
 
         // Get stats
         const FLogStats& GetStats() const { return Buffer.GetStats(); }
+        FLogStats GetStatsSnapshot() const { return Buffer.GetStatsSnapshot(); }
 
         // Clear captured logs
         void Clear()
@@ -252,6 +253,7 @@ namespace Flight::Log
         void SetFilter(const FLogFilter& NewFilter)
         {
             CurrentFilter = NewFilter;
+            CurrentFilter.Text.SetSearchText(CurrentFilter.Text.SearchText);
             RefreshFilteredLogs();
         }
 
@@ -266,7 +268,7 @@ namespace Flight::Log
 
         void SetSearchText(const FString& Text)
         {
-            CurrentFilter.Text.SearchText = Text;
+            CurrentFilter.Text.SetSearchText(Text);
             RefreshFilteredLogs();
         }
 
@@ -303,10 +305,12 @@ namespace Flight::Log
     private:
         void OnLogReceived(const FLogEntry& Entry)
         {
+            const FLogStats StatsSnapshot = Device.GetStatsSnapshot();
+
             // Update counts
-            TotalCountValue = Device.GetStats().TotalEntries;
-            ErrorCountValue = Device.GetStats().ErrorCount();
-            WarningCountValue = Device.GetStats().WarningCount();
+            TotalCountValue = static_cast<int32>(StatsSnapshot.TotalEntries);
+            ErrorCountValue = static_cast<int32>(StatsSnapshot.ErrorCount());
+            WarningCountValue = static_cast<int32>(StatsSnapshot.WarningCount());
 
             // Add to filtered if matches
             if (CurrentFilter.Matches(Entry))

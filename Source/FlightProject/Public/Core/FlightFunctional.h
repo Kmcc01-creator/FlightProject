@@ -853,7 +853,10 @@ class TAsyncOp
 public:
 	using ContinuationType = TFunction<void(T)>;
 
-	TAsyncOp() = default;
+	TAsyncOp()
+		: State(MakeShared<FState>())
+	{
+	}
 
 	// Chain a continuation
 	template<typename F>
@@ -862,7 +865,7 @@ public:
 		using U = decltype(Fn(DeclVal<T>()));
 		TAsyncOp<U> Next;
 
-		Continuations.Add([Fn = Forward<F>(Fn), Next](T Value) mutable
+		OnComplete([Fn = Forward<F>(Fn), Next](T Value) mutable
 		{
 			U Result = Fn(MoveTemp(Value));
 			Next.Complete(MoveTemp(Result));
@@ -874,21 +877,42 @@ public:
 	// Complete the operation, triggering continuations
 	void Complete(T Value)
 	{
-		for (auto& Cont : Continuations)
+		if (State->bCompleted)
 		{
-			Cont(Value);
+			return;
 		}
-		Continuations.Empty();
+
+		State->bCompleted = true;
+		State->CompletedValue = MoveTemp(Value);
+
+		TArray<ContinuationType> Pending = MoveTemp(State->Continuations);
+		for (auto& Cont : Pending)
+		{
+			Cont(State->CompletedValue.GetValue());
+		}
 	}
 
 	// Add a raw continuation
 	void OnComplete(ContinuationType Fn)
 	{
-		Continuations.Add(MoveTemp(Fn));
+		if (State->bCompleted)
+		{
+			Fn(State->CompletedValue.GetValue());
+			return;
+		}
+
+		State->Continuations.Add(MoveTemp(Fn));
 	}
 
 private:
-	TArray<ContinuationType> Continuations;
+	struct FState
+	{
+		bool bCompleted = false;
+		TOptional<T> CompletedValue;
+		TArray<ContinuationType> Continuations;
+	};
+
+	TSharedRef<FState> State;
 };
 
 

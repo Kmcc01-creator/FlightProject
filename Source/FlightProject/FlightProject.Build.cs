@@ -40,14 +40,21 @@ public class FlightProject : ModuleRules
             "GeometryScriptingCore",
             // Slate UI
             "Slate",
-            "SlateCore"
+            "SlateCore",
+            // Verse VM and Compiler integration
+            "VerseCompiler",
+            "uLangCore",
+            "uLangJSON"
         });
 
         PrivateDependencyModuleNames.AddRange(new string[]
         {
             "RenderCore",
+            "Renderer",
             "RHI",
             "Projects",
+            "Json",
+            "JsonUtilities",
             "FlightGpuCompute"  // Compute shaders with PostConfigInit registration
         });
 

@@ -21,7 +21,7 @@ namespace Flight::Async
  * Pick the best implementation for the current platform.
  */
 UCLASS()
-class FLIGHTPROJECT_API UFlightIoUringSubsystem : public UWorldSubsystem
+class FLIGHTPROJECT_API UFlightIoUringSubsystem : public UTickableWorldSubsystem
 {
 	GENERATED_BODY()
 
@@ -32,6 +32,9 @@ public:
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
 	virtual bool ShouldCreateSubsystem(UObject* Outer) const override;
+	virtual void Tick(float DeltaTime) override;
+	virtual TStatId GetStatId() const override;
+	virtual bool IsTickable() const override { return Executor.IsValid(); }
 
 	/** Get the active async executor */
 	Flight::Async::IFlightAsyncExecutor* GetExecutor() { return Executor.Get(); }

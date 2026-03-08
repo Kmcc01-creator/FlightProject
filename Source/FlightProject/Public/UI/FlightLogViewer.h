@@ -40,7 +40,7 @@ namespace Flight::Log
                 return SNullWidget::NullWidget;
             }
 
-            const FSlateColor TextColor = FSlateColor(VerbosityColor(Entry->Verbosity));
+            const FSlateColor TextColor = FSlateColor(Entry->DisplayColor());
 
             if (ColumnName == TEXT("Time"))
             {
@@ -52,7 +52,7 @@ namespace Flight::Log
             else if (ColumnName == TEXT("Verbosity"))
             {
                 return SNew(SBorder)
-                    .BorderBackgroundColor(VerbosityColor(Entry->Verbosity) * 0.3f)
+                    .BorderBackgroundColor(Entry->DisplayColor() * 0.3f)
                     .Padding(FMargin(4, 2))
                     [
                         SNew(STextBlock)
@@ -259,7 +259,7 @@ namespace Flight::Log
                 .Padding(0, 0, 8, 0)
                 [
                     SAssignNew(SearchBox, SSearchBox)
-                    .HintText(FText::FromString(TEXT("Filter logs...")))
+                    .HintText(FText::FromString(TEXT("Filter logs (cat:Name -cat:Name thread:123 frame:100-200)")))
                     .OnTextChanged(this, &SLogViewer::OnSearchTextChanged)
                 ]
 
@@ -615,7 +615,7 @@ namespace Flight::Log
                     FString::Printf(TEXT("[%s] %s"),
                         *Last.Category.ToString(),
                         *Last.Message.Left(100))));
-                LastMessageText->SetColorAndOpacity(FSlateColor(VerbosityColor(Last.Verbosity)));
+                LastMessageText->SetColorAndOpacity(FSlateColor(Last.DisplayColor()));
             }
         }
 

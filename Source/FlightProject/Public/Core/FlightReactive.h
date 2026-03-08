@@ -40,6 +40,53 @@ public:
 
 	TReactiveValue() = default;
 	explicit TReactiveValue(T InValue) : Value(MoveTemp(InValue)) {}
+	~TReactiveValue() { UnsubscribeAll(); }
+
+	// Copy keeps the value but intentionally does not copy active subscriptions.
+	// Subscriptions are tied to callback/user-data lifetime at runtime.
+	TReactiveValue(const TReactiveValue& Other)
+		: Value(Other.Value)
+	{
+	}
+
+	TReactiveValue& operator=(const TReactiveValue& Other)
+	{
+		if (this != &Other)
+		{
+			UnsubscribeAll();
+			Value = Other.Value;
+		}
+		return *this;
+	}
+
+	TReactiveValue(TReactiveValue&& Other) noexcept
+		: Value(MoveTemp(Other.Value))
+		, Subscriptions(MoveTemp(Other.Subscriptions))
+		, NextSubscriptionId(Other.NextSubscriptionId)
+	{
+		Other.Subscriptions.Empty();
+		Other.PendingUnsubscribeIds.Empty();
+		Other.bIsNotifying = false;
+		Other.bClearAllPending = false;
+		Other.NextSubscriptionId = 1;
+	}
+
+	TReactiveValue& operator=(TReactiveValue&& Other) noexcept
+	{
+		if (this != &Other)
+		{
+			UnsubscribeAll();
+			Value = MoveTemp(Other.Value);
+			Subscriptions = MoveTemp(Other.Subscriptions);
+			NextSubscriptionId = Other.NextSubscriptionId;
+			Other.Subscriptions.Empty();
+			Other.PendingUnsubscribeIds.Empty();
+			Other.bIsNotifying = false;
+			Other.bClearAllPending = false;
+			Other.NextSubscriptionId = 1;
+		}
+		return *this;
+	}
 
 	const T& Get() const { return Value; }
 	T& GetMutable() { return Value; }
@@ -77,7 +124,7 @@ public:
 	SubscriptionId Subscribe(ChangeCallback Callback, void* UserData = nullptr)
 	{
 		SubscriptionId Id = NextSubscriptionId++;
-		Subscriptions.Add({Id, Callback, UserData});
+		Subscriptions.Add({Id, Callback, UserData, nullptr});
 		return Id;
 	}
 
@@ -90,40 +137,121 @@ public:
 				auto* Fn = static_cast<TFunction<void(const T&, const T&)>*>(UserData);
 				(*Fn)(Old, New);
 			},
-			CapturedCallback
+			CapturedCallback,
+			[](void* UserData) {
+				delete static_cast<TFunction<void(const T&, const T&)>*>(UserData);
+			}
 		);
 	}
 
 	void Unsubscribe(SubscriptionId Id)
 	{
-		Subscriptions.RemoveAll([Id](const FSubscription& Sub) {
-			return Sub.Id == Id;
-		});
+		if (bIsNotifying)
+		{
+			PendingUnsubscribeIds.AddUnique(Id);
+			return;
+		}
+
+		RemoveSubscription(Id);
 	}
 
-	void UnsubscribeAll() { Subscriptions.Empty(); }
+	void UnsubscribeAll()
+	{
+		if (bIsNotifying)
+		{
+			bClearAllPending = true;
+			return;
+		}
+
+		CleanupAllSubscriptions();
+	}
 
 private:
-	void NotifySubscribers(const T& OldValue, const T& NewValue)
-	{
-		for (const FSubscription& Sub : Subscriptions)
-		{
-			if (Sub.Callback)
-			{
-				Sub.Callback(OldValue, NewValue, Sub.UserData);
-			}
-		}
-	}
-
 	struct FSubscription
 	{
 		SubscriptionId Id;
 		ChangeCallback Callback;
 		void* UserData;
+		void(*UserDataCleanup)(void*) = nullptr;
 	};
+
+	SubscriptionId Subscribe(ChangeCallback Callback, void* UserData, void(*UserDataCleanup)(void*))
+	{
+		SubscriptionId Id = NextSubscriptionId++;
+		Subscriptions.Add({Id, Callback, UserData, UserDataCleanup});
+		return Id;
+	}
+
+	void CleanupSubscription(FSubscription& Sub)
+	{
+		if (Sub.UserDataCleanup && Sub.UserData)
+		{
+			Sub.UserDataCleanup(Sub.UserData);
+			Sub.UserData = nullptr;
+		}
+	}
+
+	void RemoveSubscription(SubscriptionId Id)
+	{
+		for (int32 Index = Subscriptions.Num() - 1; Index >= 0; --Index)
+		{
+			if (Subscriptions[Index].Id == Id)
+			{
+				CleanupSubscription(Subscriptions[Index]);
+				Subscriptions.RemoveAtSwap(Index);
+			}
+		}
+	}
+
+	void CleanupAllSubscriptions()
+	{
+		for (FSubscription& Sub : Subscriptions)
+		{
+			CleanupSubscription(Sub);
+		}
+		Subscriptions.Empty();
+	}
+
+	void FlushPendingUnsubscribes()
+	{
+		if (bClearAllPending)
+		{
+			CleanupAllSubscriptions();
+			PendingUnsubscribeIds.Empty();
+			bClearAllPending = false;
+			return;
+		}
+
+		for (SubscriptionId Id : PendingUnsubscribeIds)
+		{
+			RemoveSubscription(Id);
+		}
+		PendingUnsubscribeIds.Empty();
+	}
+
+	void NotifySubscribers(const T& OldValue, const T& NewValue)
+	{
+		bIsNotifying = true;
+
+		const int32 InitialCount = Subscriptions.Num();
+		for (int32 Index = 0; Index < InitialCount; ++Index)
+		{
+			const FSubscription& Sub = Subscriptions[Index];
+			if (Sub.Callback)
+			{
+				Sub.Callback(OldValue, NewValue, Sub.UserData);
+			}
+		}
+
+		bIsNotifying = false;
+		FlushPendingUnsubscribes();
+	}
 
 	T Value{};
 	TArray<FSubscription> Subscriptions;
+	bool bIsNotifying = false;
+	bool bClearAllPending = false;
+	TArray<SubscriptionId> PendingUnsubscribeIds;
 	SubscriptionId NextSubscriptionId = 1;
 };
 
@@ -195,20 +323,48 @@ public:
 		RunEffect();
 	}
 
-	~TEffect() { if (CleanupCallback) { CleanupCallback(); } }
+	~TEffect()
+	{
+		Dispose();
+		if (CleanupCallback) { CleanupCallback(); }
+	}
+
+	TEffect(const TEffect&) = delete;
+	TEffect& operator=(const TEffect&) = delete;
+	TEffect(TEffect&&) = delete;
+	TEffect& operator=(TEffect&&) = delete;
 
 	void SetCleanup(CleanupFn Cleanup) { CleanupCallback = MoveTemp(Cleanup); }
 
 private:
+	void Dispose()
+	{
+		if (bDisposed)
+		{
+			return;
+		}
+		bDisposed = true;
+
+		for (auto& Unsubscribe : UnsubscribeCallbacks)
+		{
+			Unsubscribe();
+		}
+		UnsubscribeCallbacks.Empty();
+	}
+
 	template<typename T>
 	void SubscribeTo(TReactiveValue<T>& Dep)
 	{
-		Dep.Subscribe(
+		const typename TReactiveValue<T>::SubscriptionId Id = Dep.Subscribe(
 			[](const T&, const T&, void* UserData) {
 				static_cast<TEffect*>(UserData)->RunEffect();
 			},
 			this
 		);
+
+		UnsubscribeCallbacks.Add([&Dep, Id]() {
+			Dep.Unsubscribe(Id);
+		});
 	}
 
 	void RunEffect()
@@ -219,6 +375,8 @@ private:
 
 	EffectFn EffectCallback;
 	CleanupFn CleanupCallback;
+	TArray<TFunction<void()>> UnsubscribeCallbacks;
+	bool bDisposed = false;
 };
 
 } // namespace Flight::Reactive

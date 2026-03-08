@@ -85,9 +85,18 @@ void UMassGpuPerceptionProcessor::Execute(FMassEntityManager& EntityManager, FMa
 				if (!MassSubsystem) return;
 
 				FMassEntityManager& EM = MassSubsystem->GetMutableEntityManager();
-				
+
 				for (int32 i = 0; i < BatchEntities->Num(); ++i)
 				{
+					if (!Result.ObstacleCounts.IsValidIndex(i))
+					{
+						UE_LOG(LogTemp, Warning,
+							TEXT("MassGpuPerceptionProcessor: Result count mismatch (entities=%d, counts=%d)"),
+							BatchEntities->Num(),
+							Result.ObstacleCounts.Num());
+						break;
+					}
+
 					FMassEntityHandle Entity = (*BatchEntities)[i];
 					if (EM.IsEntityValid(Entity))
 					{

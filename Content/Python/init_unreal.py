@@ -22,12 +22,31 @@ def on_editor_startup():
     from FlightProject import AssetTools
     AssetTools.ensure_swarm_encounter_assets()
 
-    # 3. Print Data Table summary
+    # 3. Ensure schema-based contracts (PoC: Niagara + render profile manifest)
+    from FlightProject import SchemaTools
+    schema_issues = SchemaTools.ensure_manifest_requirements(create_missing=True)
+
+    # 4. Arm PIE tracing defaults and reporting hooks
+    from FlightProject import PIETrace
+    if not PIETrace.ensure_blutility_loaded():
+        unreal.log_warning(
+            "PIETrace: Blutility module unavailable at startup; PIE end delegate reporting may not bind in this session."
+        )
+    PIETrace.arm_default_observability(auto_export=True, log_each_event=False)
+
+    # 5. Print Data Table summary
     from FlightProject import DataReload
     DataReload.print_data_summary()
 
+    # 6. Start VEX hot-reload watcher
+    try:
+        from FlightProject import VexHotReload
+        VexHotReload.start()
+    except Exception as e:
+        unreal.log_warning(f"Failed to start VexHotReload: {e}")
+
     # Report status
-    if validation_ok:
+    if validation_ok and not schema_issues:
         unreal.log("=== FlightProject Ready ===")
     else:
         unreal.log_warning("=== FlightProject Started with Warnings ===")
@@ -41,6 +60,17 @@ def on_editor_startup():
     unreal.log("")
     unreal.log("  from FlightProject import DataReload")
     unreal.log("  DataReload.reload()  # Hot-reload configs")
+    unreal.log("")
+    unreal.log("  from FlightProject import PIETrace")
+    unreal.log("  PIETrace.arm_default_observability()")
+    unreal.log("  PIETrace.get_event_count()  # while PIE is running")
+    unreal.log("  PIETrace.export_trace()     # manual export while PIE is running")
+    unreal.log("  PIETrace.find_latest_auto_export_path()")
+    unreal.log("")
+    unreal.log("  from FlightProject import VexTools")
+    unreal.log("  VexTools.get_contract_symbols()")
+    unreal.log("  VexTools.validate_source('@velocity += normalize(@position) * 25.0;')")
+    unreal.log("  VexTools.export_validation_report('@velocity += @foo;')")
 
 # Run on import (editor startup)
 on_editor_startup()

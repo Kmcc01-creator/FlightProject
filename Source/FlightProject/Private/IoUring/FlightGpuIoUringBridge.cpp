@@ -123,7 +123,8 @@ void UFlightGpuIoUringBridge::Deinitialize()
 bool UFlightGpuIoUringBridge::IsAvailable() const
 {
 #if PLATFORM_LINUX
-	return bExportableSemaphoresAvailable || EventFd >= 0;
+	// The GPU completion path currently requires exportable semaphore support.
+	return bExportableSemaphoresAvailable;
 #else
 	return false;
 #endif
@@ -219,7 +220,8 @@ void UFlightGpuIoUringBridge::OnSyncFdReadable(int64 TrackingId, int32 Result, u
 	// NOTE: This method is called from io_uring worker thread, NOT game thread!
 	// Must marshal callback invocation to game thread.
 
-	TFunction<void()> Callback;
+	TFunction<void()> CompletionCallback;
+	TFunction<void()> FailureCallback;
 	double ElapsedMs = 0.0;
 
 	{
@@ -244,12 +246,13 @@ void UFlightGpuIoUringBridge::OnSyncFdReadable(int64 TrackingId, int32 Result, u
 				TrackingId, ElapsedMs);
 
 			TotalCompletions.fetch_add(1, std::memory_order_relaxed);
-			Callback = MoveTemp(State.Callback);
+			CompletionCallback = MoveTemp(State.CompletionCallback);
 		}
 		else
 		{
 			UE_LOG(LogFlightGpuBridge, Warning,
 				TEXT("OnSyncFdReadable: Error for TrackingId %lld, Result=%d"), TrackingId, Result);
+			FailureCallback = MoveTemp(State.FailureCallback);
 		}
 
 		// Clean up (closes sync_fd, removes from map)
@@ -257,9 +260,13 @@ void UFlightGpuIoUringBridge::OnSyncFdReadable(int64 TrackingId, int32 Result, u
 	}
 
 	// Marshal callback to game thread - callbacks expect game thread context
-	if (Callback)
+	if (CompletionCallback)
 	{
-		AsyncTask(ENamedThreads::GameThread, MoveTemp(Callback));
+		AsyncTask(ENamedThreads::GameThread, MoveTemp(CompletionCallback));
+	}
+	else if (FailureCallback)
+	{
+		AsyncTask(ENamedThreads::GameThread, MoveTemp(FailureCallback));
 	}
 }
 
@@ -270,7 +277,39 @@ struct FTimelineInfo
 	uint64 Value;
 };
 
-void UFlightGpuIoUringBridge::SignalGpuCompletion(int64 TrackingId, TFunction<void()> Callback)
+void UFlightGpuIoUringBridge::HandleSyncFailure(int64 TrackingId, const TCHAR* Reason)
+{
+	TFunction<void()> FailureCallback;
+	{
+		FScopeLock Lock(&PendingSyncStatesMutex);
+
+		TSharedPtr<FPendingSyncState>* StatePtr = PendingSyncStates.Find(TrackingId);
+		if (!StatePtr || !*StatePtr)
+		{
+			UE_LOG(LogFlightGpuBridge, Warning,
+				TEXT("HandleSyncFailure: missing pending state for TrackingId %lld (%s)"),
+				TrackingId, Reason ? Reason : TEXT("unknown"));
+			return;
+		}
+
+		FailureCallback = MoveTemp((*StatePtr)->FailureCallback);
+		CleanupPendingState_Locked(TrackingId);
+	}
+
+	UE_LOG(LogFlightGpuBridge, Warning,
+		TEXT("GPU completion setup failed for TrackingId %lld (%s)"),
+		TrackingId, Reason ? Reason : TEXT("unknown"));
+
+	if (FailureCallback)
+	{
+		FailureCallback();
+	}
+}
+
+bool UFlightGpuIoUringBridge::SignalGpuCompletion(
+	int64 TrackingId,
+	TFunction<void()> OnComplete,
+	TFunction<void()> OnFailure)
 {
 	// Use heterogeneous validation chain - each step produces its own type!
 	auto ValidationResult = Validate<FString>()
@@ -319,7 +358,11 @@ void UFlightGpuIoUringBridge::SignalGpuCompletion(int64 TrackingId, TFunction<vo
 	if (ValidationResult.IsErr())
 	{
 		UE_LOG(LogFlightGpuBridge, Warning, TEXT("SignalGpuCompletion: %s"), *ValidationResult.GetError());
-		return;
+		if (OnFailure)
+		{
+			OnFailure();
+		}
+		return false;
 	}
 
 	// Structured binding! Each step's result is now a separate variable.
@@ -329,7 +372,8 @@ void UFlightGpuIoUringBridge::SignalGpuCompletion(int64 TrackingId, TFunction<vo
 	TSharedPtr<FPendingSyncState> State = MakeShared<FPendingSyncState>();
 	State->TrackingId = TrackingId;
 	State->Semaphore = MoveTemp(Semaphore);
-	State->Callback = MoveTemp(Callback);
+	State->CompletionCallback = MoveTemp(OnComplete);
+	State->FailureCallback = MoveTemp(OnFailure);
 	State->SubmitTime = FPlatformTime::Seconds();
 	State->IoUringUserData = NextUserDataId.fetch_add(1, std::memory_order_relaxed);
 
@@ -370,37 +414,35 @@ void UFlightGpuIoUringBridge::SignalGpuCompletion(int64 TrackingId, TFunction<vo
 			bool bSignaled = SharedState->Semaphore->SignalAfterTimelineValue(
 				Queue, UeTimelineSemaphore, UeTimelineValue);
 
-			if (!bSignaled)
-			{
-				UE_LOG(LogFlightGpuBridge, Error, TEXT("SignalGpuCompletion[Queue]: SignalAfterTimelineValue FAILED for TrackingId %lld"), 
-					SharedState->TrackingId);
-				AsyncTask(ENamedThreads::GameThread, [WeakThis, TrackingId = SharedState->TrackingId]()
+				if (!bSignaled)
 				{
-					if (UFlightGpuIoUringBridge* Bridge = WeakThis.Get())
+						UE_LOG(LogFlightGpuBridge, Error, TEXT("SignalGpuCompletion[Queue]: SignalAfterTimelineValue FAILED for TrackingId %lld"),
+						SharedState->TrackingId);
+					AsyncTask(ENamedThreads::GameThread, [WeakThis, TrackingId = SharedState->TrackingId]()
 					{
-						FScopeLock Lock(&Bridge->PendingSyncStatesMutex);
-						Bridge->CleanupPendingState_Locked(TrackingId);
-					}
-				});
-				return;
-			}
+						if (UFlightGpuIoUringBridge* Bridge = WeakThis.Get())
+						{
+							Bridge->HandleSyncFailure(TrackingId, TEXT("SignalAfterTimelineValue failed"));
+						}
+					});
+					return;
+				}
 
 			// Export sync_fd
 			int32 SyncFd = SharedState->Semaphore->ExportSyncFd();
-			if (SyncFd < 0)
-			{
-				UE_LOG(LogFlightGpuBridge, Error, TEXT("SignalGpuCompletion[Queue]: ExportSyncFd FAILED for TrackingId %lld"), 
-					SharedState->TrackingId);
-				AsyncTask(ENamedThreads::GameThread, [WeakThis, TrackingId = SharedState->TrackingId]()
+				if (SyncFd < 0)
 				{
-					if (UFlightGpuIoUringBridge* Bridge = WeakThis.Get())
+						UE_LOG(LogFlightGpuBridge, Error, TEXT("SignalGpuCompletion[Queue]: ExportSyncFd FAILED for TrackingId %lld"),
+						SharedState->TrackingId);
+					AsyncTask(ENamedThreads::GameThread, [WeakThis, TrackingId = SharedState->TrackingId]()
 					{
-						FScopeLock Lock(&Bridge->PendingSyncStatesMutex);
-						Bridge->CleanupPendingState_Locked(TrackingId);
-					}
-				});
-				return;
-			}
+						if (UFlightGpuIoUringBridge* Bridge = WeakThis.Get())
+						{
+							Bridge->HandleSyncFailure(TrackingId, TEXT("ExportSyncFd failed"));
+						}
+					});
+					return;
+				}
 
 			// Register with executor on game thread
 			UE_LOG(LogFlightGpuBridge, Log, TEXT("SignalGpuCompletion[Queue]: Exported SyncFd %d for TrackingId %lld. Registering with executor."), 
@@ -429,33 +471,39 @@ void UFlightGpuIoUringBridge::SignalGpuCompletion(int64 TrackingId, TFunction<vo
 						(*StatePtr)->SyncFd = SyncFd;
 					}
 
-					if (!Bridge->IoUringSubsystem || !Bridge->IoUringSubsystem->IsAvailable())
-					{
-						FScopeLock Lock(&Bridge->PendingSyncStatesMutex);
-						Bridge->CleanupPendingState_Locked(TrackingId);
-						close(SyncFd);
-						return;
-					}
-
-					IFlightAsyncExecutor* Executor = Bridge->IoUringSubsystem->GetExecutor();
-					if (!Executor)
-					{
-						close(SyncFd);
-						return;
-					}
-
-					// Submit wait to executor
-					Executor->SubmitEventWait(FAsyncHandle::FromLinuxFd(SyncFd), 
-						[WeakThis, TrackingId](const FAsyncResult& Res)
+						if (!Bridge->IoUringSubsystem || !Bridge->IoUringSubsystem->IsAvailable())
 						{
-							if (UFlightGpuIoUringBridge* B = WeakThis.Get())
+							Bridge->HandleSyncFailure(TrackingId, TEXT("IoUring subsystem unavailable"));
+							return;
+						}
+
+						IFlightAsyncExecutor* Executor = Bridge->IoUringSubsystem->GetExecutor();
+						if (!Executor)
+						{
+							Bridge->HandleSyncFailure(TrackingId, TEXT("Async executor unavailable"));
+							return;
+						}
+
+						// Submit wait to executor
+							const bool bSubmitted = Executor->SubmitEventWait(FAsyncHandle::FromLinuxFd(SyncFd),
+							[WeakThis, TrackingId](const FAsyncResult& Res)
 							{
-								B->OnSyncFdReadable(TrackingId, Res.ErrorCode, Res.Flags);
-							}
-						});
-				});
-		},
-		false /* don't wait for submission */);
+								if (UFlightGpuIoUringBridge* B = WeakThis.Get())
+								{
+									B->OnSyncFdReadable(TrackingId, Res.ErrorCode, Res.Flags);
+								}
+							});
+
+						if (!bSubmitted)
+						{
+							Bridge->HandleSyncFailure(TrackingId, TEXT("SubmitEventWait failed"));
+							return;
+						}
+					});
+			},
+			false /* don't wait for submission */);
+
+	return true;
 }
 #endif
 
@@ -478,9 +526,15 @@ void UFlightGpuIoUringBridge::RunIntegrationTest()
 	static int64 TestIdCounter = 1000000;
 	int64 TestId = TestIdCounter++;
 
-	SignalGpuCompletion(TestId, [TestId]()
+	const bool bSubmitted = SignalGpuCompletion(TestId, [TestId]()
 	{
 		UE_LOG(LogFlightGpuBridge, Log,
 			TEXT("Integration test PASSED: Received completion callback for TrackingId=%lld"), TestId);
 	});
+
+	if (!bSubmitted)
+	{
+		UE_LOG(LogFlightGpuBridge, Warning,
+			TEXT("Integration test did not submit completion signal for TrackingId=%lld"), TestId);
+	}
 }

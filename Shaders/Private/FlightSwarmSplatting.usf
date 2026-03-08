@@ -1,0 +1,117 @@
+// Copyright Kelly Rey Wilson. All Rights Reserved.
+// FlightSwarmSplatting - Pass 6/7: F-Buffer Potential Splatting and NPR Resolve
+
+#include "/Engine/Private/Common.ush"
+#include "FlightSwarmCommon.ush"
+
+// --- Accumulation Pass Inputs ---
+StructuredBuffer<float4> DroidStates;
+
+// --- F-Buffer Accumulators (Atomics) ---
+RWTexture2D<uint> AccumBufferAlignment; // N dot L
+RWTexture2D<uint> AccumBufferIntensity; // |L|
+RWTexture2D<uint> AccumBufferDensity;   // Density
+RWTexture2D<uint> AccumBufferPhase;     // Phase/Material
+
+// --- Resolve Pass Inputs ---
+Texture2D<uint> AccumBufferAlignment_SRV;
+Texture2D<uint> AccumBufferIntensity_SRV;
+Texture2D<uint> AccumBufferDensity_SRV;
+Texture2D<uint> AccumBufferPhase_SRV;
+
+float4 ShadowColor;
+float4 LitColor;
+float2 ViewSize;
+float3 CloudGridCenter;
+float CloudGridExtent;
+uint CloudGridResolution;
+
+// --- Resolve Pass Outputs ---
+RWTexture2D<float4> OutSceneColor;
+
+static const float FixedPointScale = 1000.0f;
+
+[numthreads(64, 1, 1)]
+void SplattingMain(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    uint EntityIndex = DispatchThreadId.x;
+    if (EntityIndex >= NumEntities) return;
+
+    // Load State
+    uint StateIndex = EntityIndex * 2;
+    float4 PosShield = DroidStates[StateIndex];
+    float4 VelStatus = DroidStates[StateIndex + 1];
+
+    float3 WorldPos = PosShield.xyz;
+    float Shield = PosShield.w;
+    uint Status = asuint(VelStatus.w);
+
+    // Transform to clip space
+    float4 ClipPos = mul(float4(WorldPos, 1.0f), View.WorldToClip);
+    if (ClipPos.w <= 0.0f || any(abs(ClipPos.xyz) > ClipPos.w)) return;
+
+    float3 NDC = ClipPos.xyz / ClipPos.w;
+    float2 ScreenUV = float2(NDC.x * 0.5f + 0.5f, 0.5f - NDC.y * 0.5f);
+    uint2 PixelCoord = uint2(ScreenUV * View.ViewSizeAndInvSize.xy);
+    
+    // Guard against OOB atomics
+    if (any(PixelCoord >= (uint2)View.ViewSizeAndInvSize.xy)) return;
+
+    // --- SCSL Potential Calculation ---
+    float3 RelativePos = (WorldPos - GridCenter) / GridExtent + 0.5f;
+    float3 CloudRelativePos = (WorldPos - CloudGridCenter) / CloudGridExtent + 0.5f;
+    
+    // 1. Irradiance Potential
+    float3 LocalIrradiance = ReadLatticeArray.SampleLevel(ReadLatticeSampler, RelativePos, 0).rgb;
+    float Intensity = length(LocalIrradiance);
+
+    // 2. Alignment Potential (N dot L)
+    float3 L = normalize(LocalIrradiance + 0.0001f);
+    float Alignment = saturate(dot(normalize(VelStatus.xyz), L));
+
+    // 3. Density Potential
+    float LocalDensity = ReadCloudArray.SampleLevel(ReadCloudSampler, CloudRelativePos, 0).r;
+
+    // 4. Phase Potential (Material logic)
+    float Phase = (float)(Status & 0xFF) / 255.0f;
+
+    // Fixed-point conversion
+    uint fAlignment = (uint)(Alignment * FixedPointScale);
+    uint fIntensity = (uint)(Intensity * FixedPointScale);
+    uint fDensity   = (uint)(LocalDensity * FixedPointScale);
+    uint fPhase     = (uint)(Phase * FixedPointScale);
+
+    // Atomic accumulation into F-Buffer
+    InterlockedAdd(AccumBufferAlignment[PixelCoord], fAlignment);
+    InterlockedAdd(AccumBufferIntensity[PixelCoord], fIntensity);
+    InterlockedAdd(AccumBufferDensity[PixelCoord], fDensity);
+    InterlockedAdd(AccumBufferPhase[PixelCoord], fPhase);
+}
+
+[numthreads(8, 8, 1)]
+void SplatResolveMain(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    uint2 PixelCoord = DispatchThreadId.xy;
+    if (any(PixelCoord >= (uint2)ViewSize)) return;
+
+    // Read F-Buffer Potentials
+    float Alignment = (float)AccumBufferAlignment_SRV.Load(int3(PixelCoord, 0)) / FixedPointScale;
+    float Intensity = (float)AccumBufferIntensity_SRV.Load(int3(PixelCoord, 0)) / FixedPointScale;
+    float Density   = (float)AccumBufferDensity_SRV.Load(int3(PixelCoord, 0)) / FixedPointScale;
+    float Phase     = (float)AccumBufferPhase_SRV.Load(int3(PixelCoord, 0)) / FixedPointScale;
+
+    if (Density <= 0.0f) return;
+
+    // Normalize potentials by density to get average values in the volume
+    float AvgAlignment = saturate(Alignment / Density);
+    float AvgIntensity = Intensity / Density;
+
+    // --- NPR Stylization (The LERP Layer) ---
+    float toon_threshold = smoothstep(0.4, 0.45, AvgAlignment);
+    float3 FinalColor = lerp(ShadowColor.rgb, LitColor.rgb, toon_threshold);
+    FinalColor *= (1.0f + AvgIntensity * 5.0f);
+
+    // Composite into scene
+    float4 CurrentSceneColor = OutSceneColor[PixelCoord];
+    OutSceneColor[PixelCoord] = float4(CurrentSceneColor.rgb + FinalColor, CurrentSceneColor.a);
+}

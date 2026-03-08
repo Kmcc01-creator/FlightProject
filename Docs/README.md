@@ -31,6 +31,8 @@ Technical architecture, engine integration, and system design.
 | [DataPipeline.md](Architecture/DataPipeline.md) | CSV data loading and configuration |
 | [FlightControls.md](Architecture/FlightControls.md) | Input system and movement component |
 | [PluginArchitecture.md](Architecture/PluginArchitecture.md) | Plugin types and usage patterns |
+| [RowEvolutionDesignReview.md](Architecture/RowEvolutionDesignReview.md) | Row-type evolution strategy, reactive/reflection integration, and phased operations plan |
+| [SCSL_FieldResidencySchemaContract.md](Architecture/SCSL_FieldResidencySchemaContract.md) | Draft schema contract for SCSL field residency, page IDs, and persistence semantics |
 
 ### [Workflow/](Workflow/) - Development Process
 
@@ -38,10 +40,15 @@ Day-to-day development workflows and runtime systems.
 
 | Document | Description |
 |----------|-------------|
+| [CurrentFocus.md](Workflow/CurrentFocus.md) | Current phase status, milestones, and immediate roadmap |
+| [CurrentFocus-VexRendering.md](Workflow/CurrentFocus-VexRendering.md) | Proposed typestate VEX + reflective RDG rendering direction |
+| [CurrentBuild.md](Workflow/CurrentBuild.md) | Current build/test baseline, schema validation coverage, and command reference |
 | [GameplaySystems.md](Workflow/GameplaySystems.md) | Runtime bootstrap and system interactions |
 | [MapWorkflow.md](Workflow/MapWorkflow.md) | Level authoring and testing |
 | [EditorTooling.md](Workflow/EditorTooling.md) | Editor setup and recommended layout |
 | [StartPlayDecomposition.md](Workflow/StartPlayDecomposition.md) | Bootstrap subsystem migration (historical) |
+| [PIE_Spawn.md](Workflow/PIE_Spawn.md) | PIE startup spawn analysis and tracing reference |
+| [Phase0ImplementationChecklist.md](Workflow/Phase0ImplementationChecklist.md) | Phase 0 safety checklist for reactive/functional/reflection fixes |
 
 ### [Scripting/](Scripting/) - Automation & Rapid Iteration
 
@@ -53,6 +60,7 @@ Python, Blueprint, and data-driven development workflows.
 | [EditorAutomation.md](Scripting/EditorAutomation.md) | Python tools, Editor Utility Widgets |
 | [DataDrivenDesign.md](Scripting/DataDrivenDesign.md) | CSV workflows, Data Assets, runtime tuning |
 | [PythonAPI.md](Scripting/PythonAPI.md) | Exposing C++ to Python (reflection) |
+| [VexSchemaValidation.md](Scripting/VexSchemaValidation.md) | Schema-driven VEX symbol contracts and tooling |
 
 ### [Future/](Future/) - Roadmap & Proposals
 

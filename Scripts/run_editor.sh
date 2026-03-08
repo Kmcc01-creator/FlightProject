@@ -13,6 +13,8 @@ USE_GAMESCOPE=0
 GAMESCOPE_ARGS=()
 ENABLE_TRACE=0
 ENABLE_GPU_DEBUG=0
+ENABLE_TIMESTAMPS=0
+EXTRA_EDITOR_ARGS=()
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -42,6 +44,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --debug-gpu)
             ENABLE_GPU_DEBUG=1
+            shift
+            ;;
+        --timestamps)
+            ENABLE_TIMESTAMPS=1
             shift
             ;;
         --gamescope)
@@ -75,6 +81,19 @@ done
 
 configure_video_backend "$VIDEO_BACKEND"
 
+echo
+echo "${c_blue}================================================================${c_reset}"
+echo "${c_blue}  FlightProject Editor Launcher${c_reset}"
+echo "${c_blue}================================================================${c_reset}"
+log_info "Video Backend: ${c_cyan}${VIDEO_BACKEND}${c_reset}"
+log_info "Trace Enabled: ${c_cyan}$(( ENABLE_TRACE ))${c_reset}"
+log_info "GPU Debug:     ${c_cyan}$(( ENABLE_GPU_DEBUG ))${c_reset}"
+if (( USE_GAMESCOPE )); then
+    log_info "Gamescope:     ${c_green}ON${c_reset}"
+fi
+echo "${c_blue}----------------------------------------------------------------${c_reset}"
+echo
+
 LAUNCH_PREFIX=()
 if (( USE_GAMESCOPE )); then
     if ! command -v gamescope >/dev/null 2>&1; then
@@ -99,16 +118,18 @@ if (( ENABLE_TRACE )); then
 fi
 
 if (( ENABLE_GPU_DEBUG )); then
-    # -d3ddebug is the generic flag for RHI validation, -gpucrashdebugging for breadcrumbs
     CMD+=("-d3ddebug" "-gpucrashdebugging")
 fi
 
-if [[ ${#EXTRA_EDITOR_ARGS[@]:-0} -gt 0 ]]; then
+if [[ ${#EXTRA_EDITOR_ARGS[@]} -gt 0 ]]; then
     CMD+=("${EXTRA_EDITOR_ARGS[@]}")
 fi
 
-echo "Launching UnrealEditor with $PROJECT_FILE"
-printf '  %q' "${CMD[@]}"
+log_info "Command: ${c_gray}${CMD[*]}${c_reset}"
 echo
 
-"${CMD[@]}"
+if (( ENABLE_TIMESTAMPS )); then
+    "${CMD[@]}" 2>&1 | while IFS= read -r line; do printf '%s %s\n' "$(date +'%H:%M:%S')" "$line"; done
+else
+    "${CMD[@]}"
+fi

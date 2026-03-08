@@ -1,0 +1,227 @@
+// Copyright Kelly Rey Wilson. All Rights Reserved.
+
+#include "CoreMinimal.h"
+#include "Misc/AutomationTest.h"
+#include "Vex/FlightVexParser.h"
+#include "Verse/UFlightVerseSubsystem.h"
+#include "Schema/FlightRequirementRegistry.h"
+#include "Swarm/SwarmSimulationTypes.h"
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVexParsingTest, "FlightProject.Vex.Parsing", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FFlightVexParsingTest::RunTest(const FString& Parameters)
+{
+	// 1. Setup Mock Symbol Definitions
+	TArray<Flight::Vex::FVexSymbolDefinition> Defs;
+	{
+		Flight::Vex::FVexSymbolDefinition Pos;
+		Pos.SymbolName = TEXT("@position");
+		Pos.ValueType = TEXT("float3");
+		Pos.Residency = EFlightVexSymbolResidency::Shared;
+		Pos.Affinity = EFlightVexSymbolAffinity::Any;
+		Defs.Add(Pos);
+
+		Flight::Vex::FVexSymbolDefinition Shield;
+		Shield.SymbolName = TEXT("@shield");
+		Shield.ValueType = TEXT("float");
+		Shield.Residency = EFlightVexSymbolResidency::GpuOnly;
+		Shield.Affinity = EFlightVexSymbolAffinity::Any;
+		Defs.Add(Shield);
+	}
+
+	// 2. Test Basic Parsing and Verse Lowering
+	{
+		FString VexSource = TEXT("@cpu { @position = {1, 2, 3}; }");
+		Flight::Vex::FVexParseResult Result = Flight::Vex::ParseAndValidate(VexSource, Defs, false);
+
+		TestTrue(TEXT("Should have no parsing issues"), Result.bSuccess);
+
+		TMap<FString, FString> SymbolMap;
+		SymbolMap.Add(TEXT("@position"), TEXT("Droid.Position"));
+		
+		FString VerseOutput = Flight::Vex::LowerToVerse(Result.Program, SymbolMap);
+		
+		// Check for idiomatic Verse syntax
+		TestTrue(TEXT("Verse output should use 'set' for assignment"), VerseOutput.Contains(TEXT("set Droid.Position =")));
+		TestFalse(TEXT("Verse output should not have semicolons"), VerseOutput.Contains(TEXT(";")));
+	}
+
+	// 3. Test Residency Validation (Negative Case)
+	{
+		// Try to use a GPU-only symbol in a CPU block
+		FString VexSource = TEXT("@cpu { @shield = 1.0; }");
+		Flight::Vex::FVexParseResult Result = Flight::Vex::ParseAndValidate(VexSource, Defs, false);
+
+		bool bFoundResidencyError = false;
+		for (const auto& Issue : Result.Issues)
+		{
+			if (Issue.Message.Contains(TEXT("GPU-only")) && Issue.Message.Contains(TEXT("@cpu")))
+			{
+				bFoundResidencyError = true;
+				break;
+			}
+		}
+
+		TestTrue(TEXT("Should report residency error when using GPU symbol in CPU context"), bFoundResidencyError);
+	}
+
+	// 4. Test Affinity Validation
+	{
+		Flight::Vex::FVexSymbolDefinition GtSymbol;
+		GtSymbol.SymbolName = TEXT("@uobject_data");
+		GtSymbol.ValueType = TEXT("float");
+		GtSymbol.Affinity = EFlightVexSymbolAffinity::GameThread;
+		Defs.Add(GtSymbol);
+
+		// Try to use a GameThread symbol in a Job block
+		FString VexSource = TEXT("@cpu @job { @position = @uobject_data; }");
+		Flight::Vex::FVexParseResult Result = Flight::Vex::ParseAndValidate(VexSource, Defs, false);
+
+		bool bFoundAffinityError = false;
+		for (const auto& Issue : Result.Issues)
+		{
+			if (Issue.Message.Contains(TEXT("Game Thread")) && Issue.Message.Contains(TEXT("@job")))
+			{
+				bFoundAffinityError = true;
+				break;
+			}
+		}
+
+		TestTrue(TEXT("Should report affinity error when using GameThread symbol in @job context"), bFoundAffinityError);
+	}
+
+	// 5. Test Task Capture and Async Lowering
+	{
+		FString VexSource = TEXT("@cpu @async { @position = {0,0,0}; }");
+		Flight::Vex::FVexParseResult Result = Flight::Vex::ParseAndValidate(VexSource, Defs, false);
+
+		TestEqual(TEXT("Should have 1 task descriptor"), Result.Program.Tasks.Num(), 1);
+		if (Result.Program.Tasks.Num() > 0)
+		{
+			TestEqual(TEXT("Task type should be @async"), Result.Program.Tasks[0].Type, TEXT("@async"));
+			TestTrue(TEXT("Task should capture @position for writing"), Result.Program.Tasks[0].WriteSymbols.Contains(TEXT("@position")));
+		}
+
+		TMap<FString, FString> SymbolMap;
+		SymbolMap.Add(TEXT("@position"), TEXT("Droid.Position"));
+		FString VerseOutput = Flight::Vex::LowerToVerse(Result.Program, SymbolMap);
+		
+		TestTrue(TEXT("Verse output should include <async> effect"), VerseOutput.Contains(TEXT("<async>")));
+	}
+
+	// 6. Test Rate Directive Parsing
+	{
+		FString VexSource = TEXT("@cpu @rate(15Hz) { @position = {0,0,0}; }");
+		Flight::Vex::FVexParseResult Result = Flight::Vex::ParseAndValidate(VexSource, Defs, false);
+
+		TestEqual(TEXT("ExecutionRateHz should be 15.0"), Result.Program.ExecutionRateHz, 15.0f);
+		TestEqual(TEXT("FrameInterval should be 0"), (int32)Result.Program.FrameInterval, 0);
+	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVerseSubsystemTest, "FlightProject.Verse.Subsystem", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FFlightVerseSubsystemTest::RunTest(const FString& Parameters)
+{
+	const Flight::Schema::FManifestData Manifest = Flight::Schema::BuildManifestData();
+	TArray<Flight::Vex::FVexSymbolDefinition> Defs = Flight::Vex::BuildSymbolDefinitionsFromManifest(Manifest);
+
+	bool bFoundDroidPos = false;
+	for (const auto& D : Defs)
+	{
+		if (D.SymbolName == TEXT("@position"))
+		{
+			bFoundDroidPos = true;
+			TestEqual(TEXT("@position residency should be Shared"), D.Residency, EFlightVexSymbolResidency::Shared);
+		}
+		if (D.SymbolName == TEXT("@shield"))
+		{
+			TestEqual(TEXT("@shield residency should be GpuOnly"), D.Residency, EFlightVexSymbolResidency::GpuOnly);
+		}
+	}
+
+	TestTrue(TEXT("Manifest should contain @position from FDroidState reflection"), bFoundDroidPos);
+
+	return true;
+}
+
+#include "AutoRTFM.h"
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightAutoRTFMIntegrationTest, "FlightProject.AutoRTFM.Integration", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FFlightAutoRTFMIntegrationTest::RunTest(const FString& Parameters)
+{
+	using namespace Flight::Swarm;
+
+	FDroidState Droid;
+	Droid.Position = FVector3f(0, 0, 0);
+	Droid.Velocity = FVector3f(10, 0, 0);
+
+	bool bCommitCalled = false;
+	bool bAbortCalled = false;
+
+	AutoRTFM::ETransactionResult Result = AutoRTFM::Transact([&]()
+	{
+		AutoRTFM::OnCommit([&]() { bCommitCalled = true; });
+		AutoRTFM::OnAbort([&]() { bAbortCalled = true; });
+
+		Droid.Position += Droid.Velocity;
+
+		bool bCollisionDetected = true; 
+
+		if (bCollisionDetected)
+		{
+			AutoRTFM::AbortTransaction();
+		}
+	});
+
+	TestEqual(TEXT("Droid Position should be rolled back to original"), Droid.Position, FVector3f(0, 0, 0));
+	TestEqual(TEXT("Transaction should have aborted"), Result, AutoRTFM::ETransactionResult::AbortedByRequest);
+	TestTrue(TEXT("Abort handler should have fired"), bAbortCalled);
+	TestFalse(TEXT("Commit handler should NOT have fired"), bCommitCalled);
+
+	Result = AutoRTFM::Transact([&]()
+	{
+		bCommitCalled = false;
+		bAbortCalled = false;
+		AutoRTFM::OnCommit([&]() { bCommitCalled = true; });
+		
+		Droid.Position += Droid.Velocity;
+	});
+
+	TestEqual(TEXT("Droid Position should be committed"), Droid.Position, FVector3f(10, 0, 0));
+	TestEqual(TEXT("Transaction should have committed"), Result, AutoRTFM::ETransactionResult::Committed);
+	TestTrue(TEXT("Commit handler should have fired"), bCommitCalled);
+
+	return true;
+}
+
+#include "Core/FlightAsyncExecutor.h"
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightGpuReactiveTest, "FlightProject.Gpu.Reactive", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FFlightGpuReactiveTest::RunTest(const FString& Parameters)
+{
+	using namespace Flight::Async;
+
+	TUniquePtr<IFlightAsyncExecutor> Executor = CreatePlatformExecutor();
+	TestTrue(TEXT("Executor should be valid"), Executor.IsValid());
+
+	int64 TrackingId = 12345;
+	TSharedPtr<TReactiveValue<bool>> Status = Executor->WaitOnGpuWork(TrackingId);
+	
+	TestNotNull(TEXT("Status ReactiveValue should be valid"), Status.Get());
+	TestFalse(TEXT("Initially status should be false"), Status->Get());
+
+	bool bCallbackFired = false;
+	Status->SubscribeLambda([&](bool Old, bool New) {
+		if (New) bCallbackFired = true;
+	});
+
+	Status->Set(true);
+	TestTrue(TEXT("Reactive callback should have fired"), bCallbackFired);
+
+	return true;
+}

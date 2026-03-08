@@ -1,0 +1,77 @@
+// Copyright Kelly Rey Wilson. All Rights Reserved.
+// FlightRadixSort - Refined 4-bit Parallel Radix Sort
+
+#include "/Engine/Private/Common.ush"
+#include "FlightSwarmCommon.ush"
+
+// --- Constants ---
+#define RADIX_BITS 4
+#define RADIX_BINS (1 << RADIX_BITS) // 16 Bins
+#define THREADS_PER_GROUP 64
+
+// --- Shared Globals ---
+uint NumEntities;
+uint BitOffset;
+
+// --- Pass 1: Count Bits (Global Binning) ---
+StructuredBuffer<float4> DroidStates;
+RWStructuredBuffer<uint> BitCounts; // [RADIX_BINS]
+
+[numthreads(THREADS_PER_GROUP, 1, 1)]
+void RadixCountMain(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    uint EntityIndex = DispatchThreadId.x;
+    if (EntityIndex >= NumEntities) return;
+
+    // Load ClassID from upper 8 bits of status
+    uint Status = asuint(DroidStates[EntityIndex * 2 + 1].w);
+    uint ClassID = (Status >> 16) & 0xFF;
+
+    // Extract the 4-bit digit for this pass
+    uint Bin = (ClassID >> BitOffset) & (RADIX_BINS - 1);
+    
+    InterlockedAdd(BitCounts[Bin], 1);
+}
+
+// --- Pass 2: Prefix Sum (Global Scan) ---
+RWStructuredBuffer<uint> Offsets; // [RADIX_BINS]
+uint NumElements;
+
+[numthreads(RADIX_BINS, 1, 1)]
+void RadixScanMain(uint3 GroupThreadId : SV_GroupThreadID)
+{
+    uint Bin = GroupThreadId.x;
+    
+    // Simple Hillis-Steele or serial scan for 16 elements in one group
+    if (Bin == 0)
+    {
+        uint Sum = 0;
+        for (uint i = 0; i < RADIX_BINS; ++i)
+        {
+            Offsets[i] = Sum;
+            Sum += BitCounts[i]; // Reuse BitCounts from Pass 1
+        }
+    }
+}
+
+// --- Pass 3: Scatter Entities ---
+StructuredBuffer<float4> InDroidStates;
+RWStructuredBuffer<float4> OutDroidStates;
+
+[numthreads(THREADS_PER_GROUP, 1, 1)]
+void RadixScatterMain(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    uint EntityIndex = DispatchThreadId.x;
+    if (EntityIndex >= NumEntities) return;
+
+    uint Status = asuint(InDroidStates[EntityIndex * 2 + 1].w);
+    uint ClassID = (Status >> 16) & 0xFF;
+    uint Bin = (ClassID >> BitOffset) & (RADIX_BINS - 1);
+
+    uint TargetIndex;
+    InterlockedAdd(Offsets[Bin], 1, TargetIndex);
+
+    // Move 2x float4 (FDroidState)
+    OutDroidStates[TargetIndex * 2] = InDroidStates[EntityIndex * 2];
+    OutDroidStates[TargetIndex * 2 + 1] = InDroidStates[EntityIndex * 2 + 1];
+}

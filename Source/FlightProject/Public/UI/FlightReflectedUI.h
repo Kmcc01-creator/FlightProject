@@ -31,9 +31,9 @@ public:
 		auto VerticalBox = SNew(SVerticalBox);
 
 		// Iterate over fields using our C++23 reflection traits
-		TForEachField<T>([&](auto Field) {
-			using FieldType = typename decltype(Field)::Type;
-			FName Name = Field.GetName();
+		TReflectionTraits<T>::Fields::ForEachDescriptor([&](auto Descriptor) {
+			using FieldType = typename decltype(Descriptor)::FieldType;
+			FString Name = ANSI_TO_TCHAR(decltype(Descriptor)::Name.data());
 			
 			// Only generate sliders for float fields for this prototype
 			if constexpr (std::is_same_v<FieldType, float>)
@@ -46,16 +46,16 @@ public:
 					+ SHorizontalBox::Slot()
 					.FillWidth(0.3f)
 					[
-						SNew(STextBlock).Text(FText::FromName(Name))
+						SNew(STextBlock).Text(FText::FromString(Name))
 					]
 					+ SHorizontalBox::Slot()
 					.FillWidth(0.7f)
 					[
 						SNew(SSlider)
-						.Value(Field.Get(TargetState) / 2000.0f) // Normalized for slider
-						.OnValueChanged_Lambda([&TargetState, Field](float NewValue) {
+						.Value(Descriptor.Get(TargetState) / 2000.0f) // Normalized for slider
+						.OnValueChanged_Lambda([&TargetState, Descriptor](float NewValue) {
 							// Update the state reactively
-							Field.Get(TargetState) = NewValue * 2000.0f;
+							Descriptor.Get(TargetState) = NewValue * 2000.0f;
 						})
 					]
 				];

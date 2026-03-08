@@ -50,6 +50,20 @@ struct FLIGHTPROJECT_API FFlightTransformFragment : public FMassFragment
 };
 
 /**
+ * Fragment tracking whether this entity was modified by VEX/Verse this frame.
+ * Used for sparse blitting to the GPU.
+ */
+USTRUCT()
+struct FLIGHTPROJECT_API FFlightVexDirtyFragment : public FMassFragment
+{
+	GENERATED_BODY()
+
+	/** Bitmask or simple bool indicating if CPU state needs sync to GPU */
+	UPROPERTY()
+	bool bIsDirty = false;
+};
+
+/**
  * Visual/rendering properties for flight entities.
  * Only required when representation (Actor) is spawned.
  */

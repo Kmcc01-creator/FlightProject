@@ -10,6 +10,9 @@ from . import SceneSetup
 from . import AssetTools
 from . import DataReload
 from . import Bootstrap
+from . import SchemaTools
+from . import PIETrace
+from . import VexTools
 
 __all__ = [
     'SwarmSetup',
@@ -18,6 +21,9 @@ __all__ = [
     'AssetTools',
     'DataReload',
     'Bootstrap',
+    'SchemaTools',
+    'PIETrace',
+    'VexTools',
 ]
 
 def initialize():

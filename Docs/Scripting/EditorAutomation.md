@@ -19,6 +19,9 @@ Content/Python/
     ├── Bootstrap.py            # World bootstrap, swarm spawning
     ├── DataReload.py           # CSV hot-reload via C++ bridge
     ├── Validation.py           # CSV/asset validation
+    ├── SchemaTools.py          # Code-first schema ensure/validation
+    ├── PIETrace.py             # PIE startup actor trace automation
+    ├── VexTools.py             # Schema-driven VEX source validation
     ├── SceneSetup.py           # Level/scene automation
     ├── AssetTools.py           # Asset creation/manipulation
     └── SwarmSetup.py           # SwarmEncounter asset setup
@@ -140,6 +143,23 @@ AssetTools.ensure_swarm_encounter_assets()
 AssetTools.duplicate_and_modify("/Game/Path/Asset", "NewName", property=value)
 AssetTools.list_assets("/Game/Data", asset_class="DataTable")
 AssetTools.rename_assets_by_pattern("/Game/Data", "Old", "New")
+```
+
+### VexTools.py
+
+Schema-driven helpers for VEX authoring validation.
+
+```python
+from FlightProject import VexTools
+
+# Contract inspection
+VexTools.get_contract_symbols()
+
+# Validate source
+VexTools.validate_source("@velocity += normalize(@position) * 25.0;")
+
+# Report export
+VexTools.export_validation_report("@velocity += @foo;")
 ```
 
 ## C++ Bridge: UFlightScriptingLibrary
@@ -301,6 +321,18 @@ Validation.run_all_validation()
 DataReload.print_csv_summary()
 Bootstrap.status()
 ```
+
+## PIE Tracing Docs
+
+For PIE startup spawn analysis and trace pipeline details, see:
+
+- `Docs/Workflow/PIE_Spawn.md`
+- `Docs/Scripting/VexSchemaValidation.md`
+
+That document covers:
+- observed startup spawn origins from a concrete trace artifact
+- C++ PIE observation subsystem behavior and cvars
+- Python `PIETrace` automation (delegate mode + ticker fallback)
 
 ## Debugging
 

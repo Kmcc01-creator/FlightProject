@@ -82,6 +82,120 @@ bool FFlightGpuPerceptionTest::RunTest(const FString& Parameters)
 // Benchmarking Path
 // ============================================================================
 
+class FFlightGpuPerceptionCompletionCommand : public IAutomationLatentCommand
+{
+public:
+	FFlightGpuPerceptionCompletionCommand(
+		FAutomationTestBase* InTest,
+		UWorld* InWorld)
+		: Test(InTest)
+		, World(InWorld)
+	{}
+
+	virtual bool Update() override
+	{
+		if (!Test)
+		{
+			return true;
+		}
+
+		if (!bStarted)
+		{
+			bStarted = true;
+			StartTime = FPlatformTime::Seconds();
+
+			if (!World.IsValid())
+			{
+				Test->AddError(TEXT("GpuPerception completion test: invalid world."));
+				return true;
+			}
+
+			Perception = World->GetSubsystem<UFlightGpuPerceptionSubsystem>();
+			IoUringSubsystem = World->GetSubsystem<UFlightIoUringSubsystem>();
+
+			if (!Perception || !Perception->IsAvailable())
+			{
+				Test->AddInfo(TEXT("GpuPerception completion test skipped: subsystem unavailable."));
+				return true;
+			}
+
+			FFlightPerceptionRequest Request;
+			Request.EntityPositions.Add(FVector4f(0, 0, 0, 500.0f));
+			Request.ObstacleMinBounds.Add(FVector4f(-50, -50, -50, 0));
+			Request.ObstacleMaxBounds.Add(FVector4f(50, 50, 50, 0));
+
+			Perception->SubmitPerceptionRequest(Request, [this](const FFlightPerceptionResult& Result)
+			{
+				bCallbackReceived = true;
+				LastResult = Result;
+			});
+		}
+
+		if (IoUringSubsystem)
+		{
+			IoUringSubsystem->ProcessCompletions();
+		}
+
+		if (bCallbackReceived)
+		{
+			Test->TestTrue(TEXT("Perception callback should resolve with a request id"), LastResult.RequestId > 0);
+			Test->TestTrue(TEXT("Pending requests should be drained after callback"), Perception && Perception->GetPendingCount() == 0);
+			return true;
+		}
+
+		if ((FPlatformTime::Seconds() - StartTime) > 10.0)
+		{
+			const int32 PendingCount = Perception ? Perception->GetPendingCount() : -1;
+			Test->AddError(FString::Printf(
+				TEXT("GpuPerception completion test timed out (pending=%d)."),
+				PendingCount));
+			return true;
+		}
+
+		return false;
+	}
+
+private:
+	FAutomationTestBase* Test = nullptr;
+	TWeakObjectPtr<UWorld> World;
+	UFlightGpuPerceptionSubsystem* Perception = nullptr;
+	UFlightIoUringSubsystem* IoUringSubsystem = nullptr;
+	bool bStarted = false;
+	bool bCallbackReceived = false;
+	double StartTime = 0.0;
+	FFlightPerceptionResult LastResult;
+};
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightGpuPerceptionCompletionTest,
+	"FlightProject.Spatial.GpuPerception.CallbackResolves",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FFlightGpuPerceptionCompletionTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = nullptr;
+	if (GEngine)
+	{
+		for (const FWorldContext& Context : GEngine->GetWorldContexts())
+		{
+			if (Context.WorldType == EWorldType::Editor || Context.WorldType == EWorldType::PIE)
+			{
+				World = Context.World();
+				break;
+			}
+		}
+	}
+
+	if (!World)
+	{
+		AddError(TEXT("Could find no valid World for GpuPerception completion test."));
+		return false;
+	}
+
+	ADD_LATENT_AUTOMATION_COMMAND(FFlightGpuPerceptionCompletionCommand(this, World));
+	return true;
+}
+
 class FFlightGpuScaleBenchmarkCommand : public IAutomationLatentCommand
 {
 public:

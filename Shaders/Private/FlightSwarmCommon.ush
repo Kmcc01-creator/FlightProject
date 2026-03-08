@@ -5,92 +5,152 @@
 #define FLIGHT_SWARM_COMMON
 
 // We use float4 for RHI compatibility in StructuredBuffers
-// Each FDroidState is 2x float4
-// float4 [0] = (pos.x, pos.y, pos.z, shield)
-// float4 [1] = (vel.x, vel.y, vel.z, status)
+float3 GetDroidPosition(StructuredBuffer<float4> Buffer, uint Index) { return Buffer[Index * 2].xyz; }
+float GetDroidShield(StructuredBuffer<float4> Buffer, uint Index) { return Buffer[Index * 2].w; }
+float3 GetDroidVelocity(StructuredBuffer<float4> Buffer, uint Index) { return Buffer[Index * 2 + 1].xyz; }
+uint GetDroidStatus(StructuredBuffer<float4> Buffer, uint Index) { return asuint(Buffer[Index * 2 + 1].w); }
 
-float3 GetDroidPosition(StructuredBuffer<float4> Buffer, uint Index)
-{
-    return Buffer[Index * 2].xyz;
-}
+void SetDroidPositionShield(RWStructuredBuffer<float4> Buffer, uint Index, float3 Pos, float Shield) { Buffer[Index * 2] = float4(Pos, Shield); }
+void SetDroidVelocityStatus(RWStructuredBuffer<float4> Buffer, uint Index, float3 Vel, uint Status) { Buffer[Index * 2 + 1] = float4(Vel, asfloat(Status)); }
 
-float GetDroidShield(StructuredBuffer<float4> Buffer, uint Index)
-{
-    return Buffer[Index * 2].w;
-}
-
-float3 GetDroidVelocity(StructuredBuffer<float4> Buffer, uint Index)
-{
-    return Buffer[Index * 2 + 1].xyz;
-}
-
-uint GetDroidStatus(StructuredBuffer<float4> Buffer, uint Index)
-{
-    return asuint(Buffer[Index * 2 + 1].w);
-}
-
-// Write helpers for RWStructuredBuffer
-void SetDroidPositionShield(RWStructuredBuffer<float4> Buffer, uint Index, float3 Pos, float Shield)
-{
-    Buffer[Index * 2] = float4(Pos, Shield);
-}
-
-void SetDroidVelocityStatus(RWStructuredBuffer<float4> Buffer, uint Index, float3 Vel, uint Status)
-{
-    Buffer[Index * 2 + 1] = float4(Vel, asfloat(Status));
-}
-
-// The Command UBO - must match SwarmSimulationTypes.h
 struct FSwarmGlobalCommand
 {
     float4 PlayerPosRadius;
     float4 BeaconPosStrength;
-    
     float SmoothingRadius;
     float GasConstant;
     float RestDensity;
     float Viscosity;
-
     float AvoidanceStrength;
     float MaxAcceleration;
     float DeltaTime;
     uint  CommandType;
-
     uint  FrameIndex;
-    uint  PredictionHorizon; // Number of rollout steps
-    uint2 Padding;
+    uint  PredictionHorizon;
+    uint  LatticeResolution;
+    float LatticeExtent;
+    float LatticeDecay;
+    float LatticePropStrength;
+    uint  CloudResolution;
+    float CloudExtent;
+    float CloudDecay;
+    float CloudDiffusion;
+    float CloudInjection;
+    uint  NumEvents;
 };
 
-// 3D Grid Parameters
-#define GRID_HASH_SIZE 4194304 // 2^22
-#define GRID_CELL_SIZE 500.0f  // Matches default SmoothingRadius
+/** POD Event Structure for GPU */
+struct FTransientEvent
+{
+    float3 Position;
+    float Radius;
+    uint Type;
+    float Intensity;
+    float2 Padding;
+};
+
+// --- Standard Global Resources ---
+// These must be defined in the shader's parameter struct in C++
+// We declare them here at file scope so the helpers can access them.
+
+Texture3D<float4> ReadLatticeArray;
+SamplerState ReadLatticeSampler;
+RWTexture3D<uint> OutLatticeRArray;
+RWTexture3D<uint> OutLatticeGArray;
+RWTexture3D<uint> OutLatticeBArray;
+
+Texture3D<float> ReadCloudArray;
+SamplerState ReadCloudSampler;
+RWTexture3D<uint> OutCloudAccumArray;
+
+StructuredBuffer<FTransientEvent> EventBuffer;
+
+float3 GridCenter;
+float GridExtent;
+uint GridResolution;
+uint NumEvents;
+
+float3 SampleLightLattice(float3 WorldPos, uint LatticeID = 0)
+{
+    float3 RelativePos = (WorldPos - GridCenter) / GridExtent + 0.5f;
+    return ReadLatticeArray.SampleLevel(ReadLatticeSampler, RelativePos, 0).rgb;
+}
+
+void InjectLightLattice(float3 WorldPos, float3 Color, uint LatticeID = 0)
+{
+    float3 RelativePos = (WorldPos - GridCenter) / GridExtent + 0.5f;
+    if (any(RelativePos < 0.0f) || any(RelativePos > 1.0f)) return;
+    uint3 VoxelCoord = (uint3)(RelativePos * (float)GridResolution);
+    if (any(VoxelCoord >= GridResolution)) return;
+    
+    const float FixedPointScale = 1000.0f;
+    uint3 FixedColor = (uint3)(Color * FixedPointScale);
+
+    InterlockedAdd(OutLatticeRArray[VoxelCoord], FixedColor.r);
+    InterlockedAdd(OutLatticeGArray[VoxelCoord], FixedColor.g);
+    InterlockedAdd(OutLatticeBArray[VoxelCoord], FixedColor.b);
+}
+
+float SampleCloudDensity(float3 WorldPos, uint CloudID = 0)
+{
+    float3 RelativePos = (WorldPos - GridCenter) / GridExtent + 0.5f;
+    return ReadCloudArray.SampleLevel(ReadCloudSampler, RelativePos, 0).r;
+}
+
+void InjectCloudDensity(float3 WorldPos, float Amount, uint CloudID = 0)
+{
+    float3 RelativePos = (WorldPos - GridCenter) / GridExtent + 0.5f;
+    if (any(RelativePos < 0.0f) || any(RelativePos > 1.0f)) return;
+    uint3 VoxelCoord = (uint3)(RelativePos * (float)GridResolution);
+    if (any(VoxelCoord >= GridResolution)) return;
+
+    const float FixedPointScale = 1000.0f;
+    uint FixedDensity = (uint)(Amount * FixedPointScale);
+    InterlockedAdd(OutCloudAccumArray[VoxelCoord], FixedDensity);
+}
+
+float3 SampleEventField(float3 WorldPos, uint TargetType, uint InNumEvents, StructuredBuffer<FTransientEvent> InEventBuffer)
+{
+    float3 Result = float3(0, 0, 0);
+    for (uint i = 0; i < InNumEvents; ++i)
+    {
+        FTransientEvent Ev = InEventBuffer[i];
+        if (Ev.Type == TargetType)
+        {
+            float3 Dir = WorldPos - Ev.Position;
+            float Dist = length(Dir);
+            if (Dist < Ev.Radius && Dist > 0.001f)
+            {
+                float Falloff = 1.0f - (Dist / Ev.Radius);
+                Result += normalize(Dir) * Falloff * Ev.Intensity;
+            }
+        }
+    }
+    return Result;
+}
+
+float sdSphere(float3 p, float s) { return length(p) - s; }
+float sdBox(float3 p, float3 b) { float3 q = abs(p) - b; return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0); }
+float sdCylinder(float3 p, float h, float r) { float2 d = abs(float2(length(p.xz), p.y)) - float2(r, h); return min(max(d.x, d.y), 0.0) + length(max(d, 0.0)); }
+
+float opUnion(float d1, float d2) { return min(d1, d2); }
+float opSubtract(float d1, float d2) { return max(-d1, d2); }
+float opIntersect(float d1, float d2) { return max(d1, d2); }
+float opSmoothUnion(float d1, float d2, float k) { float h = clamp(0.5 + 0.5 * (d2 - d1) / k, 0.0, 1.0); return lerp(d2, d1, h) - k * h * (1.0 - h); }
+
+Texture3D<float> StructureSDF;
+SamplerState StructureSDFSampler;
+float SampleLevelSDF(float3 WorldPos) { float3 RelativePos = (WorldPos - GridCenter) / GridExtent + 0.5f; return StructureSDF.SampleLevel(StructureSDFSampler, RelativePos, 0).r; }
+float3 CalculateSDFGradient(float3 p, float h) { const float2 k = float2(1, -1); return normalize(k.xyy * SampleLevelSDF(p + k.xyy * h) + k.yyx * SampleLevelSDF(p + k.yyx * h) + k.yxy * SampleLevelSDF(p + k.yxy * h) + k.xxx * SampleLevelSDF(p + k.xxx * h)); }
+
+#define GRID_HASH_SIZE 1048576 // 2^20
+#define GRID_CELL_SIZE 500.0f
 #define PI 3.14159265359f
 
-uint3 GetGridCell(float3 WorldPos)
-{
-    return uint3(floor(WorldPos / GRID_CELL_SIZE));
-}
-
-uint HashCell(uint3 Cell)
-{
-    // Standard large-prime spatial hash
-    return ((Cell.x * 73856093u) ^ (Cell.y * 19349663u) ^ (Cell.z * 83492791u)) % GRID_HASH_SIZE;
-}
-
-// SPH Kernel Coefficients
-float GetPoly6Coefficient(float h)
-{
-    return 315.0f / (64.0f * PI * pow(abs(h), 9));
-}
-
-float GetSpikyGradientCoefficient(float h)
-{
-    return -45.0f / (PI * pow(abs(h), 6));
-}
-
-float GetViscosityLaplacianCoefficient(float h)
-{
-    return 45.0f / (PI * pow(abs(h), 6));
-}
+uint3 GetGridCell(float3 WorldPos) { return uint3(floor(WorldPos / GRID_CELL_SIZE)); }
+uint HashCell(uint3 Cell) { return ((Cell.x * 73856093u) ^ (Cell.y * 19349663u) ^ (Cell.z * 83492791u)) % GRID_HASH_SIZE; }
+float GetPoly6Coefficient(float h) { return 315.0f / (64.0f * PI * pow(abs(h), 9)); }
+float GetSpikyGradientCoefficient(float h) { return -45.0f / (PI * pow(abs(h), 6)); }
+float GetViscosityLaplacianCoefficient(float h) { return 45.0f / (PI * pow(abs(h), 6)); }
 
 #endif

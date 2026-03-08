@@ -64,6 +64,15 @@ namespace Flight::Reflection::Test
     };
 
     using FVisualFlightAssetRow = FFlightAssetRow::Add<"Visuals", FVisualConfig>;
+
+    struct FSerializationPolicyData
+    {
+        int32 PersistentValue = 0;
+        int32 RuntimeTransient = 0;
+        int32 RuntimeSkip = 0;
+
+        FLIGHT_REFLECT_BODY(FSerializationPolicyData);
+    };
 }
 
 // Specializations for the internal test types
@@ -89,6 +98,12 @@ namespace Flight::Reflection
     FLIGHT_REFLECT_FIELDS(FVisualConfig, 
         FLIGHT_FIELD(FLinearColor, BaseColor),
         FLIGHT_FIELD(float, Roughness)
+    )
+
+    FLIGHT_REFLECT_FIELDS_ATTR(FSerializationPolicyData,
+        FLIGHT_FIELD_ATTR(int32, PersistentValue, EditAnywhere),
+        FLIGHT_FIELD_ATTR(int32, RuntimeTransient, Transient),
+        FLIGHT_FIELD_ATTR(int32, RuntimeSkip, SkipSerialization)
     )
 }
 
@@ -207,6 +222,71 @@ bool FReflectionSerializationTest::RunTest(const FString& Parameters)
     
     TestEqual("DisplayName should match", Loaded.DisplayName, Original.DisplayName);
     TestEqual("Version should match", Loaded.Version, Original.Version);
+
+    return true;
+}
+
+/**
+ * Test: Serialization respects transient/skip policies
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FReflectionSerializationPolicyTest, "FlightProject.Reflection.Core.SerializationPolicy", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
+
+bool FReflectionSerializationPolicyTest::RunTest(const FString& Parameters)
+{
+    using namespace Flight::Reflection::Test;
+
+    FSerializationPolicyData Original;
+    Original.PersistentValue = 10;
+    Original.RuntimeTransient = 20;
+    Original.RuntimeSkip = 30;
+
+    TArray<uint8> Buffer;
+    FMemoryWriter Writer(Buffer);
+    Serialize(Original, Writer);
+
+    FSerializationPolicyData Loaded;
+    Loaded.PersistentValue = -1;
+    Loaded.RuntimeTransient = 999;
+    Loaded.RuntimeSkip = 888;
+
+    FMemoryReader Reader(Buffer);
+    Serialize(Loaded, Reader);
+
+    TestEqual("Persistent field should serialize", Loaded.PersistentValue, 10);
+    TestEqual("Transient field should not serialize", Loaded.RuntimeTransient, 999);
+    TestEqual("SkipSerialization field should not serialize", Loaded.RuntimeSkip, 888);
+
+    return true;
+}
+
+/**
+ * Test: Diff/Patch respects transient/skip policies
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FReflectionDiffPolicyTest, "FlightProject.Reflection.Core.DiffPolicy", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
+
+bool FReflectionDiffPolicyTest::RunTest(const FString& Parameters)
+{
+    using namespace Flight::Reflection::Test;
+
+    FSerializationPolicyData OldData;
+    OldData.PersistentValue = 1;
+    OldData.RuntimeTransient = 2;
+    OldData.RuntimeSkip = 3;
+
+    FSerializationPolicyData NewData = OldData;
+    NewData.PersistentValue = 100;
+    NewData.RuntimeTransient = 200;
+    NewData.RuntimeSkip = 300;
+
+    auto Patch = Diff(OldData, NewData);
+    TestEqual("Patch should include only serializable field changes", Patch.ChangedFields.Num(), 1);
+
+    FSerializationPolicyData Target = OldData;
+    Apply(Target, Patch);
+
+    TestEqual("Persistent field should be patched", Target.PersistentValue, 100);
+    TestEqual("Transient field should remain unchanged", Target.RuntimeTransient, 2);
+    TestEqual("SkipSerialization field should remain unchanged", Target.RuntimeSkip, 3);
 
     return true;
 }

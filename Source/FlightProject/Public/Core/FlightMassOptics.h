@@ -341,7 +341,7 @@ struct TRewriteMatch
 			{
 				if constexpr (UE::Mass::CFragment<F>)
 					return !Desc.GetFragments().Contains<F>();
-				else if constexpr (std::is_same_v<P, Without<F>>)
+				else if constexpr (UE::Mass::CTag<F>)
 					return !Desc.GetTags().Contains<F>();
 			}
 			return true;
@@ -355,17 +355,17 @@ struct TRewriteMatch
 			{
 				// Add fragment to composition
 				if constexpr (UE::Mass::CFragment<F>)
-					Desc.Fragments.Add<F>();
+					Desc.GetFragments().Add<F>();
 				else if constexpr (UE::Mass::CTag<F>)
-					Desc.Tags.Add<F>();
+					Desc.GetTags().Add<F>();
 			}
 			else if constexpr (std::is_same_v<P, Without<F>>)
 			{
 				// Remove fragment from composition
 				if constexpr (UE::Mass::CFragment<F>)
-					Desc.Fragments.Remove<F>();
+					Desc.GetFragments().Remove<F>();
 				else if constexpr (UE::Mass::CTag<F>)
-					Desc.Tags.Remove<F>();
+					Desc.GetTags().Remove<F>();
 			}
 		}
 	};

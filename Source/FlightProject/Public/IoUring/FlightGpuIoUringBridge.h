@@ -67,9 +67,14 @@ public:
 	 * Creates a binary semaphore that waits on UE's timeline and exports sync_fd.
 	 *
 	 * @param TrackingId Unique ID for this GPU work
-	 * @param Callback Called on game thread when GPU work completes
+	 * @param OnComplete Called on game thread when GPU work completes
+	 * @param OnFailure Called on game thread when signaling setup fails
+	 * @return True if completion signaling was registered, false on immediate setup failure
 	 */
-	void SignalGpuCompletion(int64 TrackingId, TFunction<void()> Callback);
+	bool SignalGpuCompletion(
+		int64 TrackingId,
+		TFunction<void()> OnComplete,
+		TFunction<void()> OnFailure = TFunction<void()>());
 
 	/**
 	 * Poll for GPU completions (call each frame)
@@ -108,7 +113,8 @@ private:
 		TUniquePtr<Flight::IoUring::FExportableSemaphore> Semaphore;
 		int32 SyncFd = -1;
 		uint64 IoUringUserData = 0;
-		TFunction<void()> Callback;
+		TFunction<void()> CompletionCallback;
+		TFunction<void()> FailureCallback;
 		double SubmitTime = 0.0;
 	};
 
@@ -126,6 +132,7 @@ private:
 	void SetupIoUringIntegration();
 	void OnEventFdReadable(int32 Result, uint32 Flags);
 	void OnSyncFdReadable(int64 TrackingId, int32 Result, uint32 Flags);
+	void HandleSyncFailure(int64 TrackingId, const TCHAR* Reason);
 
 	/**
 	 * Clean up a pending sync state (close fd, remove from map).

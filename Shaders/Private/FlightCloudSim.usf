@@ -1,0 +1,78 @@
+// Copyright Kelly Rey Wilson. All Rights Reserved.
+// FlightCloudSim - SCSL Volumetric Cloud System
+
+#include "/Engine/Private/Common.ush"
+
+// --- Injection Pass ---
+StructuredBuffer<float4> DroidStates;
+RWTexture3D<uint> OutCloudAccumArray;
+
+float3 GridCenter;
+float GridExtent;
+uint GridResolution;
+uint NumEntities;
+float InjectionAmount;
+
+static const float FixedPointScale = 1000.0f;
+
+[numthreads(64, 1, 1)]
+void CloudInjectionMain(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    uint EntityIndex = DispatchThreadId.x;
+    if (EntityIndex >= NumEntities) return;
+
+    // Load Position
+    float3 WorldPos = DroidStates[EntityIndex * 2].xyz;
+
+    // Calculate Voxel Coord
+    float3 RelativePos = (WorldPos - GridCenter) / GridExtent + 0.5f;
+    if (any(RelativePos < 0.0f) || any(RelativePos > 1.0f)) return;
+
+    uint3 VoxelCoord = (uint3)(RelativePos * (float)GridResolution);
+    if (any(VoxelCoord >= GridResolution)) return;
+
+    uint FixedDensity = (uint)(InjectionAmount * FixedPointScale);
+
+    // Atomic Inject Density
+    InterlockedAdd(OutCloudAccumArray[VoxelCoord], FixedDensity);
+}
+
+// --- Simulation Pass (Diffusion/Dissipation) ---
+Texture3D<uint> InCloudAccumArray;
+Texture3D<float> ReadCloudArray;
+RWTexture3D<float> WriteCloudArray;
+
+float DecayRate;
+float DiffusionStrength;
+
+[numthreads(4, 4, 4)]
+void CloudSimMain(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+    if (any(DispatchThreadId >= GridResolution)) return;
+    
+    int4 Coord = int4(DispatchThreadId, 0);
+
+    // 1. Get newly injected density
+    uint FixedInjected = InCloudAccumArray.Load(Coord);
+    float Injected = float(FixedInjected) / FixedPointScale;
+
+    // 2. Sample current persistent cloud
+    float Center = ReadCloudArray.Load(Coord);
+    
+    // 3. 6-tap diffusion (cross)
+    float Neighbors = 0;
+    Neighbors += ReadCloudArray.Load(Coord + int4(1, 0, 0, 0));
+    Neighbors += ReadCloudArray.Load(Coord - int4(1, 0, 0, 0));
+    Neighbors += ReadCloudArray.Load(Coord + int4(0, 1, 0, 0));
+    Neighbors += ReadCloudArray.Load(Coord - int4(0, 1, 0, 0));
+    Neighbors += ReadCloudArray.Load(Coord + int4(0, 0, 1, 0));
+    Neighbors += ReadCloudArray.Load(Coord - int4(0, 0, 1, 0));
+
+    float Average = Neighbors / 6.0f;
+    
+    // 4. Combine: (Persistent + Injected) -> Diffused -> Dissipated
+    float Total = Center + Injected;
+    float Propagated = lerp(Total, Average, DiffusionStrength) * DecayRate;
+
+    WriteCloudArray[DispatchThreadId] = saturate(Propagated);
+}

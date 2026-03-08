@@ -3,6 +3,7 @@
 	"EngineAssociation": "5F9B7F2C-6733-46F8-8CDF-2E962DA75B9C",
 	"Category": "Simulation",
 	"Description": "Autonomous flight sandbox with large-scale swarm support and GPU-driven systems.",
+	"DisableEnginePluginsByDefault": true,
 	"Modules": [
 		{
 			"Name": "FlightProject",
