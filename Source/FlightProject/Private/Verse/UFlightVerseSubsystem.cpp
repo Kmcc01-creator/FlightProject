@@ -15,6 +15,8 @@
 #include "VerseVM/VVMPlaceholder.h"
 #endif
 
+DEFINE_LOG_CATEGORY_STATIC(LogFlightVerseSubsystem, Log, All);
+
 void UFlightVerseSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
@@ -37,20 +39,56 @@ void UFlightVerseSubsystem::Deinitialize()
 
 bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSource, FString& OutErrors)
 {
+	// Initialize behavior state pessimistically; flip to executable only on true VM compile success.
+	FVerseBehavior& Behavior = Behaviors.FindOrAdd(BehaviorID);
+	Behavior.CompileState = EFlightVerseCompileState::VmCompileFailed;
+	Behavior.bHasExecutableProcedure = false;
+	Behavior.GeneratedVerseCode.Reset();
+	Behavior.LastCompileDiagnostics.Reset();
+
 	const Flight::Vex::FVexParseResult Result = Flight::Vex::ParseAndValidate(VexSource, SymbolDefinitions, false);
 
 	if (Result.Issues.Num() > 0)
 	{
 		for (const auto& Issue : Result.Issues)
 		{
-			OutErrors += FString::Printf(TEXT("VEX Error: %s at %d:%d\n"), *Issue.Message, Issue.Line, Issue.Column);
+			const TCHAR* SeverityLabel = Issue.Severity == Flight::Vex::EVexIssueSeverity::Error ? TEXT("Error") : TEXT("Warning");
+			OutErrors += FString::Printf(TEXT("VEX %s: %s at %d:%d\n"), SeverityLabel, *Issue.Message, Issue.Line, Issue.Column);
 		}
-		if (!Result.bSuccess) return false;
+		if (!Result.bSuccess)
+		{
+			Behavior.LastCompileDiagnostics = OutErrors;
+			return false;
+		}
 	}
 
-#if WITH_VERSE_VM || defined(__INTELLISENSE__)
-	// Store behavior metadata
-	FVerseBehavior& Behavior = Behaviors.FindOrAdd(BehaviorID);
+	// Enforce required-symbol contract in compile pipeline until parser-side strict mode lands.
+	TSet<FString> UsedSymbols;
+	for (const FString& Symbol : Result.Program.UsedSymbols)
+	{
+		UsedSymbols.Add(Symbol);
+	}
+
+	TArray<FString> MissingRequiredSymbols;
+	for (const Flight::Vex::FVexSymbolDefinition& Def : SymbolDefinitions)
+	{
+		if (Def.bRequired && !UsedSymbols.Contains(Def.SymbolName))
+		{
+			MissingRequiredSymbols.Add(Def.SymbolName);
+		}
+	}
+	MissingRequiredSymbols.Sort();
+
+	if (MissingRequiredSymbols.Num() > 0)
+	{
+		OutErrors += FString::Printf(
+			TEXT("VEX Contract Error: missing required symbols: %s\n"),
+			*FString::Join(MissingRequiredSymbols, TEXT(", ")));
+		Behavior.LastCompileDiagnostics = OutErrors;
+		return false;
+	}
+
+	// Store behavior metadata regardless of VM availability.
 	Behavior.ExecutionRateHz = Result.Program.ExecutionRateHz;
 	Behavior.FrameInterval = Result.Program.FrameInterval;
 	
@@ -58,12 +96,11 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 	Behavior.bIsAsync = false;
 	for (const auto& S : Result.Program.Statements) 
 	{ 
-		if (S.Kind == Flight::Vex::EVexStatementKind::TargetDirective && S.SourceSpan == TEXT("@async")) 
-		{ 
-			Behavior.bIsAsync = true; break; 
-		} 
-	}
-#endif
+			if (S.Kind == Flight::Vex::EVexStatementKind::TargetDirective && S.SourceSpan == TEXT("@async")) 
+			{ 
+				Behavior.bIsAsync = true; break; 
+			} 
+		}
 
 	// Generate the Verse source code from the VEX AST
 	TMap<FString, FString> VerseBySymbol;
@@ -73,34 +110,72 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 	}
 	
 	const FString VerseCode = Flight::Vex::LowerToVerse(Result.Program, VerseBySymbol);
+	Behavior.GeneratedVerseCode = VerseCode;
+	Behavior.bHasExecutableProcedure = false;
+	Behavior.CompileState = EFlightVerseCompileState::GeneratedOnly;
 
 #if WITH_VERSE_VM || defined(__INTELLISENSE__)
-	// 1. Create uLang Toolchain
-	uLang::SToolchainParams Params;
-	// uLang::TSRef<uLang::CToolchain> Toolchain = uLang::CreateToolchain(Params);
-
-	// 2. Parse and Compile
-	OutErrors += FString::Printf(TEXT("Behavior %u: @rate(%.1fHz, %u frames) %s\n"), 
-		BehaviorID, Behaviors[BehaviorID].ExecutionRateHz, Behaviors[BehaviorID].FrameInterval, Behaviors[BehaviorID].bIsAsync ? TEXT("[Async]") : TEXT(""));
+	Behavior.LastCompileDiagnostics =
+		TEXT("Verse VM compile path is not implemented yet; behavior was generated but is not executable.");
+	OutErrors += FString::Printf(TEXT("Behavior %u: @rate(%.1fHz, %u frames) %s\n"),
+		BehaviorID, Behavior.ExecutionRateHz, Behavior.FrameInterval, Behavior.bIsAsync ? TEXT("[Async]") : TEXT(""));
+	OutErrors += Behavior.LastCompileDiagnostics + TEXT("\n");
 	OutErrors += TEXT("Generated Verse:\n") + VerseCode;
+	return false;
+#else
+	Behavior.LastCompileDiagnostics =
+		TEXT("Verse VM is unavailable in this build; behavior was generated but is not executable.");
+	OutErrors += FString::Printf(TEXT("Behavior %u: @rate(%.1fHz, %u frames) %s\n"),
+		BehaviorID, Behavior.ExecutionRateHz, Behavior.FrameInterval, Behavior.bIsAsync ? TEXT("[Async]") : TEXT(""));
+	OutErrors += Behavior.LastCompileDiagnostics + TEXT("\n");
+	OutErrors += TEXT("Generated Verse:\n") + VerseCode;
+	return false;
 #endif
-
-	return true;
 }
 
 void UFlightVerseSubsystem::ExecuteBehavior(uint32 BehaviorID, Flight::Swarm::FDroidState& DroidState)
 {
-#if WITH_VERSE_VM || defined(__INTELLISENSE__)
-	const FVerseBehavior* Behavior = Behaviors.Find(BehaviorID);
-	if (!Behavior) return;
+	(void)DroidState;
 
+	const FVerseBehavior* Behavior = Behaviors.Find(BehaviorID);
+	if (!Behavior)
+	{
+		return;
+	}
+
+	if (!Behavior->bHasExecutableProcedure)
+	{
+		return;
+	}
+
+#if WITH_VERSE_VM || defined(__INTELLISENSE__)
 	/*
 	VerseContext.EnterVM([&]()
 	{
 		// ... Execute Behavior->Procedure ...
 	});
 	*/
+#else
+	UE_LOG(LogFlightVerseSubsystem, Warning, TEXT("ExecuteBehavior called but Verse VM is unavailable in this build."));
 #endif
+}
+
+EFlightVerseCompileState UFlightVerseSubsystem::GetBehaviorCompileState(uint32 BehaviorID) const
+{
+	const FVerseBehavior* Behavior = Behaviors.Find(BehaviorID);
+	return Behavior ? Behavior->CompileState : EFlightVerseCompileState::VmCompileFailed;
+}
+
+bool UFlightVerseSubsystem::HasExecutableBehavior(uint32 BehaviorID) const
+{
+	const FVerseBehavior* Behavior = Behaviors.Find(BehaviorID);
+	return Behavior ? Behavior->bHasExecutableProcedure : false;
+}
+
+FString UFlightVerseSubsystem::GetBehaviorCompileDiagnostics(uint32 BehaviorID) const
+{
+	const FVerseBehavior* Behavior = Behaviors.Find(BehaviorID);
+	return Behavior ? Behavior->LastCompileDiagnostics : FString();
 }
 
 void UFlightVerseSubsystem::RegisterNativeComponents()
@@ -123,4 +198,5 @@ namespace
 
 void UFlightVerseSubsystem::RegisterNativeVerseFunctions()
 {
+	UE_LOG(LogFlightVerseSubsystem, Verbose, TEXT("UFlightVerseSubsystem: native Verse registration is pending implementation."));
 }

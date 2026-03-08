@@ -7,13 +7,27 @@ This section captures the most recent observed build/test outcomes and commands 
 
 ### Latest Build Snapshot (2026-03-08)
 - `./Scripts/build_targets.sh Development` succeeded for `FlightProjectEditor` on Linux.
-- Recent blocker resolved in `FlightSwarmSubsystem.cpp`:
-  - invalid cast from `FRDGPooledTexture*` to `IPooledRenderTarget*`
-  - replaced with `FRHITextureDesc` checks via `PersistentTexture->GetRHI()->GetDesc()`.
+- Recent non-parser hardening compiled cleanly:
+  - schema-driven command handling fix (`INVALID_AFFINITY` + fail-fast unknown types)
+  - `uint32` -> VEX `Int` mapping for schema symbol generation
+  - required-symbol enforcement in `UFlightVerseSubsystem::CompileVex`
+  - explicit Verse compile-state metadata (`GeneratedOnly`/`VmCompiled`/`VmCompileFailed`)
+  - scripting accessors for compile state/executability/diagnostics
+  - truthful non-executable Verse compile reporting and behavior metadata storage
+  - hardened concurrency spec world acquisition + async compile-state assertions
 
 ### Latest Headless Automation Snapshot (2026-03-08)
 - `Automation RunTests FlightProject` discovered **49** tests in headless/`NullRHI`.
-- Current known parser failures in focused runs:
+- Focused hardening bucket now passes:
+  - `FlightProject.Integration.SchemaDriven`
+  - `FlightProject.Schema.Vex.ManifestValidation`
+  - `FlightProject.Verse.CompileContract`
+  - `FlightProject.Verse.Subsystem`
+- Step 2/3 validation bucket passes:
+  - `FlightProject.Integration.Concurrency`
+  - `FlightProject.Verse.CompileContract`
+  - `FlightProject.Verse.Subsystem`
+- Current known parser failures in broader focused runs (parser track in progress):
   - `FlightProject.Schema.Vex.Parser.Semantics.IfConditionBoolLike`
   - `FlightProject.Schema.Vex.Parser.Semantics.TypeMismatch`
   - `FlightProject.Schema.Vex.Parser.Diagnostics`
@@ -76,6 +90,14 @@ stdbuf -oL -eL "$UE_ROOT/Engine/Binaries/Linux/UnrealEditor-Cmd" \
   -unattended -nopause -nosplash -stdout -FullStdOutLogOutput \
   -NullRHI -NoPCH -NoBT -NoSound -NoDDCMaintenance \
   -DDC=NoZenLocalFallback -LocalDataCachePath="$PROJECT_DIR/DerivedDataCache"
+```
+
+**Non-Parser Hardening Bucket (Schema + Verse Compile Contract):**
+```bash
+export UE_ROOT=/home/kelly/Unreal/UnrealEngine
+TEST_FILTER="FlightProject.Integration.SchemaDriven+FlightProject.Schema.Vex.ManifestValidation+FlightProject.Verse.CompileContract+FlightProject.Verse.Subsystem" \
+TEST_LOG_PROFILE=focused TEST_STREAM_FILTER=errors \
+./Scripts/run_tests_headless.sh
 ```
 
 **Swarm Persistence Bucket (new deterministic tests):**

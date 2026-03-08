@@ -49,11 +49,25 @@ bool FFlightSchemaDrivenValidationTest::RunTest(const FString& Parameters)
 {
 	TArray<FString> Parts;
 	Parameters.ParseIntoArray(Parts, TEXT("|"), true);
-	if (Parts.Num() < 3) return false;
+	if (Parts.Num() < 3)
+	{
+		AddError(FString::Printf(TEXT("Schema-driven test command is malformed: '%s'"), *Parameters));
+		return false;
+	}
 
 	const FString TestType = Parts[0];
 	const FString SymbolName = Parts[1];
 	const FString Context = Parts[2];
+	const bool bKnownType =
+		TestType == TEXT("VALID")
+		|| TestType == TEXT("INVALID_RESIDENCY")
+		|| TestType == TEXT("INVALID_AFFINITY");
+	TestTrue(FString::Printf(TEXT("Schema-generated command type '%s' should be supported"), *TestType), bKnownType);
+	if (!bKnownType)
+	{
+		AddError(FString::Printf(TEXT("Unhandled schema-driven test command type '%s'"), *TestType));
+		return false;
+	}
 
 	// Dynamically generate a VEX script based on the test parameters
 	FString VexSource;
@@ -86,12 +100,12 @@ bool FFlightSchemaDrivenValidationTest::RunTest(const FString& Parameters)
 		for (const auto& Issue : Result.Issues) { if (Issue.Message.Contains(TEXT("cannot be used in"))) bFoundError = true; }
 		TestTrue(FString::Printf(TEXT("Schema-generated test should catch residency violation for %s in %s context"), *SymbolName, *Context), bFoundError);
 	}
-	else if (TestType == TEXT("INVALID_AFFIDINITY"))
+	else if (TestType == TEXT("INVALID_AFFINITY"))
 	{
 		bool bFoundError = false;
 		for (const auto& Issue : Result.Issues) { if (Issue.Message.Contains(TEXT("Game Thread"))) bFoundError = true; }
 		TestTrue(FString::Printf(TEXT("Schema-generated test should catch affinity violation for %s in %s context"), *SymbolName, *Context), bFoundError);
 	}
 
-	return true;
+	return bKnownType;
 }

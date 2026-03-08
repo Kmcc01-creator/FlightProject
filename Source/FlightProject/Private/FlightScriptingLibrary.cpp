@@ -1386,8 +1386,7 @@ TArray<int32> UFlightScriptingLibrary::GetRegisteredBehaviorIDs(const UObject* W
     TArray<int32> IDs;
     UWorld* World = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull);
     UFlightVerseSubsystem* VerseSubsystem = World ? World->GetSubsystem<UFlightVerseSubsystem>() : nullptr;
-    
-#if WITH_VERSE_VM || defined(__INTELLISENSE__)
+
     if (VerseSubsystem)
     {
         for (const auto& KV : VerseSubsystem->Behaviors)
@@ -1395,7 +1394,6 @@ TArray<int32> UFlightScriptingLibrary::GetRegisteredBehaviorIDs(const UObject* W
             IDs.Add(static_cast<int32>(KV.Key));
         }
     }
-#endif
     return IDs;
 }
 
@@ -1404,7 +1402,6 @@ float UFlightScriptingLibrary::GetBehaviorExecutionRate(const UObject* WorldCont
     UWorld* World = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull);
     UFlightVerseSubsystem* VerseSubsystem = World ? World->GetSubsystem<UFlightVerseSubsystem>() : nullptr;
 
-#if WITH_VERSE_VM || defined(__INTELLISENSE__)
     if (VerseSubsystem)
     {
         if (const auto* B = VerseSubsystem->Behaviors.Find(static_cast<uint32>(BehaviorID)))
@@ -1412,7 +1409,6 @@ float UFlightScriptingLibrary::GetBehaviorExecutionRate(const UObject* WorldCont
             return B->ExecutionRateHz;
         }
     }
-#endif
     return 0.0f;
 }
 
@@ -1421,7 +1417,6 @@ int32 UFlightScriptingLibrary::GetBehaviorFrameInterval(const UObject* WorldCont
     UWorld* World = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull);
     UFlightVerseSubsystem* VerseSubsystem = World ? World->GetSubsystem<UFlightVerseSubsystem>() : nullptr;
 
-#if WITH_VERSE_VM || defined(__INTELLISENSE__)
     if (VerseSubsystem)
     {
         if (const auto* B = VerseSubsystem->Behaviors.Find(static_cast<uint32>(BehaviorID)))
@@ -1429,6 +1424,32 @@ int32 UFlightScriptingLibrary::GetBehaviorFrameInterval(const UObject* WorldCont
             return static_cast<int32>(B->FrameInterval);
         }
     }
-#endif
     return 1;
+}
+
+EFlightVerseCompileState UFlightScriptingLibrary::GetBehaviorCompileState(const UObject* WorldContextObject, int32 BehaviorID)
+{
+    UWorld* World = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull);
+    UFlightVerseSubsystem* VerseSubsystem = World ? World->GetSubsystem<UFlightVerseSubsystem>() : nullptr;
+    return VerseSubsystem
+        ? VerseSubsystem->GetBehaviorCompileState(static_cast<uint32>(BehaviorID))
+        : EFlightVerseCompileState::VmCompileFailed;
+}
+
+bool UFlightScriptingLibrary::IsBehaviorExecutable(const UObject* WorldContextObject, int32 BehaviorID)
+{
+    UWorld* World = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull);
+    UFlightVerseSubsystem* VerseSubsystem = World ? World->GetSubsystem<UFlightVerseSubsystem>() : nullptr;
+    return VerseSubsystem
+        ? VerseSubsystem->HasExecutableBehavior(static_cast<uint32>(BehaviorID))
+        : false;
+}
+
+FString UFlightScriptingLibrary::GetBehaviorCompileDiagnostics(const UObject* WorldContextObject, int32 BehaviorID)
+{
+    UWorld* World = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull);
+    UFlightVerseSubsystem* VerseSubsystem = World ? World->GetSubsystem<UFlightVerseSubsystem>() : nullptr;
+    return VerseSubsystem
+        ? VerseSubsystem->GetBehaviorCompileDiagnostics(static_cast<uint32>(BehaviorID))
+        : FString();
 }

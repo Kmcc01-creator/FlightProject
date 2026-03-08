@@ -36,6 +36,7 @@ bool FSchemaVexManifestValidationTest::RunTest(const FString&)
 	}
 
 	TSet<FString> Symbols;
+	TMap<FString, FString> ValueTypeBySymbol;
 	for (const auto& Value : *VexRequirements)
 	{
 		const TSharedPtr<FJsonObject> Requirement = Value->AsObject();
@@ -44,13 +45,16 @@ bool FSchemaVexManifestValidationTest::RunTest(const FString&)
 			continue;
 		}
 
-		Symbols.Add(Requirement->GetStringField(TEXT("symbolName")));
+		const FString SymbolName = Requirement->GetStringField(TEXT("symbolName"));
+		Symbols.Add(SymbolName);
+		ValueTypeBySymbol.Add(SymbolName, Requirement->GetStringField(TEXT("valueType")));
 	}
 
 	TestTrue(TEXT("Manifest should declare @position symbol"), Symbols.Contains(TEXT("@position")));
 	TestTrue(TEXT("Manifest should declare @velocity symbol"), Symbols.Contains(TEXT("@velocity")));
 	TestTrue(TEXT("Manifest should declare @shield symbol"), Symbols.Contains(TEXT("@shield")));
 	TestTrue(TEXT("Manifest should declare @status symbol"), Symbols.Contains(TEXT("@status")));
+	TestEqual(TEXT("@status should map to int valueType"), ValueTypeBySymbol.FindRef(TEXT("@status")), FString(TEXT("int")));
 
 	const FString LayoutTokenName = TEXT("FLIGHT_DROIDSTATE_LAYOUT_HASH");
 	const FString ReflectedHlsl = Flight::Reflection::HLSL::GenerateStructContractHLSL<Flight::Swarm::FDroidState>(

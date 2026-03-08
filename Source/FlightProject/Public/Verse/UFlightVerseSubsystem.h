@@ -18,6 +18,14 @@
 // Forward declaration in correct namespace
 namespace Flight::Swarm { struct FDroidState; }
 
+UENUM(BlueprintType)
+enum class EFlightVerseCompileState : uint8
+{
+	GeneratedOnly UMETA(DisplayName = "GeneratedOnly"),
+	VmCompiled UMETA(DisplayName = "VmCompiled"),
+	VmCompileFailed UMETA(DisplayName = "VmCompileFailed")
+};
+
 /**
  * UFlightVerseSubsystem
  * 
@@ -34,8 +42,8 @@ public:
 	virtual void Deinitialize() override;
 
 	/**
-	 * Compiles VEX source into Verse bytecode for a specific behavior ID.
-	 * This involves VEX parsing -> Verse Lowering -> uLang Compilation.
+	 * Compiles VEX source for a specific behavior ID.
+	 * Returns true only when an executable Verse VM procedure is produced.
 	 */
 	bool CompileVex(uint32 BehaviorID, const FString& VexSource, FString& OutErrors);
 
@@ -45,18 +53,31 @@ public:
 	 */
 	void ExecuteBehavior(uint32 BehaviorID, Flight::Swarm::FDroidState& DroidState);
 
-#if WITH_VERSE_VM || defined(__INTELLISENSE__)
+	/** Returns compile-state metadata for a behavior ID. */
+	EFlightVerseCompileState GetBehaviorCompileState(uint32 BehaviorID) const;
+
+	/** Returns true when a behavior has an executable Verse VM procedure. */
+	bool HasExecutableBehavior(uint32 BehaviorID) const;
+
+	/** Returns the most recent compile diagnostics string for a behavior ID. */
+	FString GetBehaviorCompileDiagnostics(uint32 BehaviorID) const;
+
 	struct FVerseBehavior
 	{
+#if WITH_VERSE_VM || defined(__INTELLISENSE__)
 		TWriteBarrier<Verse::VProcedure> Procedure;
+#endif
 		float ExecutionRateHz = 0.0f;
 		uint32 FrameInterval = 1;
 		bool bIsAsync = false;
+		bool bHasExecutableProcedure = false;
+		EFlightVerseCompileState CompileState = EFlightVerseCompileState::VmCompileFailed;
+		FString GeneratedVerseCode;
+		FString LastCompileDiagnostics;
 	};
 
 	/** Map of BehaviorID to compiled Verse behavior */
 	TMap<uint32, FVerseBehavior> Behaviors;
-#endif
 
 private:
 	/** Builds Verse descriptors for all reflected types */

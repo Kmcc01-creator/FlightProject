@@ -36,6 +36,9 @@ Scaling beyond singletons, the engine supports distributed execution and dynamic
 *   **C++23 Traits**: Zero-UHT compile-time reflection for CPU/GPU data parity.
 *   **Monadic RDG**: 12-pass simulation orchestrated via type-safe functional chains.
 *   **Linux/Vulkan**: Optimized for `io_uring` and high-performance asynchronous execution.
+*   **Code Standards Baseline**: Initial findings, policy, and vertical-slice validation plan.
+
+[Read the Code Standards Baseline](./CodeStandards.md)
 
 ---
 *Built with passion for data-oriented design and artistic opinion.*

@@ -30,6 +30,7 @@ EFlightVexSymbolValueType GetVexValueType()
 	if constexpr (std::is_same_v<T, FVector3f>) return EFlightVexSymbolValueType::Float3;
 	if constexpr (std::is_same_v<T, FVector4f>) return EFlightVexSymbolValueType::Float4;
 	if constexpr (std::is_same_v<T, int32>) return EFlightVexSymbolValueType::Int;
+	if constexpr (std::is_same_v<T, uint32>) return EFlightVexSymbolValueType::Int;
 	if constexpr (std::is_same_v<T, bool>) return EFlightVexSymbolValueType::Bool;
 	return EFlightVexSymbolValueType::Float;
 }

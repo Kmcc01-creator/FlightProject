@@ -5,7 +5,9 @@
 #include "Vex/FlightVexParser.h"
 #include "Verse/UFlightVerseSubsystem.h"
 #include "Schema/FlightRequirementRegistry.h"
+#include "FlightScriptingLibrary.h"
 #include "Swarm/SwarmSimulationTypes.h"
+#include "Engine/Engine.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVexParsingTest, "FlightProject.Vex.Parsing", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
@@ -140,9 +142,68 @@ bool FFlightVerseSubsystemTest::RunTest(const FString& Parameters)
 		{
 			TestEqual(TEXT("@shield residency should be GpuOnly"), D.Residency, EFlightVexSymbolResidency::GpuOnly);
 		}
+		if (D.SymbolName == TEXT("@status"))
+		{
+			TestEqual(TEXT("@status value type should map to int"), D.ValueType, FString(TEXT("int")));
+		}
 	}
 
 	TestTrue(TEXT("Manifest should contain @position from FDroidState reflection"), bFoundDroidPos);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVerseCompileContractTest, "FlightProject.Verse.CompileContract", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FFlightVerseCompileContractTest::RunTest(const FString& Parameters)
+{
+	if (!GEngine || GEngine->GetWorldContexts().Num() == 0 || !GEngine->GetWorldContexts()[0].World())
+	{
+		AddError(TEXT("No valid world context available for Verse compile contract test"));
+		return false;
+	}
+
+	UWorld* World = GEngine->GetWorldContexts()[0].World();
+	UFlightVerseSubsystem* VerseSubsystem = World ? World->GetSubsystem<UFlightVerseSubsystem>() : nullptr;
+	if (!VerseSubsystem)
+	{
+		AddError(TEXT("FlightVerseSubsystem not found"));
+		return false;
+	}
+
+	{
+		FString OutErrors;
+		const bool bCompiled = VerseSubsystem->CompileVex(9001, TEXT("@gpu { @velocity = @position; }"), OutErrors);
+		TestFalse(TEXT("Compile should fail when required symbols are missing"), bCompiled);
+		TestTrue(TEXT("Compile errors should report missing required symbols"), OutErrors.Contains(TEXT("missing required symbols")));
+	}
+
+	{
+		const FString FullContractSource = TEXT("@gpu { @velocity = @position; @shield = @shield; @status = @status; }");
+		FString OutErrors;
+		const bool bCompiled = VerseSubsystem->CompileVex(9002, FullContractSource, OutErrors);
+		TestFalse(TEXT("Compile should report non-executable status while VM bridge is incomplete"), bCompiled);
+		TestTrue(TEXT("Compile output should include generated Verse text"), OutErrors.Contains(TEXT("Generated Verse:")));
+		TestTrue(TEXT("Compile output should report non-executable VM status"), OutErrors.Contains(TEXT("not executable")));
+
+		const UFlightVerseSubsystem::FVerseBehavior* Behavior = VerseSubsystem->Behaviors.Find(9002);
+		TestNotNull(TEXT("Behavior metadata should be registered even when VM compile is unavailable"), Behavior);
+		if (Behavior)
+		{
+			TestFalse(TEXT("Behavior should not be executable yet"), Behavior->bHasExecutableProcedure);
+			TestTrue(TEXT("Behavior should store generated Verse source"), !Behavior->GeneratedVerseCode.IsEmpty());
+			TestEqual(TEXT("Behavior compile state should be GeneratedOnly"), Behavior->CompileState, EFlightVerseCompileState::GeneratedOnly);
+			TestTrue(TEXT("Behavior should retain compile diagnostics"), Behavior->LastCompileDiagnostics.Contains(TEXT("not executable")));
+		}
+
+		TestEqual(TEXT("Scripting accessor should report GeneratedOnly state"),
+			UFlightScriptingLibrary::GetBehaviorCompileState(World, 9002),
+			EFlightVerseCompileState::GeneratedOnly);
+		TestFalse(TEXT("Scripting accessor should report non-executable behavior"),
+			UFlightScriptingLibrary::IsBehaviorExecutable(World, 9002));
+		TestTrue(TEXT("Scripting accessor should return compile diagnostics"),
+			UFlightScriptingLibrary::GetBehaviorCompileDiagnostics(World, 9002).Contains(TEXT("not executable")));
+	}
 
 	return true;
 }

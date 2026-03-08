@@ -24,7 +24,8 @@ Current default contract entries include:
 ### C++ editor tool path
 - `SSwarmOrchestrator` now reads symbol mappings from schema manifest data.
 - `Flight::Vex` parser front-end now tokenizes source and builds a lightweight statement AST before shader injection.
-- Expression parsing now uses precedence-aware AST construction (binary/unary operators and function-call nodes).
+- Expression parsing uses precedence-aware AST construction for current supported nodes.
+- Function-call/dot/pipe node handling is currently an active parser workstream and not yet fully represented in all parser tests.
 - Diagnostics are line/column aware (unknown symbols, malformed `if (...)`, unmatched braces/parentheses, unsupported tokens).
 - Semantic validation now enforces:
   - read-only symbol assignment errors
@@ -65,6 +66,10 @@ Move from "shape validation" to "compliance validation" by adding automation tha
 1. Unknown-symbol warnings are emitted for invalid tokens.
 2. Required symbol mappings are non-empty for both HLSL and Verse targets.
 3. Generated preview output reflects contract updates without code edits.
+
+Also track compile-contract behavior in Verse bridge:
+4. `CompileVex` fails when required schema symbols are missing.
+5. `CompileVex` reports non-executable status clearly when Verse VM compile path is unavailable/incomplete.
 
 Related draft for SCSL field/page schema:
 

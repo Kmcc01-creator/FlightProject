@@ -95,56 +95,413 @@ namespace
 
 	void BuildStatementAst(const TArray<FVexToken>& Tokens, TArray<FVexStatementAst>& OutStatements, TArray<FVexIssue>& OutIssues)
 	{
-		int32 Start = INDEX_NONE, Paren = 0; TArray<FVexToken> Braces;
-		for (int32 i = 0; i < Tokens.Num(); ++i)
+		int32 StatementStart = INDEX_NONE;
+		int32 ParenDepth = 0;
+		int32 ExpressionBraceDepth = 0; // Used for vector literals like {1,2,3}.
+
+		const auto EmitStatement = [&](const int32 EndTokenIndex)
 		{
-			const FVexToken& T = Tokens[i]; if (T.Kind == EVexTokenKind::EndOfFile) break; if (Start == INDEX_NONE && T.Kind != EVexTokenKind::Semicolon && T.Kind != EVexTokenKind::TargetDirective) Start = i;
-			if (T.Kind == EVexTokenKind::TargetDirective) {
-				FVexStatementAst S; S.Kind = EVexStatementKind::TargetDirective; S.StartTokenIndex = i; S.EndTokenIndex = i;
-				if (T.Lexeme == TEXT("@rate") && i + 1 < Tokens.Num() && Tokens[i + 1].Kind == EVexTokenKind::LParen) {
-					int32 D = 0, RP = INDEX_NONE;
-					for (int32 C = i + 1; C < Tokens.Num(); ++C) {
-						if (Tokens[C].Kind == EVexTokenKind::LParen) ++D;
-						else if (Tokens[C].Kind == EVexTokenKind::RParen) { --D; if (D == 0) { RP = C; break; } }
-					}
-					if (RP != INDEX_NONE) { S.EndTokenIndex = RP; i = RP; }
-				}
-				S.SourceSpan = BuildSpanText(Tokens, S.StartTokenIndex, S.EndTokenIndex);
-				OutStatements.Add(MoveTemp(S)); Start = INDEX_NONE; continue;
+			if (StatementStart == INDEX_NONE || EndTokenIndex < StatementStart)
+			{
+				return;
 			}
-			if (T.Kind == EVexTokenKind::KeywordIf) { if (i + 1 >= Tokens.Num() || Tokens[i + 1].Kind != EVexTokenKind::LParen) AddIssue(OutIssues, EVexIssueSeverity::Error, TEXT("`if` must be followed by '('."), T.Line, T.Column); else { int32 D = 0, RP = INDEX_NONE; for (int32 C = i + 1; C < Tokens.Num(); ++C) { if (Tokens[C].Kind == EVexTokenKind::LParen) ++D; else if (Tokens[C].Kind == EVexTokenKind::RParen) { --D; if (D == 0) { RP = C; break; } } } if (RP != INDEX_NONE) { FVexStatementAst S; S.Kind = EVexStatementKind::IfHeader; S.StartTokenIndex = i; S.EndTokenIndex = RP; S.SourceSpan = BuildSpanText(Tokens, i, RP); OutStatements.Add(MoveTemp(S)); Start = INDEX_NONE; } } }
-			else if (T.Kind == EVexTokenKind::LBrace) { FVexStatementAst S; S.Kind = EVexStatementKind::BlockOpen; S.StartTokenIndex = i; S.EndTokenIndex = i; S.SourceSpan = TEXT("{"); OutStatements.Add(MoveTemp(S)); Start = INDEX_NONE; }
-			else if (T.Kind == EVexTokenKind::RBrace) { FVexStatementAst S; S.Kind = EVexStatementKind::BlockClose; S.StartTokenIndex = i; S.EndTokenIndex = i; S.SourceSpan = TEXT("}"); OutStatements.Add(MoveTemp(S)); Start = INDEX_NONE; }
-			else if (T.Kind == EVexTokenKind::Semicolon && Start != INDEX_NONE) { FVexStatementAst S; S.StartTokenIndex = Start; S.EndTokenIndex = i - 1; S.SourceSpan = BuildSpanText(Tokens, Start, i - 1); S.Kind = EVexStatementKind::Expression; for (int32 j = Start; j <= i; ++j) if (Tokens[j].Kind == EVexTokenKind::Operator && IsAssignmentOperator(Tokens[j].Lexeme)) { S.Kind = EVexStatementKind::Assignment; break; } OutStatements.Add(MoveTemp(S)); Start = INDEX_NONE; }
+
+			FVexStatementAst Statement;
+			Statement.StartTokenIndex = StatementStart;
+			Statement.EndTokenIndex = EndTokenIndex;
+			Statement.SourceSpan = BuildSpanText(Tokens, StatementStart, EndTokenIndex);
+			Statement.Kind = EVexStatementKind::Expression;
+
+			for (int32 TokenIndex = StatementStart; TokenIndex <= EndTokenIndex; ++TokenIndex)
+			{
+				if (Tokens[TokenIndex].Kind == EVexTokenKind::Operator && IsAssignmentOperator(Tokens[TokenIndex].Lexeme))
+				{
+					Statement.Kind = EVexStatementKind::Assignment;
+					break;
+				}
+			}
+
+			OutStatements.Add(MoveTemp(Statement));
+		};
+
+		for (int32 TokenIndex = 0; TokenIndex < Tokens.Num(); ++TokenIndex)
+		{
+			const FVexToken& Token = Tokens[TokenIndex];
+			if (Token.Kind == EVexTokenKind::EndOfFile)
+			{
+				break;
+			}
+
+			if (Token.Kind == EVexTokenKind::TargetDirective && StatementStart == INDEX_NONE && ParenDepth == 0 && ExpressionBraceDepth == 0)
+			{
+				FVexStatementAst Directive;
+				Directive.Kind = EVexStatementKind::TargetDirective;
+				Directive.StartTokenIndex = TokenIndex;
+				Directive.EndTokenIndex = TokenIndex;
+
+				if (Token.Lexeme == TEXT("@rate") && TokenIndex + 1 < Tokens.Num() && Tokens[TokenIndex + 1].Kind == EVexTokenKind::LParen)
+				{
+					int32 Depth = 0;
+					int32 RightParen = INDEX_NONE;
+					for (int32 Cursor = TokenIndex + 1; Cursor < Tokens.Num(); ++Cursor)
+					{
+						if (Tokens[Cursor].Kind == EVexTokenKind::LParen)
+						{
+							++Depth;
+						}
+						else if (Tokens[Cursor].Kind == EVexTokenKind::RParen)
+						{
+							--Depth;
+							if (Depth == 0)
+							{
+								RightParen = Cursor;
+								break;
+							}
+						}
+					}
+
+					if (RightParen != INDEX_NONE)
+					{
+						Directive.EndTokenIndex = RightParen;
+						TokenIndex = RightParen;
+					}
+				}
+
+				Directive.SourceSpan = BuildSpanText(Tokens, Directive.StartTokenIndex, Directive.EndTokenIndex);
+				OutStatements.Add(MoveTemp(Directive));
+				continue;
+			}
+
+			if (Token.Kind == EVexTokenKind::KeywordIf && StatementStart == INDEX_NONE && ParenDepth == 0 && ExpressionBraceDepth == 0)
+			{
+				if (TokenIndex + 1 >= Tokens.Num() || Tokens[TokenIndex + 1].Kind != EVexTokenKind::LParen)
+				{
+					AddIssue(OutIssues, EVexIssueSeverity::Error, TEXT("`if` must be followed by '('."), Token.Line, Token.Column);
+					continue;
+				}
+
+				int32 Depth = 0;
+				int32 RightParen = INDEX_NONE;
+				for (int32 Cursor = TokenIndex + 1; Cursor < Tokens.Num(); ++Cursor)
+				{
+					if (Tokens[Cursor].Kind == EVexTokenKind::LParen)
+					{
+						++Depth;
+					}
+					else if (Tokens[Cursor].Kind == EVexTokenKind::RParen)
+					{
+						--Depth;
+						if (Depth == 0)
+						{
+							RightParen = Cursor;
+							break;
+						}
+					}
+				}
+
+				if (RightParen != INDEX_NONE)
+				{
+					FVexStatementAst IfHeader;
+					IfHeader.Kind = EVexStatementKind::IfHeader;
+					IfHeader.StartTokenIndex = TokenIndex;
+					IfHeader.EndTokenIndex = RightParen;
+					IfHeader.SourceSpan = BuildSpanText(Tokens, TokenIndex, RightParen);
+					OutStatements.Add(MoveTemp(IfHeader));
+					TokenIndex = RightParen;
+				}
+
+				continue;
+			}
+
+			if (Token.Kind == EVexTokenKind::LParen)
+			{
+				if (StatementStart == INDEX_NONE)
+				{
+					StatementStart = TokenIndex;
+				}
+				++ParenDepth;
+				continue;
+			}
+
+			if (Token.Kind == EVexTokenKind::RParen)
+			{
+				if (ParenDepth > 0)
+				{
+					--ParenDepth;
+				}
+				continue;
+			}
+
+			if (Token.Kind == EVexTokenKind::LBrace)
+			{
+				const bool bTreatAsBlockBrace = (StatementStart == INDEX_NONE && ParenDepth == 0 && ExpressionBraceDepth == 0);
+				if (bTreatAsBlockBrace)
+				{
+					FVexStatementAst BlockOpen;
+					BlockOpen.Kind = EVexStatementKind::BlockOpen;
+					BlockOpen.StartTokenIndex = TokenIndex;
+					BlockOpen.EndTokenIndex = TokenIndex;
+					BlockOpen.SourceSpan = TEXT("{");
+					OutStatements.Add(MoveTemp(BlockOpen));
+				}
+				else
+				{
+					if (StatementStart == INDEX_NONE)
+					{
+						StatementStart = TokenIndex;
+					}
+					++ExpressionBraceDepth;
+				}
+				continue;
+			}
+
+			if (Token.Kind == EVexTokenKind::RBrace)
+			{
+				if (ExpressionBraceDepth > 0)
+				{
+					--ExpressionBraceDepth;
+					continue;
+				}
+
+				if (StatementStart != INDEX_NONE)
+				{
+					EmitStatement(TokenIndex - 1);
+					StatementStart = INDEX_NONE;
+				}
+
+				FVexStatementAst BlockClose;
+				BlockClose.Kind = EVexStatementKind::BlockClose;
+				BlockClose.StartTokenIndex = TokenIndex;
+				BlockClose.EndTokenIndex = TokenIndex;
+				BlockClose.SourceSpan = TEXT("}");
+				OutStatements.Add(MoveTemp(BlockClose));
+				continue;
+			}
+
+			if (Token.Kind == EVexTokenKind::Semicolon && ParenDepth == 0 && ExpressionBraceDepth == 0)
+			{
+				EmitStatement(TokenIndex - 1);
+				StatementStart = INDEX_NONE;
+				continue;
+			}
+
+			if (StatementStart == INDEX_NONE)
+			{
+				StatementStart = TokenIndex;
+			}
+		}
+
+		if (StatementStart != INDEX_NONE)
+		{
+			EmitStatement(Tokens.Num() - 2); // Exclude EOF.
 		}
 	}
 
 	enum class EVexValueType : uint8 { Unknown, Float, Float2, Float3, Float4, Int, Bool };
-	EVexValueType ParseValueType(const FString& T) { if (T == TEXT("float")) return EVexValueType::Float; if (T == TEXT("float2")) return EVexValueType::Float2; if (T == TEXT("float3")) return EVexValueType::Float3; if (T == TEXT("float4")) return EVexValueType::Float4; if (T == TEXT("int")) return EVexValueType::Int; if (T == TEXT("bool")) return EVexValueType::Bool; return EVexValueType::Unknown; }
-	bool IsDeclarationTypeToken(const FString& L) { return L == TEXT("float") || L == TEXT("float2") || L == TEXT("float3") || L == TEXT("float4") || L == TEXT("int") || L == TEXT("bool"); }
-	bool AreTypesCompatibleForAssignment(EVexValueType L, EVexValueType R, const FString& Op) { if (L == EVexValueType::Unknown || R == EVexValueType::Unknown) return true; return L == R; }
-
-	EVexValueType InferExpressionType(const TArray<FVexToken>& Tokens, const int32 StartIndex, const int32 EndIndex, const TMap<FString, FVexSymbolDefinition>& SymbolByName, const TMap<FString, EVexValueType>& LocalVariables, bool& bHasComparison, bool& bHasLogical)
+	EVexValueType ParseValueType(const FString& TypeName)
 	{
-		for (int32 i = StartIndex; i <= EndIndex; ++i)
+		if (TypeName == TEXT("float")) return EVexValueType::Float;
+		if (TypeName == TEXT("float2")) return EVexValueType::Float2;
+		if (TypeName == TEXT("float3")) return EVexValueType::Float3;
+		if (TypeName == TEXT("float4")) return EVexValueType::Float4;
+		if (TypeName == TEXT("int")) return EVexValueType::Int;
+		if (TypeName == TEXT("bool")) return EVexValueType::Bool;
+		return EVexValueType::Unknown;
+	}
+
+	FString ToTypeString(const EVexValueType Type)
+	{
+		switch (Type)
 		{
-			const FVexToken& T = Tokens[i];
-			if (T.Kind == EVexTokenKind::Symbol) { if (const auto* D = SymbolByName.Find(T.Lexeme)) return ParseValueType(D->ValueType); }
-			if (T.Kind == EVexTokenKind::Identifier) { if (const auto* VT = LocalVariables.Find(T.Lexeme)) return *VT; }
-			if (T.Kind == EVexTokenKind::Number) return EVexValueType::Float;
+		case EVexValueType::Float: return TEXT("float");
+		case EVexValueType::Float2: return TEXT("float2");
+		case EVexValueType::Float3: return TEXT("float3");
+		case EVexValueType::Float4: return TEXT("float4");
+		case EVexValueType::Int: return TEXT("int");
+		case EVexValueType::Bool: return TEXT("bool");
+		default: return TEXT("unknown");
 		}
-		return EVexValueType::Float;
+	}
+
+	bool IsVectorType(const EVexValueType Type)
+	{
+		return Type == EVexValueType::Float2 || Type == EVexValueType::Float3 || Type == EVexValueType::Float4;
+	}
+
+	EVexValueType TypeFromVectorComponentSelector(const FString& Selector)
+	{
+		const int32 Width = Selector.Len();
+		if (Width <= 1) return EVexValueType::Float;
+		if (Width == 2) return EVexValueType::Float2;
+		if (Width == 3) return EVexValueType::Float3;
+		if (Width == 4) return EVexValueType::Float4;
+		return EVexValueType::Unknown;
+	}
+
+	bool IsDeclarationTypeToken(const FString& Lexeme)
+	{
+		return Lexeme == TEXT("float") || Lexeme == TEXT("float2") || Lexeme == TEXT("float3")
+			|| Lexeme == TEXT("float4") || Lexeme == TEXT("int") || Lexeme == TEXT("bool");
+	}
+
+	bool AreTypesCompatibleForAssignment(const EVexValueType LeftType, const EVexValueType RightType, const FString& Op)
+	{
+		(void)Op;
+		if (LeftType == EVexValueType::Unknown || RightType == EVexValueType::Unknown)
+		{
+			return true;
+		}
+		return LeftType == RightType;
 	}
 
 	EVexValueType InferExpressionTypeFromAst(int32 NodeIdx, const TArray<FVexExpressionAst>& Expressions, const TMap<FString, FVexSymbolDefinition>& SymbolByName, const TMap<FString, EVexValueType>& Locals)
 	{
-		if (NodeIdx == INDEX_NONE) return EVexValueType::Unknown;
-		const auto& N = Expressions[NodeIdx];
-		if (N.Kind == EVexExprKind::NumberLiteral) return EVexValueType::Float;
-		if (N.Kind == EVexExprKind::SymbolRef) { if (const auto* D = SymbolByName.Find(N.Lexeme)) return ParseValueType(D->ValueType); }
-		if (N.Kind == EVexExprKind::Identifier) { if (const auto* VT = Locals.Find(N.Lexeme)) return *VT; }
-		if (N.Kind == EVexExprKind::BinaryOp || N.Kind == EVexExprKind::UnaryOp) return InferExpressionTypeFromAst(N.LeftNodeIndex, Expressions, SymbolByName, Locals);
-		return EVexValueType::Unknown;
+		if (NodeIdx == INDEX_NONE || !Expressions.IsValidIndex(NodeIdx))
+		{
+			return EVexValueType::Unknown;
+		}
+
+		const FVexExpressionAst& Node = Expressions[NodeIdx];
+		switch (Node.Kind)
+		{
+		case EVexExprKind::NumberLiteral:
+			return Node.Lexeme.Contains(TEXT(".")) ? EVexValueType::Float : EVexValueType::Int;
+		case EVexExprKind::SymbolRef:
+			if (const FVexSymbolDefinition* Definition = SymbolByName.Find(Node.Lexeme))
+			{
+				return ParseValueType(Definition->ValueType);
+			}
+			return EVexValueType::Unknown;
+		case EVexExprKind::Identifier:
+			if (const EVexValueType* LocalType = Locals.Find(Node.Lexeme))
+			{
+				return *LocalType;
+			}
+			return EVexValueType::Unknown;
+		case EVexExprKind::UnaryOp:
+			if (Node.Lexeme == TEXT("!"))
+			{
+				return EVexValueType::Bool;
+			}
+			return InferExpressionTypeFromAst(Node.LeftNodeIndex, Expressions, SymbolByName, Locals);
+		case EVexExprKind::BinaryOp:
+		{
+			const EVexValueType LeftType = InferExpressionTypeFromAst(Node.LeftNodeIndex, Expressions, SymbolByName, Locals);
+			const EVexValueType RightType = InferExpressionTypeFromAst(Node.RightNodeIndex, Expressions, SymbolByName, Locals);
+
+			if (Node.Lexeme == TEXT("."))
+			{
+				if (IsVectorType(LeftType) && Expressions.IsValidIndex(Node.RightNodeIndex))
+				{
+					return TypeFromVectorComponentSelector(Expressions[Node.RightNodeIndex].Lexeme);
+				}
+				return EVexValueType::Unknown;
+			}
+
+			if (Node.Lexeme == TEXT("<") || Node.Lexeme == TEXT(">") || Node.Lexeme == TEXT("<=") || Node.Lexeme == TEXT(">=")
+				|| Node.Lexeme == TEXT("==") || Node.Lexeme == TEXT("!=") || Node.Lexeme == TEXT("&&") || Node.Lexeme == TEXT("||"))
+			{
+				return EVexValueType::Bool;
+			}
+
+			if (LeftType == RightType)
+			{
+				return LeftType;
+			}
+
+			if (IsVectorType(LeftType) && (RightType == EVexValueType::Float || RightType == EVexValueType::Int))
+			{
+				return LeftType;
+			}
+			if (IsVectorType(RightType) && (LeftType == EVexValueType::Float || LeftType == EVexValueType::Int))
+			{
+				return RightType;
+			}
+			if ((LeftType == EVexValueType::Int && RightType == EVexValueType::Float)
+				|| (LeftType == EVexValueType::Float && RightType == EVexValueType::Int))
+			{
+				return EVexValueType::Float;
+			}
+
+			return LeftType != EVexValueType::Unknown ? LeftType : RightType;
+		}
+		case EVexExprKind::FunctionCall:
+		{
+			const FString& Name = Node.Lexeme;
+			if (Name == TEXT("normalize"))
+			{
+				return Node.ArgumentNodeIndices.Num() > 0
+					? InferExpressionTypeFromAst(Node.ArgumentNodeIndices[0], Expressions, SymbolByName, Locals)
+					: EVexValueType::Unknown;
+			}
+			if (Name == TEXT("curlnoise")) return EVexValueType::Float3;
+			if (Name == TEXT("dot")) return EVexValueType::Float;
+			if (Name == TEXT("sample_sdf")) return EVexValueType::Float;
+			if (Name == TEXT("gradient")) return EVexValueType::Float3;
+			if (Name == TEXT("sample_lattice")) return EVexValueType::Float3;
+			if (Name == TEXT("sample_cloud")) return EVexValueType::Float;
+			if (Name == TEXT("smoothstep")) return EVexValueType::Float;
+			if (Name == TEXT("clamp"))
+			{
+				return Node.ArgumentNodeIndices.Num() > 0
+					? InferExpressionTypeFromAst(Node.ArgumentNodeIndices[0], Expressions, SymbolByName, Locals)
+					: EVexValueType::Unknown;
+			}
+			return EVexValueType::Unknown;
+		}
+		case EVexExprKind::Pipe:
+		{
+			const EVexValueType PipedType = InferExpressionTypeFromAst(Node.LeftNodeIndex, Expressions, SymbolByName, Locals);
+			if (Expressions.IsValidIndex(Node.RightNodeIndex))
+			{
+				const FVexExpressionAst& RightNode = Expressions[Node.RightNodeIndex];
+				if (RightNode.Kind == EVexExprKind::FunctionCall)
+				{
+					if (RightNode.Lexeme == TEXT("sample_sdf")) return EVexValueType::Float;
+					if (RightNode.Lexeme == TEXT("gradient")) return EVexValueType::Float3;
+					if (RightNode.Lexeme == TEXT("smoothstep")) return EVexValueType::Float;
+					if (RightNode.Lexeme == TEXT("clamp") || RightNode.Lexeme == TEXT("normalize")) return PipedType;
+				}
+				return InferExpressionTypeFromAst(Node.RightNodeIndex, Expressions, SymbolByName, Locals);
+			}
+			return PipedType;
+		}
+		default:
+			return EVexValueType::Unknown;
+		}
+	}
+
+	void AnnotateInferredTypes(FVexProgramAst& Program, const TMap<FString, FVexSymbolDefinition>& SymbolByName, const TMap<FString, EVexValueType>& Locals)
+	{
+		for (int32 NodeIndex = 0; NodeIndex < Program.Expressions.Num(); ++NodeIndex)
+		{
+			Program.Expressions[NodeIndex].InferredType =
+				ToTypeString(InferExpressionTypeFromAst(NodeIndex, Program.Expressions, SymbolByName, Locals));
+		}
+	}
+
+	TMap<FString, EVexValueType> BuildLocalVariableTypeMap(const FVexProgramAst& Program)
+	{
+		TMap<FString, EVexValueType> Locals;
+		for (const FVexStatementAst& Statement : Program.Statements)
+		{
+			if (Statement.Kind != EVexStatementKind::Assignment
+				|| !Program.Tokens.IsValidIndex(Statement.StartTokenIndex)
+				|| !Program.Tokens.IsValidIndex(Statement.StartTokenIndex + 1))
+			{
+				continue;
+			}
+
+			const FVexToken& TypeToken = Program.Tokens[Statement.StartTokenIndex];
+			const FVexToken& NameToken = Program.Tokens[Statement.StartTokenIndex + 1];
+			if (TypeToken.Kind == EVexTokenKind::Identifier
+				&& NameToken.Kind == EVexTokenKind::Identifier
+				&& IsDeclarationTypeToken(TypeToken.Lexeme))
+			{
+				Locals.Add(NameToken.Lexeme, ParseValueType(TypeToken.Lexeme));
+			}
+		}
+		return Locals;
 	}
 
 	void PerformSemanticValidation(const TArray<FVexToken>& Tokens, FVexProgramAst& Program, const TArray<FVexSymbolDefinition>& SymbolDefinitions, TArray<FVexIssue>& OutIssues)
@@ -242,36 +599,392 @@ namespace
 				}
 			}
 		}
-		for (const FVexStatementAst& S : Program.Statements) { if (S.Kind == EVexStatementKind::IfHeader && S.ExpressionNodeIndex != INDEX_NONE) { if (InferExpressionTypeFromAst(S.ExpressionNodeIndex, Program.Expressions, SymbolByName, Locals) != EVexValueType::Bool) AddIssue(OutIssues, EVexIssueSeverity::Error, TEXT("`if` condition must be bool-like."), Tokens.IsValidIndex(S.StartTokenIndex) ? Tokens[S.StartTokenIndex].Line : 1, Tokens.IsValidIndex(S.StartTokenIndex) ? Tokens[S.StartTokenIndex].Column : 1); } }
+		for (const FVexStatementAst& S : Program.Statements)
+		{
+			if (S.Kind == EVexStatementKind::IfHeader && S.ExpressionNodeIndex != INDEX_NONE)
+			{
+				if (InferExpressionTypeFromAst(S.ExpressionNodeIndex, Program.Expressions, SymbolByName, Locals) != EVexValueType::Bool)
+				{
+					AddIssue(OutIssues, EVexIssueSeverity::Error, TEXT("`if` condition must be bool-like."),
+						Tokens.IsValidIndex(S.StartTokenIndex) ? Tokens[S.StartTokenIndex].Line : 1,
+						Tokens.IsValidIndex(S.StartTokenIndex) ? Tokens[S.StartTokenIndex].Column : 1);
+				}
+			}
+		}
+
+		AnnotateInferredTypes(Program, SymbolByName, Locals);
 	}
 
-	int32 BuildExpressionAst(const TArray<FVexToken>& Tokens, int32 Start, int32 End, TArray<FVexExpressionAst>& OutNodes)
+	class FExpressionParser
 	{
-		if (Start > End) return INDEX_NONE;
-		if (Start == End)
+	public:
+		FExpressionParser(const TArray<FVexToken>& InTokens, const int32 InStart, const int32 InEnd, TArray<FVexExpressionAst>& InOutNodes)
+			: Tokens(InTokens)
+			, Cursor(InStart)
+			, End(InEnd)
+			, OutNodes(InOutNodes)
 		{
-			FVexExpressionAst Node; Node.TokenIndex = Start; Node.Lexeme = Tokens[Start].Lexeme;
-			if (Tokens[Start].Kind == EVexTokenKind::Number) Node.Kind = EVexExprKind::NumberLiteral;
-			else if (Tokens[Start].Kind == EVexTokenKind::Symbol) Node.Kind = EVexExprKind::SymbolRef;
-			else Node.Kind = EVexExprKind::Identifier;
-			return OutNodes.Add(MoveTemp(Node));
-		}
-		int32 OpIdx = INDEX_NONE;
-		for (int32 i = End; i >= Start; --i) { if (Tokens[i].Kind == EVexTokenKind::Operator && !IsAssignmentOperator(Tokens[i].Lexeme)) { OpIdx = i; break; } }
-		if (OpIdx == INDEX_NONE)
-		{
-			// Check for dot operator (member access) - higher precedence
-			for (int32 i = End; i >= Start; --i) { if (Tokens[i].Kind == EVexTokenKind::Dot) { OpIdx = i; break; } }
 		}
 
-		if (OpIdx != INDEX_NONE)
+		int32 ParseExpression()
 		{
-			FVexExpressionAst Node; Node.Kind = EVexExprKind::BinaryOp; Node.TokenIndex = OpIdx; Node.Lexeme = Tokens[OpIdx].Lexeme;
-			Node.LeftNodeIndex = BuildExpressionAst(Tokens, Start, OpIdx - 1, OutNodes);
-			Node.RightNodeIndex = BuildExpressionAst(Tokens, OpIdx + 1, End, OutNodes);
+			return ParsePipe();
+		}
+
+	private:
+		const TArray<FVexToken>& Tokens;
+		int32 Cursor;
+		int32 End;
+		TArray<FVexExpressionAst>& OutNodes;
+
+		bool IsAtEnd() const
+		{
+			return Cursor > End;
+		}
+
+		const FVexToken* Peek(const int32 Offset = 0) const
+		{
+			const int32 Index = Cursor + Offset;
+			return (Index >= 0 && Index <= End && Tokens.IsValidIndex(Index)) ? &Tokens[Index] : nullptr;
+		}
+
+		bool MatchKind(const EVexTokenKind Kind)
+		{
+			const FVexToken* Token = Peek();
+			if (!Token || Token->Kind != Kind)
+			{
+				return false;
+			}
+			++Cursor;
+			return true;
+		}
+
+		bool MatchOperator(const TCHAR* OpLexeme)
+		{
+			const FVexToken* Token = Peek();
+			if (!Token || Token->Kind != EVexTokenKind::Operator || Token->Lexeme != OpLexeme)
+			{
+				return false;
+			}
+			++Cursor;
+			return true;
+		}
+
+		int32 AddNode(FVexExpressionAst&& Node)
+		{
 			return OutNodes.Add(MoveTemp(Node));
 		}
-		return INDEX_NONE;
+
+		int32 ParsePipe()
+		{
+			int32 Left = ParseLogicalOr();
+			while (MatchOperator(TEXT("|")))
+			{
+				const int32 OpTokenIndex = Cursor - 1;
+				const int32 Right = ParseLogicalOr();
+
+				FVexExpressionAst PipeNode;
+				PipeNode.Kind = EVexExprKind::Pipe;
+				PipeNode.TokenIndex = OpTokenIndex;
+				PipeNode.Lexeme = TEXT("|");
+				PipeNode.LeftNodeIndex = Left;
+				PipeNode.RightNodeIndex = Right;
+
+				if (OutNodes.IsValidIndex(Right) &&
+					(OutNodes[Right].Kind == EVexExprKind::FunctionCall || OutNodes[Right].Kind == EVexExprKind::Identifier))
+				{
+					PipeNode.Lexeme = OutNodes[Right].Lexeme;
+				}
+
+				Left = AddNode(MoveTemp(PipeNode));
+			}
+			return Left;
+		}
+
+		int32 ParseLogicalOr()
+		{
+			int32 Left = ParseLogicalAnd();
+			while (MatchOperator(TEXT("||")))
+			{
+				const int32 OpTokenIndex = Cursor - 1;
+				const int32 Right = ParseLogicalAnd();
+				FVexExpressionAst Node;
+				Node.Kind = EVexExprKind::BinaryOp;
+				Node.TokenIndex = OpTokenIndex;
+				Node.Lexeme = TEXT("||");
+				Node.LeftNodeIndex = Left;
+				Node.RightNodeIndex = Right;
+				Left = AddNode(MoveTemp(Node));
+			}
+			return Left;
+		}
+
+		int32 ParseLogicalAnd()
+		{
+			int32 Left = ParseEquality();
+			while (MatchOperator(TEXT("&&")))
+			{
+				const int32 OpTokenIndex = Cursor - 1;
+				const int32 Right = ParseEquality();
+				FVexExpressionAst Node;
+				Node.Kind = EVexExprKind::BinaryOp;
+				Node.TokenIndex = OpTokenIndex;
+				Node.Lexeme = TEXT("&&");
+				Node.LeftNodeIndex = Left;
+				Node.RightNodeIndex = Right;
+				Left = AddNode(MoveTemp(Node));
+			}
+			return Left;
+		}
+
+		int32 ParseEquality()
+		{
+			int32 Left = ParseComparison();
+			for (;;)
+			{
+				if (MatchOperator(TEXT("==")) || MatchOperator(TEXT("!=")))
+				{
+					const FString OperatorLexeme = Tokens[Cursor - 1].Lexeme;
+					const int32 OpTokenIndex = Cursor - 1;
+					const int32 Right = ParseComparison();
+					FVexExpressionAst Node;
+					Node.Kind = EVexExprKind::BinaryOp;
+					Node.TokenIndex = OpTokenIndex;
+					Node.Lexeme = OperatorLexeme;
+					Node.LeftNodeIndex = Left;
+					Node.RightNodeIndex = Right;
+					Left = AddNode(MoveTemp(Node));
+					continue;
+				}
+				break;
+			}
+			return Left;
+		}
+
+		int32 ParseComparison()
+		{
+			int32 Left = ParseAdditive();
+			for (;;)
+			{
+				if (MatchOperator(TEXT("<=")) || MatchOperator(TEXT(">=")) || MatchOperator(TEXT("<")) || MatchOperator(TEXT(">")))
+				{
+					const FString OperatorLexeme = Tokens[Cursor - 1].Lexeme;
+					const int32 OpTokenIndex = Cursor - 1;
+					const int32 Right = ParseAdditive();
+					FVexExpressionAst Node;
+					Node.Kind = EVexExprKind::BinaryOp;
+					Node.TokenIndex = OpTokenIndex;
+					Node.Lexeme = OperatorLexeme;
+					Node.LeftNodeIndex = Left;
+					Node.RightNodeIndex = Right;
+					Left = AddNode(MoveTemp(Node));
+					continue;
+				}
+				break;
+			}
+			return Left;
+		}
+
+		int32 ParseAdditive()
+		{
+			int32 Left = ParseMultiplicative();
+			for (;;)
+			{
+				if (MatchOperator(TEXT("+")) || MatchOperator(TEXT("-")))
+				{
+					const FString OperatorLexeme = Tokens[Cursor - 1].Lexeme;
+					const int32 OpTokenIndex = Cursor - 1;
+					const int32 Right = ParseMultiplicative();
+					FVexExpressionAst Node;
+					Node.Kind = EVexExprKind::BinaryOp;
+					Node.TokenIndex = OpTokenIndex;
+					Node.Lexeme = OperatorLexeme;
+					Node.LeftNodeIndex = Left;
+					Node.RightNodeIndex = Right;
+					Left = AddNode(MoveTemp(Node));
+					continue;
+				}
+				break;
+			}
+			return Left;
+		}
+
+		int32 ParseMultiplicative()
+		{
+			int32 Left = ParseUnary();
+			for (;;)
+			{
+				if (MatchOperator(TEXT("*")) || MatchOperator(TEXT("/")) || MatchOperator(TEXT("%")))
+				{
+					const FString OperatorLexeme = Tokens[Cursor - 1].Lexeme;
+					const int32 OpTokenIndex = Cursor - 1;
+					const int32 Right = ParseUnary();
+					FVexExpressionAst Node;
+					Node.Kind = EVexExprKind::BinaryOp;
+					Node.TokenIndex = OpTokenIndex;
+					Node.Lexeme = OperatorLexeme;
+					Node.LeftNodeIndex = Left;
+					Node.RightNodeIndex = Right;
+					Left = AddNode(MoveTemp(Node));
+					continue;
+				}
+				break;
+			}
+			return Left;
+		}
+
+		int32 ParseUnary()
+		{
+			if (MatchOperator(TEXT("!")) || MatchOperator(TEXT("-")) || MatchOperator(TEXT("+")))
+			{
+				const FString OperatorLexeme = Tokens[Cursor - 1].Lexeme;
+				const int32 OpTokenIndex = Cursor - 1;
+				const int32 Operand = ParseUnary();
+				FVexExpressionAst Node;
+				Node.Kind = EVexExprKind::UnaryOp;
+				Node.TokenIndex = OpTokenIndex;
+				Node.Lexeme = OperatorLexeme;
+				Node.LeftNodeIndex = Operand;
+				return AddNode(MoveTemp(Node));
+			}
+			return ParsePostfix();
+		}
+
+		int32 ParsePostfix()
+		{
+			int32 Base = ParsePrimary();
+			while (!IsAtEnd())
+			{
+				if (MatchKind(EVexTokenKind::LParen))
+				{
+					const int32 CallTokenIndex = Cursor - 1;
+					TArray<int32> Arguments;
+
+					if (!MatchKind(EVexTokenKind::RParen))
+					{
+						while (!IsAtEnd())
+						{
+							const int32 ArgumentNode = ParseExpression();
+							if (ArgumentNode != INDEX_NONE)
+							{
+								Arguments.Add(ArgumentNode);
+							}
+
+							if (MatchKind(EVexTokenKind::Comma))
+							{
+								continue;
+							}
+
+							MatchKind(EVexTokenKind::RParen);
+							break;
+						}
+					}
+
+					FVexExpressionAst CallNode;
+					CallNode.Kind = EVexExprKind::FunctionCall;
+					CallNode.TokenIndex = CallTokenIndex;
+					CallNode.LeftNodeIndex = Base;
+					CallNode.ArgumentNodeIndices = MoveTemp(Arguments);
+					CallNode.Lexeme = OutNodes.IsValidIndex(Base) ? OutNodes[Base].Lexeme : TEXT("call");
+					Base = AddNode(MoveTemp(CallNode));
+					continue;
+				}
+
+				if (MatchKind(EVexTokenKind::Dot))
+				{
+					const int32 DotTokenIndex = Cursor - 1;
+					const int32 Member = ParsePrimary();
+					FVexExpressionAst MemberAccess;
+					MemberAccess.Kind = EVexExprKind::BinaryOp;
+					MemberAccess.TokenIndex = DotTokenIndex;
+					MemberAccess.Lexeme = TEXT(".");
+					MemberAccess.LeftNodeIndex = Base;
+					MemberAccess.RightNodeIndex = Member;
+					Base = AddNode(MoveTemp(MemberAccess));
+					continue;
+				}
+
+				break;
+			}
+
+			return Base;
+		}
+
+		int32 ParsePrimary()
+		{
+			const FVexToken* Token = Peek();
+			if (!Token)
+			{
+				return INDEX_NONE;
+			}
+
+			if (Token->Kind == EVexTokenKind::Number || Token->Kind == EVexTokenKind::Symbol || Token->Kind == EVexTokenKind::Identifier)
+			{
+				FVexExpressionAst Node;
+				Node.TokenIndex = Cursor;
+				Node.Lexeme = Token->Lexeme;
+				Node.Kind = Token->Kind == EVexTokenKind::Number
+					? EVexExprKind::NumberLiteral
+					: (Token->Kind == EVexTokenKind::Symbol ? EVexExprKind::SymbolRef : EVexExprKind::Identifier);
+				++Cursor;
+				return AddNode(MoveTemp(Node));
+			}
+
+			if (MatchKind(EVexTokenKind::LParen))
+			{
+				const int32 Inner = ParseExpression();
+				MatchKind(EVexTokenKind::RParen);
+				return Inner;
+			}
+
+			if (MatchKind(EVexTokenKind::LBrace))
+			{
+				const int32 BraceTokenIndex = Cursor - 1;
+				TArray<int32> Components;
+				while (!IsAtEnd())
+				{
+					if (MatchKind(EVexTokenKind::RBrace))
+					{
+						break;
+					}
+
+					const int32 Component = ParseExpression();
+					if (Component != INDEX_NONE)
+					{
+						Components.Add(Component);
+					}
+
+					if (MatchKind(EVexTokenKind::Comma))
+					{
+						continue;
+					}
+
+					MatchKind(EVexTokenKind::RBrace);
+					break;
+				}
+
+				FVexExpressionAst VecNode;
+				VecNode.Kind = EVexExprKind::FunctionCall;
+				VecNode.TokenIndex = BraceTokenIndex;
+				VecNode.Lexeme = FString::Printf(TEXT("vec%d"), Components.Num());
+				VecNode.ArgumentNodeIndices = MoveTemp(Components);
+				return AddNode(MoveTemp(VecNode));
+			}
+
+			++Cursor; // Skip unsupported token to avoid parser stalls.
+			return INDEX_NONE;
+		}
+	};
+
+	int32 BuildExpressionAst(const TArray<FVexToken>& Tokens, const int32 Start, const int32 End, TArray<FVexExpressionAst>& OutNodes)
+	{
+		if (Start > End || !Tokens.IsValidIndex(Start) || !Tokens.IsValidIndex(End))
+		{
+			return INDEX_NONE;
+		}
+
+		FExpressionParser Parser(Tokens, Start, End, OutNodes);
+		return Parser.ParseExpression();
 	}
 }
 
@@ -316,40 +1029,217 @@ TArray<FVexSymbolDefinition> BuildSymbolDefinitionsFromManifest(const Flight::Sc
 
 FVexParseResult ParseAndValidate(const FString& Source, const TArray<FVexSymbolDefinition>& SymbolDefinitions, bool bRequireAllRequiredSymbols)
 {
-	FVexParseResult Res; Res.Program.Tokens = Tokenize(Source, Res.Issues);
+	FVexParseResult Res;
+	Res.Program.Tokens = Tokenize(Source, Res.Issues);
 	BuildStatementAst(Res.Program.Tokens, Res.Program.Statements, Res.Issues);
-	TMap<FString, FVexSymbolDefinition> SymbolByName; for (const FVexSymbolDefinition& D : SymbolDefinitions) SymbolByName.Add(D.SymbolName, D);
-	TSet<FString> Known; for (const auto& D : SymbolDefinitions) Known.Add(D.SymbolName);
-	for (auto& S : Res.Program.Statements) { if (S.Kind == EVexStatementKind::Expression || S.Kind == EVexStatementKind::Assignment || S.Kind == EVexStatementKind::IfHeader) S.ExpressionNodeIndex = BuildExpressionAst(Res.Program.Tokens, S.Kind == EVexStatementKind::Assignment ? S.StartTokenIndex + 2 : S.StartTokenIndex, S.EndTokenIndex, Res.Program.Expressions); }
-	TSet<FString> Used; for (const FVexToken& T : Res.Program.Tokens) if (T.Kind == EVexTokenKind::Symbol) Used.Add(T.Lexeme);
-	Res.Program.UsedSymbols = Used.Array(); Res.Program.UsedSymbols.Sort();
-	for (const FString& U : Res.Program.UsedSymbols) if (Known.Num() > 0 && !Known.Contains(U)) { Res.UnknownSymbols.Add(U); AddIssue(Res.Issues, EVexIssueSeverity::Warning, FString::Printf(TEXT("Unknown symbol '%s'."), *U), 1, 1); }
-	PerformSemanticValidation(Res.Program.Tokens, Res.Program, SymbolDefinitions, Res.Issues); Res.Requirements = AnalyzeRequirements(Res.Program);
-	
-	// Apply m2-inspired algebraic optimizations
+
+	TMap<FString, FVexSymbolDefinition> SymbolByName;
+	for (const FVexSymbolDefinition& Definition : SymbolDefinitions)
+	{
+		SymbolByName.Add(Definition.SymbolName, Definition);
+	}
+
+	TSet<FString> KnownSymbols;
+	for (const FVexSymbolDefinition& Definition : SymbolDefinitions)
+	{
+		KnownSymbols.Add(Definition.SymbolName);
+	}
+
+	for (FVexStatementAst& Statement : Res.Program.Statements)
+	{
+		if (Statement.Kind != EVexStatementKind::Expression
+			&& Statement.Kind != EVexStatementKind::Assignment
+			&& Statement.Kind != EVexStatementKind::IfHeader)
+		{
+			continue;
+		}
+
+		int32 ExprStart = Statement.StartTokenIndex;
+		int32 ExprEnd = Statement.EndTokenIndex;
+
+		if (Statement.Kind == EVexStatementKind::Assignment)
+		{
+			for (int32 TokenIndex = Statement.StartTokenIndex; TokenIndex <= Statement.EndTokenIndex; ++TokenIndex)
+			{
+				if (Res.Program.Tokens[TokenIndex].Kind == EVexTokenKind::Operator
+					&& IsAssignmentOperator(Res.Program.Tokens[TokenIndex].Lexeme))
+				{
+					ExprStart = TokenIndex + 1;
+					break;
+				}
+			}
+		}
+		else if (Statement.Kind == EVexStatementKind::IfHeader)
+		{
+			int32 LeftParen = INDEX_NONE;
+			int32 RightParen = INDEX_NONE;
+			for (int32 TokenIndex = Statement.StartTokenIndex; TokenIndex <= Statement.EndTokenIndex; ++TokenIndex)
+			{
+				if (Res.Program.Tokens[TokenIndex].Kind == EVexTokenKind::LParen && LeftParen == INDEX_NONE)
+				{
+					LeftParen = TokenIndex;
+				}
+				else if (Res.Program.Tokens[TokenIndex].Kind == EVexTokenKind::RParen)
+				{
+					RightParen = TokenIndex;
+				}
+			}
+
+			if (LeftParen != INDEX_NONE && RightParen != INDEX_NONE && RightParen > LeftParen)
+			{
+				ExprStart = LeftParen + 1;
+				ExprEnd = RightParen - 1;
+			}
+		}
+
+		Statement.ExpressionNodeIndex = BuildExpressionAst(Res.Program.Tokens, ExprStart, ExprEnd, Res.Program.Expressions);
+	}
+
+	TSet<FString> UsedSymbolsSet;
+	for (const FVexToken& Token : Res.Program.Tokens)
+	{
+		if (Token.Kind == EVexTokenKind::Symbol)
+		{
+			UsedSymbolsSet.Add(Token.Lexeme);
+		}
+	}
+
+	Res.Program.UsedSymbols = UsedSymbolsSet.Array();
+	Res.Program.UsedSymbols.Sort();
+
+	for (const FString& UsedSymbol : Res.Program.UsedSymbols)
+	{
+		if (KnownSymbols.Num() == 0 || KnownSymbols.Contains(UsedSymbol))
+		{
+			continue;
+		}
+
+		Res.UnknownSymbols.Add(UsedSymbol);
+
+		int32 Line = 1;
+		int32 Column = 1;
+		for (const FVexToken& Token : Res.Program.Tokens)
+		{
+			if (Token.Kind == EVexTokenKind::Symbol && Token.Lexeme == UsedSymbol)
+			{
+				Line = Token.Line;
+				Column = Token.Column;
+				break;
+			}
+		}
+
+		AddIssue(Res.Issues, EVexIssueSeverity::Warning, FString::Printf(TEXT("Unknown symbol '%s'."), *UsedSymbol), Line, Column);
+	}
+
+	if (bRequireAllRequiredSymbols)
+	{
+		for (const FVexSymbolDefinition& Definition : SymbolDefinitions)
+		{
+			if (Definition.bRequired && !UsedSymbolsSet.Contains(Definition.SymbolName))
+			{
+				Res.MissingRequiredSymbols.Add(Definition.SymbolName);
+			}
+		}
+
+		Res.MissingRequiredSymbols.Sort();
+		if (Res.MissingRequiredSymbols.Num() > 0)
+		{
+			AddIssue(Res.Issues, EVexIssueSeverity::Error,
+				FString::Printf(TEXT("Missing required symbols: %s"), *FString::Join(Res.MissingRequiredSymbols, TEXT(", "))),
+				1, 1);
+		}
+	}
+
+	PerformSemanticValidation(Res.Program.Tokens, Res.Program, SymbolDefinitions, Res.Issues);
+	Res.Requirements = AnalyzeRequirements(Res.Program);
+
+	// Apply m2-inspired algebraic optimizations.
 	FVexOptimizer::Optimize(Res.Program);
 
-	Res.bSuccess = true; for (const auto& I : Res.Issues) if (I.Severity == EVexIssueSeverity::Error) Res.bSuccess = false;
+	const TMap<FString, EVexValueType> LocalTypes = BuildLocalVariableTypeMap(Res.Program);
+	AnnotateInferredTypes(Res.Program, SymbolByName, LocalTypes);
+
+	Res.bSuccess = true;
+	for (const FVexIssue& Issue : Res.Issues)
+	{
+		if (Issue.Severity == EVexIssueSeverity::Error)
+		{
+			Res.bSuccess = false;
+		}
+	}
 	return Res;
 }
 
 FString FormatIssues(const TArray<FVexIssue>& Issues) { FString F; for (const FVexIssue& I : Issues) F += FString::Printf(TEXT("[%s L%d:C%d] %s\n"), I.Severity == EVexIssueSeverity::Error ? TEXT("error") : TEXT("warning"), I.Line, I.Column, *I.Message); return F; }
 
-namespace Lower
-{
-	FString Expression(int32 NodeIdx, const FVexProgramAst& Program, const TMap<FString, FString>& SymbolMap)
+	namespace Lower
 	{
-		if (NodeIdx == INDEX_NONE) return TEXT("");
-		const auto& Node = Program.Expressions[NodeIdx];
-		switch (Node.Kind) {
-		case EVexExprKind::NumberLiteral: return Node.Lexeme;
-		case EVexExprKind::Identifier: return Node.Lexeme;
-		case EVexExprKind::SymbolRef: return SymbolMap.Contains(Node.Lexeme) ? SymbolMap[Node.Lexeme] : Node.Lexeme;
-		case EVexExprKind::UnaryOp: return Node.Lexeme + Expression(Node.LeftNodeIndex, Program, SymbolMap);
-		case EVexExprKind::BinaryOp: return FString::Printf(TEXT("(%s %s %s)"), *Expression(Node.LeftNodeIndex, Program, SymbolMap), *Node.Lexeme, *Expression(Node.RightNodeIndex, Program, SymbolMap));
-		default: return TEXT("/* unknown */");
+		FString Expression(int32 NodeIdx, const FVexProgramAst& Program, const TMap<FString, FString>& SymbolMap)
+		{
+			if (NodeIdx == INDEX_NONE) return TEXT("");
+			const auto& Node = Program.Expressions[NodeIdx];
+			switch (Node.Kind) {
+			case EVexExprKind::NumberLiteral:
+				return Node.Lexeme;
+			case EVexExprKind::Identifier:
+				return Node.Lexeme;
+			case EVexExprKind::SymbolRef:
+				return SymbolMap.Contains(Node.Lexeme) ? SymbolMap[Node.Lexeme] : Node.Lexeme;
+			case EVexExprKind::UnaryOp:
+				return Node.Lexeme + Expression(Node.LeftNodeIndex, Program, SymbolMap);
+			case EVexExprKind::BinaryOp:
+				if (Node.Lexeme == TEXT("."))
+				{
+					return FString::Printf(TEXT("%s.%s"),
+						*Expression(Node.LeftNodeIndex, Program, SymbolMap),
+						*Expression(Node.RightNodeIndex, Program, SymbolMap));
+				}
+				return FString::Printf(TEXT("(%s %s %s)"),
+					*Expression(Node.LeftNodeIndex, Program, SymbolMap),
+					*Node.Lexeme,
+					*Expression(Node.RightNodeIndex, Program, SymbolMap));
+			case EVexExprKind::FunctionCall:
+			{
+				TArray<FString> Args;
+				Args.Reserve(Node.ArgumentNodeIndices.Num());
+				for (const int32 ArgIdx : Node.ArgumentNodeIndices)
+				{
+					Args.Add(Expression(ArgIdx, Program, SymbolMap));
+				}
+
+				if (Node.Lexeme.StartsWith(TEXT("vec")))
+				{
+					return FString::Printf(TEXT("{%s}"), *FString::Join(Args, TEXT(", ")));
+				}
+
+				return FString::Printf(TEXT("%s(%s)"), *Node.Lexeme, *FString::Join(Args, TEXT(", ")));
+			}
+			case EVexExprKind::Pipe:
+			{
+				const FString Piped = Expression(Node.LeftNodeIndex, Program, SymbolMap);
+				if (Program.Expressions.IsValidIndex(Node.RightNodeIndex))
+				{
+					const FVexExpressionAst& RightNode = Program.Expressions[Node.RightNodeIndex];
+					if (RightNode.Kind == EVexExprKind::FunctionCall)
+					{
+						TArray<FString> Args;
+						Args.Reserve(RightNode.ArgumentNodeIndices.Num() + 1);
+						Args.Add(Piped);
+						for (const int32 ArgIdx : RightNode.ArgumentNodeIndices)
+						{
+							Args.Add(Expression(ArgIdx, Program, SymbolMap));
+						}
+						return FString::Printf(TEXT("%s(%s)"), *RightNode.Lexeme, *FString::Join(Args, TEXT(", ")));
+					}
+				}
+				return FString::Printf(TEXT("%s(%s)"),
+					*Expression(Node.RightNodeIndex, Program, SymbolMap),
+					*Piped);
+			}
+			default:
+				return TEXT("/* unknown */");
+			}
 		}
-	}
 
 	FString Program(const FVexProgramAst& ProgramAst, const TMap<FString, FString>& SymbolMap, const bool bVerseStyle)
 	{
@@ -400,18 +1290,58 @@ FString LowerToVerse(const FVexProgramAst& Program, const TMap<FString, FString>
 
 FString LowerMegaKernel(const TMap<uint32, FVexProgramAst>& Scripts, const TMap<FString, FString>& SymbolMap)
 {
-    FString Res = TEXT("// SCSL Unified Mega-Kernel\n");
-    FString Hoist = TEXT("// --- Global Attribute Hoisting ---\n");
-    FString Dispatch = TEXT("// --- Behavior Dispatch ---\n");
-    TMap<FString, FString> LocalMap = SymbolMap;
-    for (const auto& KV : Scripts)
-    {
-        Dispatch += FString::Printf(TEXT("        case %u:\n        {\n"), KV.Key);
-        Dispatch += Lower::Program(KV.Value, LocalMap, false);
-        Dispatch += TEXT("            break;\n        }\n");
-    }
-    Dispatch += TEXT("    }\n");
-    return Res + Hoist + Dispatch;
+	auto MakeLocalAlias = [](const FString& SymbolName)
+	{
+		FString Alias = SymbolName;
+		Alias.RemoveFromStart(TEXT("@"));
+		return Alias + TEXT("_local");
+	};
+
+	TSet<FString> UsedSymbols;
+	for (const TPair<uint32, FVexProgramAst>& Pair : Scripts)
+	{
+		for (const FString& UsedSymbol : Pair.Value.UsedSymbols)
+		{
+			if (SymbolMap.Contains(UsedSymbol))
+			{
+				UsedSymbols.Add(UsedSymbol);
+			}
+		}
+	}
+
+	TArray<FString> UsedOrdered = UsedSymbols.Array();
+	UsedOrdered.Sort();
+
+	TMap<FString, FString> LocalMap = SymbolMap;
+	FString Hoist = TEXT("// --- Global Attribute Hoisting ---\n");
+	for (const FString& Symbol : UsedOrdered)
+	{
+		const FString Alias = MakeLocalAlias(Symbol);
+		Hoist += FString::Printf(TEXT("auto %s = %s;\n"), *Alias, *SymbolMap.FindChecked(Symbol));
+		LocalMap.Add(Symbol, Alias);
+	}
+
+	FString Dispatch = TEXT("// --- Behavior Dispatch ---\n");
+	Dispatch += TEXT("switch (BehaviorID)\n{\n");
+	for (const TPair<uint32, FVexProgramAst>& Pair : Scripts)
+	{
+		Dispatch += FString::Printf(TEXT("    case %u:\n    {\n"), Pair.Key);
+		const FString CaseBody = Lower::Program(Pair.Value, LocalMap, false);
+		TArray<FString> BodyLines;
+		CaseBody.ParseIntoArrayLines(BodyLines);
+		for (const FString& Line : BodyLines)
+		{
+			if (!Line.IsEmpty())
+			{
+				Dispatch += TEXT("        ") + Line + TEXT("\n");
+			}
+		}
+		Dispatch += TEXT("        break;\n");
+		Dispatch += TEXT("    }\n");
+	}
+	Dispatch += TEXT("}\n");
+
+	return TEXT("// SCSL Unified Mega-Kernel\n") + Hoist + Dispatch;
 }
 
 } // namespace Flight::Vex

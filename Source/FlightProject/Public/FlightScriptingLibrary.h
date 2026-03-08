@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Kismet/BlueprintFunctionLibrary.h"
 #include "Schema/FlightRequirementSchema.h"
+#include "Verse/UFlightVerseSubsystem.h"
 #include "FlightScriptingLibrary.generated.h"
 
 /**
@@ -188,7 +189,8 @@ public:
 
     /**
      * Compiles VEX source code using the Verse subsystem for a specific behavior ID.
-     * Returns true on success, OutErrors contains any compilation issues.
+     * Returns true only when an executable Verse VM procedure is produced.
+     * OutErrors always includes parse/contract diagnostics and generated Verse preview.
      */
     UFUNCTION(BlueprintCallable, Category = "Flight|Scripting|Vex", meta = (WorldContext = "WorldContextObject"))
     static bool CompileVex(const UObject* WorldContextObject, int32 BehaviorID, const FString& VexSource, FString& OutErrors);
@@ -204,4 +206,16 @@ public:
     /** Returns the frame interval for a behavior. */
     UFUNCTION(BlueprintPure, Category = "Flight|Scripting|Vex", meta = (WorldContext = "WorldContextObject"))
     static int32 GetBehaviorFrameInterval(const UObject* WorldContextObject, int32 BehaviorID);
+
+    /** Returns compile-state metadata for a behavior ID. */
+    UFUNCTION(BlueprintPure, Category = "Flight|Scripting|Vex", meta = (WorldContext = "WorldContextObject"))
+    static EFlightVerseCompileState GetBehaviorCompileState(const UObject* WorldContextObject, int32 BehaviorID);
+
+    /** Returns true when the behavior has an executable Verse VM procedure. */
+    UFUNCTION(BlueprintPure, Category = "Flight|Scripting|Vex", meta = (WorldContext = "WorldContextObject"))
+    static bool IsBehaviorExecutable(const UObject* WorldContextObject, int32 BehaviorID);
+
+    /** Returns latest compile diagnostics for a behavior ID, if available. */
+    UFUNCTION(BlueprintPure, Category = "Flight|Scripting|Vex", meta = (WorldContext = "WorldContextObject"))
+    static FString GetBehaviorCompileDiagnostics(const UObject* WorldContextObject, int32 BehaviorID);
 };
