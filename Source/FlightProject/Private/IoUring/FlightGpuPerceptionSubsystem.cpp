@@ -9,6 +9,7 @@
 #include "Async/Async.h"
 #include "DynamicRHI.h"
 #include "RHIResources.h"
+#include "Misc/App.h"
 
 #if WITH_FLIGHT_COMPUTE_SHADERS
 #include "FlightHorizonScanShader.h"
@@ -29,6 +30,13 @@ void UFlightGpuPerceptionSubsystem::Initialize(FSubsystemCollectionBase& Collect
 {
 	Super::Initialize(Collection);
 
+	if (!FApp::CanEverRender())
+	{
+		UE_LOG(LogFlightPerception, Log,
+			TEXT("FlightGpuPerceptionSubsystem: Rendering disabled (NullRHI/headless). GPU paths disabled."));
+		return;
+	}
+
 	// Capability-based initialization:
 	if (GMaxRHIFeatureLevel < ERHIFeatureLevel::SM5)
 	{
@@ -44,7 +52,7 @@ void UFlightGpuPerceptionSubsystem::Initialize(FSubsystemCollectionBase& Collect
 
 	const TCHAR* ShaderStatus = TEXT("Disabled");
 #if WITH_FLIGHT_COMPUTE_SHADERS
-	ShaderStatus = AreFlightHorizonScanShadersReady() ? TEXT("Ready") : TEXT("Not Ready");
+	ShaderStatus = (AreFlightHorizonScanShadersReady() && !IsRunningCommandlet()) ? TEXT("Ready") : TEXT("Not Ready");
 #endif
 
 	UE_LOG(LogFlightPerception, Log,
@@ -71,6 +79,11 @@ void UFlightGpuPerceptionSubsystem::Deinitialize()
 
 bool UFlightGpuPerceptionSubsystem::IsAvailable() const
 {
+	if (!FApp::CanEverRender() || IsRunningCommandlet())
+	{
+		return false;
+	}
+
 #if WITH_FLIGHT_COMPUTE_SHADERS
 	return GpuBridge && GpuBridge->IsAvailable() && AreFlightHorizonScanShadersReady();
 #else

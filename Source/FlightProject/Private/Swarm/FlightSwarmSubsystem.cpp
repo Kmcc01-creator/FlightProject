@@ -488,7 +488,11 @@ void UFlightSwarmSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
 	UE_LOG(LogTemp, Log, TEXT("FlightSwarmSubsystem: Initializing Reactive GPU Swarm Infrastructure"));
-	ViewExtension = FSceneViewExtensions::NewExtension<Flight::Swarm::FSwarmSceneViewExtension>();
+	
+	if (!IsRunningCommandlet())
+	{
+		ViewExtension = FSceneViewExtensions::NewExtension<Flight::Swarm::FSwarmSceneViewExtension>();
+	}
 }
 
 void UFlightSwarmSubsystem::Deinitialize()

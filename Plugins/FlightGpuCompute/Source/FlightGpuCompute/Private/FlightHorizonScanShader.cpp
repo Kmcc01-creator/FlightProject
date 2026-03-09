@@ -5,10 +5,30 @@
 #include "RenderGraphBuilder.h"
 #include "RenderGraphUtils.h"
 #include "GlobalShader.h"
+#include "Misc/App.h"
 
 #if WITH_FLIGHT_COMPUTE_SHADERS
 
 DEFINE_LOG_CATEGORY_STATIC(LogFlightHorizonScan, Log, All);
+
+namespace
+{
+	static FGlobalShaderMap* TryGetFlightGlobalShaderMap()
+	{
+		if (!FApp::CanEverRender())
+		{
+			return nullptr;
+		}
+
+		const EShaderPlatform ShaderPlatform = GShaderPlatformForFeatureLevel[GMaxRHIFeatureLevel];
+		if (ShaderPlatform == SP_NumPlatforms || GGlobalShaderMap[ShaderPlatform] == nullptr)
+		{
+			return nullptr;
+		}
+
+		return GetGlobalShaderMap(ShaderPlatform);
+	}
+}
 
 // ============================================================================
 // Shader Registration
@@ -96,8 +116,13 @@ void DispatchFlightObstacleCount(
 			sizeof(FVector4f));
 	}
 
+	if (IsRunningCommandlet())
+	{
+		return;
+	}
+
 	// Get shader map
-	FGlobalShaderMap* GlobalShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
+	FGlobalShaderMap* GlobalShaderMap = TryGetFlightGlobalShaderMap();
 	if (!GlobalShaderMap || !GlobalShaderMap->HasShader(&FFlightObstacleCountShader::GetStaticType(), 0))
 	{
 		UE_LOG(LogFlightHorizonScan, Error,
@@ -146,7 +171,12 @@ void DispatchFlightObstacleCount(
 
 bool AreFlightHorizonScanShadersReady()
 {
-	FGlobalShaderMap* GlobalShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
+	if (IsRunningCommandlet())
+	{
+		return false;
+	}
+
+	FGlobalShaderMap* GlobalShaderMap = TryGetFlightGlobalShaderMap();
 	if (!GlobalShaderMap)
 	{
 		return false;

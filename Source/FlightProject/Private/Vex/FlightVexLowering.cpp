@@ -1,6 +1,7 @@
 // Copyright Kelly Rey Wilson. All Rights Reserved.
 
-#include "Vex/FlightVexParser.h"
+#include "Vex/Frontend/VexParser.h"
+#include "Vex/FlightVexIr.h"
 
 namespace Flight::Vex
 {
@@ -198,21 +199,39 @@ FString Program(const FVexProgramAst& ProgramAst, const TMap<FString, FString>& 
 
 } // namespace
 
-FString LowerToHLSL(const FVexProgramAst& Program, const TMap<FString, FString>& HlslBySymbol)
+FString LowerToHLSL(const FVexProgramAst& Program, const TArray<FVexSymbolDefinition>& SymbolDefinitions, const TMap<FString, FString>& HlslBySymbol)
 {
-	TMap<FString, FString> Symbols = HlslBySymbol;
-	Symbols.Add(TEXT("@dt"), TEXT("DeltaTime"));
-	Symbols.Add(TEXT("@frame"), TEXT("FrameIndex"));
-	Symbols.Add(TEXT("@time"), TEXT("(FrameIndex * DeltaTime)"));
-	return Lower::Program(Program, Symbols, false);
+	FString Errors;
+	TSharedPtr<FVexIrProgram> Ir = FVexIrCompiler::Compile(Program, SymbolDefinitions, Errors);
+	if (Ir.IsValid())
+	{
+		TMap<FString, FString> Symbols = HlslBySymbol;
+		Symbols.Add(TEXT("@dt"), TEXT("DeltaTime"));
+		Symbols.Add(TEXT("@frame"), TEXT("FrameIndex"));
+		Symbols.Add(TEXT("@time"), TEXT("(FrameIndex * DeltaTime)"));
+		return FVexIrCompiler::LowerToHLSL(*Ir, Symbols);
+	}
+	return FString::Printf(TEXT("// IR Compile Failed: %s\n"), *Errors);
 }
 
-FString LowerToVerse(const FVexProgramAst& Program, const TMap<FString, FString>& VerseBySymbol)
+FString LowerToVerse(const FVexProgramAst& Program, const TArray<FVexSymbolDefinition>& SymbolDefinitions, const TMap<FString, FString>& VerseBySymbol)
 {
-	TMap<FString, FString> Symbols = VerseBySymbol;
-	Symbols.Add(TEXT("@dt"), TEXT("Sim.DeltaTime"));
-	Symbols.Add(TEXT("@frame"), TEXT("Sim.Frame"));
-	Symbols.Add(TEXT("@time"), TEXT("Sim.TotalTime"));
+	FString Errors;
+	TSharedPtr<FVexIrProgram> Ir = FVexIrCompiler::Compile(Program, SymbolDefinitions, Errors);
+	
+	FString Body;
+	if (Ir.IsValid())
+	{
+		TMap<FString, FString> Symbols = VerseBySymbol;
+		Symbols.Add(TEXT("@dt"), TEXT("Sim.DeltaTime"));
+		Symbols.Add(TEXT("@frame"), TEXT("Sim.Frame"));
+		Symbols.Add(TEXT("@time"), TEXT("Sim.TotalTime"));
+		Body = FVexIrCompiler::LowerToVerse(*Ir, Symbols);
+	}
+	else
+	{
+		Body = FString::Printf(TEXT("    # IR Compile Failed: %s\n"), *Errors);
+	}
 
 	bool bIsAsync = false;
 	for (const FVexStatementAst& Statement : Program.Statements)
@@ -224,12 +243,11 @@ FString LowerToVerse(const FVexProgramAst& Program, const TMap<FString, FString>
 		}
 	}
 
-	const FString Body = Lower::Program(Program, Symbols, true);
 	const FString Effects = bIsAsync ? TEXT("<transacts><async>") : TEXT("<transacts>");
 	return FString::Printf(TEXT("ProcessDroid(Droid:droid_state, Sim:sim_context)%s:void =\n%s"), *Effects, *Body);
 }
 
-FString LowerMegaKernel(const TMap<uint32, FVexProgramAst>& Scripts, const TMap<FString, FString>& SymbolMap)
+FString LowerMegaKernel(const TMap<uint32, FVexProgramAst>& Scripts, const TArray<FVexSymbolDefinition>& SymbolDefinitions, const TMap<FString, FString>& SymbolMap)
 {
 	auto MakeLocalAlias = [](const FString& SymbolName)
 	{
@@ -267,6 +285,7 @@ FString LowerMegaKernel(const TMap<uint32, FVexProgramAst>& Scripts, const TMap<
 	for (const TPair<uint32, FVexProgramAst>& Pair : Scripts)
 	{
 		Dispatch += FString::Printf(TEXT("    case %u:\n    {\n"), Pair.Key);
+		// Note: Mega-Kernel still uses legacy AST lowering for complex hoisting/dispatch blocks
 		const FString CaseBody = Lower::Program(Pair.Value, LocalMap, false);
 		TArray<FString> BodyLines;
 		CaseBody.ParseIntoArrayLines(BodyLines);

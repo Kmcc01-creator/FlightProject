@@ -443,8 +443,8 @@ FReply SSwarmOrchestrator::OnCompileClicked()
 
 		if (ParseResult.bSuccess)
 		{
-			GeneratedHLSL = Flight::Vex::LowerToHLSL(ParseResult.Program, HlslBySymbol);
-			GeneratedVerse = Flight::Vex::LowerToVerse(ParseResult.Program, VerseBySymbol);
+			GeneratedHLSL = Flight::Vex::LowerToHLSL(ParseResult.Program, SymbolDefinitions, HlslBySymbol);
+			GeneratedVerse = Flight::Vex::LowerToVerse(ParseResult.Program, SymbolDefinitions, VerseBySymbol);
 		}
 		else
 		{
@@ -575,7 +575,7 @@ FString SSwarmOrchestrator::ParseVexToHLSL(const FString& InVexCode)
 	const Flight::Vex::FVexParseResult ParseResult = Flight::Vex::ParseAndValidate(InVexCode, SymbolDefinitions, false);
 	if (ParseResult.bSuccess)
 	{
-		return Flight::Vex::LowerToHLSL(ParseResult.Program, HlslBySymbol);
+		return Flight::Vex::LowerToHLSL(ParseResult.Program, SymbolDefinitions, HlslBySymbol);
 	}
 	return InVexCode;
 }
@@ -590,7 +590,7 @@ FString SSwarmOrchestrator::ParseVexToVerse(const FString& InVexCode)
 	const Flight::Vex::FVexParseResult ParseResult = Flight::Vex::ParseAndValidate(InVexCode, SymbolDefinitions, false);
 	if (ParseResult.bSuccess)
 	{
-		return Flight::Vex::LowerToVerse(ParseResult.Program, VerseBySymbol);
+		return Flight::Vex::LowerToVerse(ParseResult.Program, SymbolDefinitions, VerseBySymbol);
 	}
 	return InVexCode;
 }

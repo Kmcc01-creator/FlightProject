@@ -346,7 +346,7 @@ bool FVexParserMegaKernelTest::RunTest(const FString&)
 	SymbolMap.Add(TEXT("@velocity"), TEXT("Entity.Velocity"));
 	SymbolMap.Add(TEXT("@shield"), TEXT("Entity.Shield"));
 
-	const FString MegaKernel = Flight::Vex::LowerMegaKernel(Scripts, SymbolMap);
+	const FString MegaKernel = Flight::Vex::LowerMegaKernel(Scripts, TArray<Flight::Vex::FVexSymbolDefinition>(), SymbolMap);
 
 	// Verification
 	TestTrue(TEXT("Should hoist @position exactly once"), MegaKernel.Contains(TEXT("auto position_local = Entity.Position;")));

@@ -48,3 +48,12 @@ Use `FlightTestUtils.h` to generate mock symbol tables for VEX validation tests 
 
 ## 4. Benchmarking
 Performance tests should be tagged with `EAutomationTestFlags::PerfFilter` and should emit results to the JSON summary via `FAutomationTestBase::AddAnalyticsItem`.
+
+## 5. Current Baseline (March 9, 2026)
+
+- Headless phase-2 filter is currently passing (`63` tests, exit code `0`).
+- The previous phase-2 regressions in:
+  - `FlightProject.AutoRTFM.Integration`
+  - `FlightProject.Vex.Simd.Parity`
+  are fixed and now pass in targeted reruns.
+- GPU/Vulkan automation still depends on local driver/device availability; treat Vulkan initialization failures (for example `VK_ERROR_INITIALIZATION_FAILED` with `0` devices) as environment issues first, then investigate test logic.

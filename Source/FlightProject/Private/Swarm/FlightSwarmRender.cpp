@@ -56,7 +56,7 @@ FScreenPassTexture FSwarmSceneViewExtension::PostProcessPass_RenderThread(FRDGBu
 	FScreenPassTexture SceneColor = const_cast<FPostProcessMaterialInputs&>(Inputs).ReturnUntouchedSceneColorForPostProcessing(GraphBuilder);
 
 #if WITH_FLIGHT_COMPUTE_SHADERS
-	if (!DroidBuffer.IsValid() || NumEntities == 0)
+	if (!DroidBuffer.IsValid() || NumEntities == 0 || IsRunningCommandlet())
 	{
 		return SceneColor;
 	}

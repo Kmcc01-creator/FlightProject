@@ -23,6 +23,16 @@ This section captures the most recent observed build/test outcomes and commands 
   - mega-kernel hoisting/local alias generation aligned with parser tests
 
 ### Latest Headless Automation Snapshot (2026-03-09)
+- Phase-2 focused regression gate now passes (`2/2`):
+  - `FlightProject.AutoRTFM.Integration`
+  - `FlightProject.Vex.Simd.Parity`
+  - evidence: `Saved/Logs/FlightProject-backup-2026.03.09-04.32.45.log:101,110`
+- Full phase-2 filter now passes (`63` tests, `EXIT CODE: 0`):
+  - evidence: `Saved/Logs/FlightProject.log:105,297`
+- Root-cause fixes applied for this phase-2 recovery:
+  - AutoRTFM test now validates both transactional and fallback runtime semantics.
+  - VEX IR lowering now handles member access (`@position.x`) and unsupported-op reporting correctly.
+  - SIMD executor now resolves operand kinds safely (register/constant) and correctly broadcasts scalar constants across lanes.
 - Focused hardening bucket now passes:
   - `FlightProject.Integration.SchemaDriven`
   - `FlightProject.Schema.Vex.ManifestValidation`
@@ -52,6 +62,7 @@ This section captures the most recent observed build/test outcomes and commands 
   - `FlightProject.Integration.Vex.VerticalSlice`
   - `FlightProject.Integration.Concurrency`
 - GPU-oriented tests still expected to skip in `NullRHI` contexts.
+- Vulkan/GPU system-phase status remains environment-dependent. A prior full-GPU attempt exited before automation due to Vulkan device enumeration failure (`VK_ERROR_INITIALIZATION_FAILED`, `0` devices), so GPU-phase validation should be executed on a confirmed Vulkan-capable runtime.
 
 ### Key Learning: Discovery Context
 Tests defined with `EAutomationTestFlags::ClientContext` are **not** discovered when running via `UnrealEditor-Cmd`. To enable discovery in commandlet/CI environments, tests must use:
@@ -72,6 +83,13 @@ export UE_ROOT=/home/kelly/Unreal/UnrealEngine
 *Note: `quit` ensures immediate exit. The script uses `-DDC=NoZenLocalFallback` with a local cache path to avoid Zen startup stalls while keeping DDC valid for commandlet execution.*
 *Optional log filtering: set `TEST_LOG_PROFILE=focused|verbose|full` (default `full`) or provide explicit `LOG_CMDS` (which overrides profile selection).*
 *Optional stream shaping: set `TEST_COLOR_MODE=auto|always|never` and `TEST_STREAM_FILTER=all|errors`.*
+
+**Phased Validation Command (recommended default):**
+```bash
+export UE_ROOT=/home/kelly/Unreal/UnrealEngine
+TEST_STREAM_FILTER=errors ./Scripts/run_tests_phased.sh
+```
+*Use `--with-gpu --gpu-scope all` only when Vulkan/device availability is confirmed on the runner.*
 
 **Persistence Triage Command (SCSL field mode breadcrumbs):**
 ```bash

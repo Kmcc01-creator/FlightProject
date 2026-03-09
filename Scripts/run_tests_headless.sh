@@ -91,7 +91,7 @@ UE_CMD=(
     "$PROJECT_DIR/FlightProject.uproject"
     -ExecCmds="Automation RunTests $TEST_FILTER; quit"
     -unattended -nopause -nosplash -stdout -FullStdOutLogOutput
-    -NullRHI -NoPCH -NoBT -NoSound -NoDDCMaintenance
+    -NullRHI -NoPCH -NoBT -NoSound -NoDDCMaintenance -NoShaderCompile
     -DDC=NoZenLocalFallback -LocalDataCachePath="$DDC_PATH"
     "${LOG_CMDS_ARGS[@]}"
     "${EXTRA_ARGS[@]}"

@@ -3,9 +3,20 @@
 ## Project Structure & Module Organization
 FlightProject is an Unreal Engine 5 workspace rooted at `FlightProject.uproject`. Gameplay and editor modules live under `Source/FlightProject/{Public,Private}`; keep headers in `Public` for exports and implementation in `Private`. Config defaults live in `Config/Default*.ini`, runtime content plus CSV-driven data tables live under `Content/`, and generated outputs stay inside `Intermediate/` and `Saved/`.
 
+## Environment Snapshot
+- **Engine root**: default to `$HOME/Unreal/UnrealEngine` unless `UE_ROOT` is exported.
+- **Primary targets**: `FlightProject` (runtime) and `FlightProjectEditor` (editor); module resides under `Source/FlightProject`.
+- **C++ standard config**: `Source/FlightProject/FlightProject.Build.cs` sets `CppStandard = CppStandardVersion.Cpp23` for the `FlightProject` module.
+- **PCH behavior with C++23**: UBT may downgrade this module to `NoPCHs` when it differs from engine C++ standard; this is expected in current logs.
+- **Maps**: `Content/Maps/PersistentFlightTest.umap` currently serves as both `GameDefaultMap` and `TransitionMap` in `DefaultEngine.ini`.
+- **Data pipeline**: CSV configuration in `Content/Data/*` feeds lighting, autopilot, and spatial layout loaded by `FlightDataSubsystem`.
+- **Shader plans**: developer settings point `ComputeShaderDirectory` at `/Shaders`; module shader directory mapping is enabled for custom RDG/compute shaders.
+- **Config reference**: see `Docs/Environment/Configuration.md` for the `Config/Default*.ini` inventory.
+
 ## Build, Test, and Development Commands
 - `./Scripts/generate_project_files.sh -f` regenerates IDE files through `GenerateProjectFiles.sh`.
-- `./Scripts/build_targets.sh Development` compiles C++ targets; pass `Shipping` or `Test` as needed.
+- `./Scripts/build_targets.sh Development` compiles C++ targets; pass `Shipping` as needed. In Codex/sandboxed terminals this now auto-applies `-NoUBA`; use `--use-uba` to force UBA or `--no-uba` to force-disable it.
+- `"$UE_ROOT/Engine/Build/BatchFiles/Linux/Build.sh" FlightProjectEditor Linux Development -project="$PWD/FlightProject.uproject" -game -progress -Module=FlightProject -NoUBA` is the deterministic module-only fallback when UBA stalls.
 - `./Scripts/run_editor.sh -Log --wayland` starts UnrealEditor with helpers from `env_common.sh`.
 - `./Scripts/run_game.sh --no-build -- -windowed` stages/cooks via `RunUAT BuildCookRun` and launches the staged Linux binary; omit `--no-build` for a clean rebuild.
 - `./Scripts/run_tests_headless.sh` runs headless automation (`NullRHI`) and is the default local/CI test path.
@@ -32,7 +43,7 @@ FlightProject is an Unreal Engine 5 workspace rooted at `FlightProject.uproject`
   `TEST_SCOPE=gpu_smoke ./Scripts/run_tests_full.sh`
 - Discovery rule: tests intended for `UnrealEditor-Cmd`/CI must use `EAutomationTestFlags::EditorContext`; `ClientContext` tests are not discovered in this path.
 - After adding new test source files, run a full build once (`./Scripts/build_targets.sh Development`) to force discovery/index refresh before triage.
-- For cooked validation, run `make FlightProject-Linux-Test` or append `--test` to `run_game.sh` to drive `RunUAT`’s Test configuration.
+- For cooked validation, run `make FlightProject-Linux-Test` (or call `Build.sh`/`RunUAT` directly with Test config); `run_game.sh` does not currently expose a `--test` flag.
 - Keep current bucket status snapshots in `Docs/Workflow/CurrentBuild.md` and parser-specific coverage details in `Docs/Scripting/VexSchemaValidation.md`.
 - Document manual verification and open issues in `Docs/Environment/Troubleshooting.md` so staged builds stay reproducible.
 
@@ -45,6 +56,8 @@ FlightProject is an Unreal Engine 5 workspace rooted at `FlightProject.uproject`
 - Export `UE_ROOT` if the engine is outside `$HOME/Unreal/UnrealEngine`; scripts read it through `Scripts/env_common.sh`.
 - Prefer `rg` for code search and keep temp assets out of source—only committed `Content/` assets should live in git.
 - When editing ini files, lean on Unreal’s merge semantics (avoid wholesale copy/paste) and explain risky tweaks inside the matching doc under `Docs/`.
+- Codex terminal sandbox note (confirmed March 9, 2026): writes to `~/.epic/UnrealBuildAccelerator` can be blocked, so UBA may hang after `Using Unreal Build Accelerator local executor`. Use `./Scripts/build_targets.sh --no-uba` (or default Codex behavior) and only enable UBA with `--use-uba` when the environment permits it.
+- Optional override for non-Codex shells: set `FP_FORCE_NO_UBA=1` to keep UBA disabled by default, or `FP_FORCE_NO_UBA=0` to allow normal UBA selection.
 
 ## Phase Roadmap & TODOs
 This section tracks near-term priorities after functional/reactive/reflection stabilization and row/schema integration work.

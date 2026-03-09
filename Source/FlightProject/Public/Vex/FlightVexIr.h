@@ -65,6 +65,12 @@ class FLIGHTPROJECT_API FVexIrCompiler
 {
 public:
 	static TSharedPtr<FVexIrProgram> Compile(const FVexProgramAst& Program, const TArray<FVexSymbolDefinition>& SymbolDefinitions, FString& OutErrors);
+
+	/** Lower IR to HLSL source code. */
+	static FString LowerToHLSL(const FVexIrProgram& Program, const TMap<FString, FString>& HlslBySymbol);
+
+	/** Lower IR to Verse source code. */
+	static FString LowerToVerse(const FVexIrProgram& Program, const TMap<FString, FString>& VerseBySymbol);
 };
 
 } // namespace Flight::Vex

@@ -707,7 +707,7 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 		VerseBySymbol.Add(Def.SymbolName, Def.SymbolName.Mid(1)); // Fallback: just remove '@'
 	}
 	
-	const FString VerseCode = Flight::Vex::LowerToVerse(Result.Program, VerseBySymbol);
+	const FString VerseCode = Flight::Vex::LowerToVerse(Result.Program, SymbolDefinitions, VerseBySymbol);
 	Behavior.GeneratedVerseCode = VerseCode;
 	Behavior.bHasExecutableProcedure = false;
 	Behavior.CompileState = EFlightVerseCompileState::GeneratedOnly;

@@ -176,8 +176,8 @@ bool FFlightVexVerticalSliceComplexTest::RunTest(const FString& Parameters)
 			VerseBySymbol.Add(VexRow.SymbolName, VexRow.VerseIdentifier);
 		}
 
-		const FString HlslOutput = Flight::Vex::LowerToHLSL(ParseResult.Program, HlslBySymbol);
-		const FString VerseOutput = Flight::Vex::LowerToVerse(ParseResult.Program, VerseBySymbol);
+		const FString HlslOutput = Flight::Vex::LowerToHLSL(ParseResult.Program, Definitions, HlslBySymbol);
+		const FString VerseOutput = Flight::Vex::LowerToVerse(ParseResult.Program, Definitions, VerseBySymbol);
 		if (!Row->HlslIdentifier.IsEmpty())
 		{
 			TestTrue(FString::Printf(TEXT("HLSL lowering should contain mapped identifier for %s"), *SymbolName),

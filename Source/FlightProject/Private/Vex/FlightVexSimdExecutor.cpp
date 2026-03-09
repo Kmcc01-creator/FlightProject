@@ -127,6 +127,24 @@ bool TryGetAssignmentInfo(
 	return false;
 }
 
+FVector4f ResolveOperandValue(const FVexIrValue& Operand, const FVexIrProgram& Program, const TArray<FVector4f>& Registers)
+{
+	switch (Operand.Kind)
+	{
+	case FVexIrValue::EKind::Register:
+		return Registers.IsValidIndex(Operand.Index) ? Registers[Operand.Index] : FVector4f(0.0f, 0.0f, 0.0f, 0.0f);
+	case FVexIrValue::EKind::Constant:
+		if (Program.Constants.IsValidIndex(Operand.Index))
+		{
+			const float Value = Program.Constants[Operand.Index];
+			return FVector4f(Value, Value, Value, Value);
+		}
+		return FVector4f(0.0f, 0.0f, 0.0f, 0.0f);
+	default:
+		return FVector4f(0.0f, 0.0f, 0.0f, 0.0f);
+	}
+}
+
 } // namespace
 
 bool FVexSimdExecutor::CanCompileProgram(const FVexProgramAst& Program, const TArray<FVexSymbolDefinition>& SymbolDefinitions, FString* OutReason)
@@ -240,6 +258,13 @@ void FVexSimdExecutor::ExecuteDirect(
 			{
 			case EVexIrOp::LoadSymbol:
 			{
+				if (!Registers.IsValidIndex(Inst.Dest.Index)
+					|| Inst.Args.Num() < 1
+					|| !Ir->SymbolNames.IsValidIndex(Inst.Args[0].Index))
+				{
+					break;
+				}
+
 				const FString& SymbolName = Ir->SymbolNames[Inst.Args[0].Index];
 				FVector4f& Reg = Registers[Inst.Dest.Index];
 				for (int32 b = 0; b < BatchSize; ++b)
@@ -253,8 +278,13 @@ void FVexSimdExecutor::ExecuteDirect(
 			}
 			case EVexIrOp::StoreSymbol:
 			{
+				if (Inst.Args.Num() < 1 || !Ir->SymbolNames.IsValidIndex(Inst.Dest.Index))
+				{
+					break;
+				}
+
 				const FString& SymbolName = Ir->SymbolNames[Inst.Dest.Index];
-				const FVector4f& Reg = Registers[Inst.Args[0].Index];
+				const FVector4f Reg = ResolveOperandValue(Inst.Args[0], *Ir, Registers);
 				for (int32 b = 0; b < BatchSize; ++b)
 				{
 					if (SymbolName == TEXT("@shield")) { DroidStates[i + b].Shield = Reg[b]; DroidStates[i + b].bIsDirty = true; }
@@ -263,32 +293,50 @@ void FVexSimdExecutor::ExecuteDirect(
 				break;
 			}
 			case EVexIrOp::Const:
-				Registers[Inst.Dest.Index] = FVector4f(Ir->Constants[Inst.Args[0].Index]);
+				if (Registers.IsValidIndex(Inst.Dest.Index) && Inst.Args.Num() >= 1)
+				{
+					Registers[Inst.Dest.Index] = ResolveOperandValue(Inst.Args[0], *Ir, Registers);
+				}
 				break;
 			case EVexIrOp::Add:
-				Registers[Inst.Dest.Index] = Registers[Inst.Args[0].Index] + Registers[Inst.Args[1].Index];
+				if (Registers.IsValidIndex(Inst.Dest.Index) && Inst.Args.Num() >= 2)
+				{
+					Registers[Inst.Dest.Index] = ResolveOperandValue(Inst.Args[0], *Ir, Registers) + ResolveOperandValue(Inst.Args[1], *Ir, Registers);
+				}
 				break;
 			case EVexIrOp::Sub:
-				Registers[Inst.Dest.Index] = Registers[Inst.Args[0].Index] - Registers[Inst.Args[1].Index];
+				if (Registers.IsValidIndex(Inst.Dest.Index) && Inst.Args.Num() >= 2)
+				{
+					Registers[Inst.Dest.Index] = ResolveOperandValue(Inst.Args[0], *Ir, Registers) - ResolveOperandValue(Inst.Args[1], *Ir, Registers);
+				}
 				break;
 			case EVexIrOp::Mul:
-				Registers[Inst.Dest.Index] = Registers[Inst.Args[0].Index] * Registers[Inst.Args[1].Index];
+				if (Registers.IsValidIndex(Inst.Dest.Index) && Inst.Args.Num() >= 2)
+				{
+					Registers[Inst.Dest.Index] = ResolveOperandValue(Inst.Args[0], *Ir, Registers) * ResolveOperandValue(Inst.Args[1], *Ir, Registers);
+				}
 				break;
 			case EVexIrOp::Div:
 			{
-				const FVector4f Den = Registers[Inst.Args[1].Index];
-				const FVector4f Num = Registers[Inst.Args[0].Index];
-				Registers[Inst.Dest.Index] = FVector4f(
-					FMath::IsNearlyZero(Den.X) ? 0.0f : (Num.X / Den.X),
-					FMath::IsNearlyZero(Den.Y) ? 0.0f : (Num.Y / Den.Y),
-					FMath::IsNearlyZero(Den.Z) ? 0.0f : (Num.Z / Den.Z),
-					FMath::IsNearlyZero(Den.W) ? 0.0f : (Num.W / Den.W));
+				if (Registers.IsValidIndex(Inst.Dest.Index) && Inst.Args.Num() >= 2)
+				{
+					const FVector4f Den = ResolveOperandValue(Inst.Args[1], *Ir, Registers);
+					const FVector4f Num = ResolveOperandValue(Inst.Args[0], *Ir, Registers);
+					Registers[Inst.Dest.Index] = FVector4f(
+						FMath::IsNearlyZero(Den.X) ? 0.0f : (Num.X / Den.X),
+						FMath::IsNearlyZero(Den.Y) ? 0.0f : (Num.Y / Den.Y),
+						FMath::IsNearlyZero(Den.Z) ? 0.0f : (Num.Z / Den.Z),
+						FMath::IsNearlyZero(Den.W) ? 0.0f : (Num.W / Den.W));
+				}
 				break;
 			}
 			case EVexIrOp::Sin:
 			{
-				const FVector4f& Src = Registers[Inst.Args[0].Index];
-				Registers[Inst.Dest.Index] = FVector4f(FMath::Sin(Src.X), FMath::Sin(Src.Y), FMath::Sin(Src.Z), FMath::Sin(Src.W));
+				if (Registers.IsValidIndex(Inst.Dest.Index) && Inst.Args.Num() >= 1)
+				{
+					const FVector4f Src = ResolveOperandValue(Inst.Args[0], *Ir, Registers);
+					Registers[Inst.Dest.Index] = FVector4f(FMath::Sin(Src.X), FMath::Sin(Src.Y), FMath::Sin(Src.Z), FMath::Sin(Src.W));
+				}
 				break;
 			}
 			default: break;
@@ -315,6 +363,13 @@ void FVexSimdExecutor::Execute(TArrayView<Flight::Swarm::FDroidState> DroidState
 			{
 			case EVexIrOp::LoadSymbol:
 			{
+				if (!Registers.IsValidIndex(Inst.Dest.Index)
+					|| Inst.Args.Num() < 1
+					|| !Ir->SymbolNames.IsValidIndex(Inst.Args[0].Index))
+				{
+					break;
+				}
+
 				const FString& SymbolName = Ir->SymbolNames[Inst.Args[0].Index];
 				FVector4f& Reg = Registers[Inst.Dest.Index];
 				for (int32 b = 0; b < BatchSize; ++b)
@@ -328,8 +383,13 @@ void FVexSimdExecutor::Execute(TArrayView<Flight::Swarm::FDroidState> DroidState
 			}
 			case EVexIrOp::StoreSymbol:
 			{
+				if (Inst.Args.Num() < 1 || !Ir->SymbolNames.IsValidIndex(Inst.Dest.Index))
+				{
+					break;
+				}
+
 				const FString& SymbolName = Ir->SymbolNames[Inst.Dest.Index];
-				const FVector4f& Reg = Registers[Inst.Args[0].Index];
+				const FVector4f Reg = ResolveOperandValue(Inst.Args[0], *Ir, Registers);
 				for (int32 b = 0; b < BatchSize; ++b)
 				{
 					auto& Droid = DroidStates[i + b];
@@ -338,32 +398,50 @@ void FVexSimdExecutor::Execute(TArrayView<Flight::Swarm::FDroidState> DroidState
 				break;
 			}
 			case EVexIrOp::Const:
-				Registers[Inst.Dest.Index] = FVector4f(Ir->Constants[Inst.Args[0].Index]);
+				if (Registers.IsValidIndex(Inst.Dest.Index) && Inst.Args.Num() >= 1)
+				{
+					Registers[Inst.Dest.Index] = ResolveOperandValue(Inst.Args[0], *Ir, Registers);
+				}
 				break;
 			case EVexIrOp::Add:
-				Registers[Inst.Dest.Index] = Registers[Inst.Args[0].Index] + Registers[Inst.Args[1].Index];
+				if (Registers.IsValidIndex(Inst.Dest.Index) && Inst.Args.Num() >= 2)
+				{
+					Registers[Inst.Dest.Index] = ResolveOperandValue(Inst.Args[0], *Ir, Registers) + ResolveOperandValue(Inst.Args[1], *Ir, Registers);
+				}
 				break;
 			case EVexIrOp::Sub:
-				Registers[Inst.Dest.Index] = Registers[Inst.Args[0].Index] - Registers[Inst.Args[1].Index];
+				if (Registers.IsValidIndex(Inst.Dest.Index) && Inst.Args.Num() >= 2)
+				{
+					Registers[Inst.Dest.Index] = ResolveOperandValue(Inst.Args[0], *Ir, Registers) - ResolveOperandValue(Inst.Args[1], *Ir, Registers);
+				}
 				break;
 			case EVexIrOp::Mul:
-				Registers[Inst.Dest.Index] = Registers[Inst.Args[0].Index] * Registers[Inst.Args[1].Index];
+				if (Registers.IsValidIndex(Inst.Dest.Index) && Inst.Args.Num() >= 2)
+				{
+					Registers[Inst.Dest.Index] = ResolveOperandValue(Inst.Args[0], *Ir, Registers) * ResolveOperandValue(Inst.Args[1], *Ir, Registers);
+				}
 				break;
 			case EVexIrOp::Div:
 			{
-				const FVector4f Den = Registers[Inst.Args[1].Index];
-				const FVector4f Num = Registers[Inst.Args[0].Index];
-				Registers[Inst.Dest.Index] = FVector4f(
-					FMath::IsNearlyZero(Den.X) ? 0.0f : (Num.X / Den.X),
-					FMath::IsNearlyZero(Den.Y) ? 0.0f : (Num.Y / Den.Y),
-					FMath::IsNearlyZero(Den.Z) ? 0.0f : (Num.Z / Den.Z),
-					FMath::IsNearlyZero(Den.W) ? 0.0f : (Num.W / Den.W));
+				if (Registers.IsValidIndex(Inst.Dest.Index) && Inst.Args.Num() >= 2)
+				{
+					const FVector4f Den = ResolveOperandValue(Inst.Args[1], *Ir, Registers);
+					const FVector4f Num = ResolveOperandValue(Inst.Args[0], *Ir, Registers);
+					Registers[Inst.Dest.Index] = FVector4f(
+						FMath::IsNearlyZero(Den.X) ? 0.0f : (Num.X / Den.X),
+						FMath::IsNearlyZero(Den.Y) ? 0.0f : (Num.Y / Den.Y),
+						FMath::IsNearlyZero(Den.Z) ? 0.0f : (Num.Z / Den.Z),
+						FMath::IsNearlyZero(Den.W) ? 0.0f : (Num.W / Den.W));
+				}
 				break;
 			}
 			case EVexIrOp::Sin:
 			{
-				const FVector4f& Src = Registers[Inst.Args[0].Index];
-				Registers[Inst.Dest.Index] = FVector4f(FMath::Sin(Src.X), FMath::Sin(Src.Y), FMath::Sin(Src.Z), FMath::Sin(Src.W));
+				if (Registers.IsValidIndex(Inst.Dest.Index) && Inst.Args.Num() >= 1)
+				{
+					const FVector4f Src = ResolveOperandValue(Inst.Args[0], *Ir, Registers);
+					Registers[Inst.Dest.Index] = FVector4f(FMath::Sin(Src.X), FMath::Sin(Src.Y), FMath::Sin(Src.Z), FMath::Sin(Src.W));
+				}
 				break;
 			}
 			default: break;

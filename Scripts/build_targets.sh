@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds FlightProject C++ targets before launching the editor.
-# Usage: ./Scripts/build_targets.sh [Configuration] [--verify]
+# Usage: ./Scripts/build_targets.sh [Configuration] [--verify] [--no-uba|--use-uba]
 # Default configuration: Development
 
 set -euo pipefail
@@ -11,12 +11,21 @@ source "$SCRIPT_DIR/env_common.sh"
 
 CONFIGURATION="Development"
 SHOULD_VERIFY=0
+FORCE_USE_UBA=0
 EXTRA_ARGS=()
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --verify)
             SHOULD_VERIFY=1
+            shift
+            ;;
+        --no-uba)
+            EXTRA_ARGS+=("-NoUBA")
+            shift
+            ;;
+        --use-uba)
+            FORCE_USE_UBA=1
             shift
             ;;
         Debug|Development|Shipping)
@@ -35,6 +44,49 @@ BUILD_SH=$(resolve_ue_path "Engine/Build/BatchFiles/Linux/Build.sh")
 ensure_project_file
 ensure_executable "$BUILD_SH" "Build.sh"
 
+# Keep DotNet state local to the project so sandboxed terminals do not need write access in $HOME.
+DOTNET_STATE_DIR="$PROJECT_ROOT/Saved/DotNetCli"
+mkdir -p "$DOTNET_STATE_DIR"
+export DOTNET_CLI_HOME="${DOTNET_CLI_HOME:-$DOTNET_STATE_DIR}"
+export DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1
+export DOTNET_NOLOGO=1
+
+if [[ -z "${MSBUILDWARNNOTASERROR:-}" ]]; then
+    export MSBUILDWARNNOTASERROR="NU1901;NU1902;NU1903"
+elif [[ "$MSBUILDWARNNOTASERROR" != *NU1903* ]]; then
+    export MSBUILDWARNNOTASERROR="${MSBUILDWARNNOTASERROR};NU1901;NU1902;NU1903"
+fi
+
+if [[ -z "${NUGET_AUDIT_MODE:-}" ]]; then
+    export NUGET_AUDIT_MODE="none"
+fi
+
+# Codex sandbox cannot write UBA cache under ~/.epic by default; disable UBA automatically in that environment.
+AUTO_DISABLE_UBA=0
+if [[ -n "${CODEX_CI:-}" ]]; then
+    AUTO_DISABLE_UBA=1
+fi
+if [[ "${FP_FORCE_NO_UBA:-}" == "1" ]]; then
+    AUTO_DISABLE_UBA=1
+elif [[ "${FP_FORCE_NO_UBA:-}" == "0" ]]; then
+    AUTO_DISABLE_UBA=0
+fi
+if (( FORCE_USE_UBA )); then
+    AUTO_DISABLE_UBA=0
+fi
+
+HAS_NO_UBA_ARG=0
+for arg in "${EXTRA_ARGS[@]}"; do
+    if [[ "$arg" == "-NoUBA" ]]; then
+        HAS_NO_UBA_ARG=1
+        break
+    fi
+done
+
+if (( AUTO_DISABLE_UBA && ! HAS_NO_UBA_ARG )); then
+    EXTRA_ARGS+=("-NoUBA")
+fi
+
 echo
 echo "${c_blue}================================================================${c_reset}"
 echo "${c_blue}  FlightProject Build Orchestrator${c_reset}"
@@ -42,6 +94,11 @@ echo "${c_blue}================================================================$
 log_info "Target:        ${c_cyan}FlightProjectEditor${c_reset}"
 log_info "Configuration: ${c_cyan}${CONFIGURATION}${c_reset}"
 log_info "Auto-Verify:   $( (( SHOULD_VERIFY )) && echo -e "${c_green}ON${c_reset}" || echo -e "${c_yellow}OFF${c_reset}" )"
+if (( AUTO_DISABLE_UBA )); then
+    log_info "Build Accel:   ${c_yellow}NoUBA (sandbox-safe mode)${c_reset}"
+elif (( FORCE_USE_UBA )); then
+    log_info "Build Accel:   ${c_green}UBA forced on${c_reset}"
+fi
 echo "${c_blue}----------------------------------------------------------------${c_reset}"
 echo
 

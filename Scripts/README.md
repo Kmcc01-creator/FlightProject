@@ -14,8 +14,8 @@ When adding new automation, source `env_common.sh` first so every helper shares 
 ## Typical Workflow
 1. `./Scripts/generate_project_files.sh [-f]`  
    Regenerates IDE and project files via `GenerateProjectFiles.sh`. Use `-f` to pass Unreal's `-Force` flag.
-2. `./Scripts/build_targets.sh [Configuration]`  
-   Compiles C++ modules through `Build.sh`. Configuration defaults to `Development`.
+2. `./Scripts/build_targets.sh [Configuration] [--no-uba|--use-uba]`  
+   Compiles C++ modules through `Build.sh` (default `Development`). In Codex/sandboxed terminals it auto-applies `-NoUBA` to avoid write failures under `~/.epic/UnrealBuildAccelerator`; use `--use-uba` to override if your environment allows it.
 3. `./Scripts/run_editor.sh [Extra UnrealEditor args]`  
    Launches `UnrealEditor` with the project descriptor, forwards additional arguments (e.g. `-Log`, `-NoRayTracing`), and honours our Wayland helpers (`--video-backend`, `--wayland`, `--x11`, `--gamescope`, `--no-gamescope`, `--gamescope-arg`).
 4. `./Scripts/run_game.sh [options]`  

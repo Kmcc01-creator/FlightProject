@@ -63,7 +63,7 @@ void FFlightVexParserSpec::Define()
 			
 			TMap<FString, FString> SymbolMap;
 			SymbolMap.Add(TEXT("@velocity"), TEXT("Droid.Velocity"));
-			FString Output = Flight::Vex::LowerToVerse(Result.Program, SymbolMap);
+			FString Output = Flight::Vex::LowerToVerse(Result.Program, TArray<Flight::Vex::FVexSymbolDefinition>(), SymbolMap);
 			
 			TestTrue("Uses 'set' keyword", Output.Contains(TEXT("set Droid.Velocity")));
 			TestFalse("No semicolons", Output.Contains(TEXT(";")));

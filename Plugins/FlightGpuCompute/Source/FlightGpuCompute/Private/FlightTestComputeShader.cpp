@@ -6,10 +6,30 @@
 #include "RenderGraphUtils.h"
 #include "ShaderParameterStruct.h"
 #include "GlobalShader.h"
+#include "Misc/App.h"
 
 #if WITH_FLIGHT_COMPUTE_SHADERS
 
 DEFINE_LOG_CATEGORY_STATIC(LogFlightTestCompute, Log, All);
+
+namespace
+{
+	static FGlobalShaderMap* TryGetFlightGlobalShaderMap()
+	{
+		if (!FApp::CanEverRender())
+		{
+			return nullptr;
+		}
+
+		const EShaderPlatform ShaderPlatform = GShaderPlatformForFeatureLevel[GMaxRHIFeatureLevel];
+		if (ShaderPlatform == SP_NumPlatforms || GGlobalShaderMap[ShaderPlatform] == nullptr)
+		{
+			return nullptr;
+		}
+
+		return GetGlobalShaderMap(ShaderPlatform);
+	}
+}
 
 // ============================================================================
 // Shader Implementations
@@ -40,8 +60,20 @@ FRDGBufferRef DispatchFlightTestCompute(
 	FRDGBufferDesc BufferDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), BufferSize);
 	FRDGBufferRef OutputBuffer = GraphBuilder.CreateBuffer(BufferDesc, TEXT("FlightTestOutput"));
 
+	if (IsRunningCommandlet())
+	{
+		return OutputBuffer;
+	}
+
 	// Get shader from global shader map
-	TShaderMapRef<FFlightTestComputeShader> ComputeShader(GetGlobalShaderMap(GMaxRHIFeatureLevel));
+	FGlobalShaderMap* GlobalShaderMap = TryGetFlightGlobalShaderMap();
+	if (!GlobalShaderMap)
+	{
+		UE_LOG(LogFlightTestCompute, Verbose,
+			TEXT("DispatchFlightTestCompute: GlobalShaderMap unavailable (non-rendering or not initialized yet)"));
+		return OutputBuffer;
+	}
+	TShaderMapRef<FFlightTestComputeShader> ComputeShader(GlobalShaderMap);
 
 	if (!ComputeShader.IsValid())
 	{
@@ -77,8 +109,13 @@ FRDGBufferRef DispatchFlightTestCompute(
 
 bool AreFlightComputeShadersReady()
 {
+	if (IsRunningCommandlet())
+	{
+		return false;
+	}
+
 	// Check if global shader map exists and has our shaders
-	FGlobalShaderMap* GlobalShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
+	FGlobalShaderMap* GlobalShaderMap = TryGetFlightGlobalShaderMap();
 	if (!GlobalShaderMap)
 	{
 		return false;
