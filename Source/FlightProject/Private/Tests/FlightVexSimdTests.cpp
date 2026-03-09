@@ -7,7 +7,7 @@
 #include "Mass/FlightMassFragments.h"
 #include "Swarm/SwarmSimulationTypes.h"
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVexSimdParityTest, "FlightProject.Vex.Simd.Parity", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVexSimdParityTest, "FlightProject.Integration.Vex.SimdParity", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FFlightVexSimdParityTest::RunTest(const FString& Parameters)
 {

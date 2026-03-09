@@ -3,6 +3,7 @@
 #include "FlightGameState.h"
 #include "FlightHUD.h"
 #include "FlightPlayerController.h"
+#include "FlightStartupProfile.h"
 #include "FlightVehiclePawn.h"
 #include "FlightWorldBootstrapSubsystem.h"
 #include "FlightScriptingLibrary.h"
@@ -20,8 +21,96 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogFlightGameMode, Log, All);
 
+namespace
+{
+
+bool ShouldUseLegacyGauntletPath(const UWorld* World)
+{
+    if (!World)
+    {
+        return false;
+    }
+
+    const FString MapName = World->GetMapName();
+    if (MapName.Contains(TEXT("PersistentFlightTest")))
+    {
+        return true;
+    }
+
+    if (const AWorldSettings* WorldSettings = World->GetWorldSettings())
+    {
+        return WorldSettings->Tags.Contains(TEXT("GauntletTest"));
+    }
+
+    return false;
+}
+
+} // namespace
+
 AFlightGameMode::AFlightGameMode()
 {
+}
+
+int32 AFlightGameMode::ResolveGauntletGpuSwarmEntityCount() const
+{
+    if (!StartupProfileAsset.IsNull())
+    {
+        if (const UFlightStartupProfile* StartupProfileObject = StartupProfileAsset.LoadSynchronous())
+        {
+            return FMath::Max(1, StartupProfileObject->GauntletGpuSwarmEntityCount);
+        }
+    }
+
+    return FMath::Max(1, GauntletGpuSwarmEntityCount);
+}
+
+const TCHAR* AFlightGameMode::StartupProfileToString(const EFlightStartupProfile Profile)
+{
+    switch (Profile)
+    {
+    case EFlightStartupProfile::DefaultSandbox:
+        return TEXT("DefaultSandbox");
+    case EFlightStartupProfile::GauntletGpuSwarm:
+        return TEXT("GauntletGpuSwarm");
+    case EFlightStartupProfile::LegacyAuto:
+        return TEXT("LegacyAuto");
+    default:
+        return TEXT("Unknown");
+    }
+}
+
+EFlightStartupProfile AFlightGameMode::ResolveStartupProfile(const UWorld* World) const
+{
+    if (!StartupProfileAsset.IsNull())
+    {
+        if (const UFlightStartupProfile* StartupProfileObject = StartupProfileAsset.LoadSynchronous())
+        {
+            return StartupProfileObject->StartupProfile;
+        }
+
+        UE_LOG(
+            LogFlightGameMode,
+            Warning,
+            TEXT("FlightGameMode: Failed to load StartupProfileAsset '%s'; falling back to config."),
+            *StartupProfileAsset.ToSoftObjectPath().ToString());
+    }
+
+    if (StartupProfile != EFlightStartupProfile::LegacyAuto)
+    {
+        return StartupProfile;
+    }
+
+    const EFlightStartupProfile ResolvedProfile = ShouldUseLegacyGauntletPath(World)
+        ? EFlightStartupProfile::GauntletGpuSwarm
+        : EFlightStartupProfile::DefaultSandbox;
+
+    UE_LOG(
+        LogFlightGameMode,
+        Warning,
+        TEXT("FlightGameMode: StartupProfile is LegacyAuto; resolved '%s' from legacy map/tag inference. Prefer setting StartupProfile explicitly."),
+        StartupProfileToString(ResolvedProfile));
+
+    return ResolvedProfile;
 }
 
 void AFlightGameMode::StartPlay()
@@ -36,39 +125,34 @@ void AFlightGameMode::StartPlay()
         return;
     }
 
-    // Check for GauntletTest tag or map name to skip default setup
-    bool bIsGauntletTest = false;
-    FString MapName = World->GetMapName();
-    
-    // Check map name (PIE often prefixes with UEDPIE_0_)
-    if (MapName.Contains(TEXT("PersistentFlightTest")))
-    {
-        bIsGauntletTest = true;
-    }
+    const EFlightStartupProfile ActiveStartupProfile = ResolveStartupProfile(World);
+    const int32 ActiveGauntletGpuSwarmEntityCount = ResolveGauntletGpuSwarmEntityCount();
+    UE_LOG(
+        LogFlightGameMode,
+        Log,
+        TEXT("FlightGameMode: StartupProfile=%s for map '%s' (Asset=%s)"),
+        StartupProfileToString(ActiveStartupProfile),
+        *World->GetMapName(),
+        StartupProfileAsset.IsNull() ? TEXT("None") : *StartupProfileAsset.ToSoftObjectPath().ToString());
 
-    // Check tags as a backup
-    if (AWorldSettings* WorldSettings = World->GetWorldSettings())
+    if (ActiveStartupProfile == EFlightStartupProfile::GauntletGpuSwarm)
     {
-        if (WorldSettings->Tags.Contains("GauntletTest"))
-        {
-            bIsGauntletTest = true;
-        }
-    }
-
-    if (bIsGauntletTest)
-    {
-        UE_LOG(LogFlightGameMode, Log, TEXT("GauntletTest detected in map '%s': Initializing 100k GPU Swarm Simulation."), *MapName);
+        UE_LOG(
+            LogFlightGameMode,
+            Log,
+            TEXT("FlightGameMode: Initializing Gauntlet GPU swarm path with %d entities."),
+            ActiveGauntletGpuSwarmEntityCount);
         
         // Disable default pawn and HUD spawning for a clean slate
         DefaultPawnClass = nullptr;
         HUDClass = nullptr;
 
         // Initialize via scripting library for unified execution path
-        UFlightScriptingLibrary::InitializeGpuSwarm(this, 100000);
+        UFlightScriptingLibrary::InitializeGpuSwarm(this, ActiveGauntletGpuSwarmEntityCount);
     }
     else
     {
-        // Step 1: Run world bootstrap (lighting, spatial layout, resume Mass simulation)
+        // Step 1: Run reusable world bootstrap.
         if (UFlightWorldBootstrapSubsystem* Bootstrap = World->GetSubsystem<UFlightWorldBootstrapSubsystem>())
         {
             UE_LOG(LogFlightGameMode, Log, TEXT("Running world bootstrap..."));
@@ -80,7 +164,7 @@ void AFlightGameMode::StartPlay()
             UE_LOG(LogFlightGameMode, Warning, TEXT("FlightWorldBootstrapSubsystem not available"));
         }
 
-        // Step 2: Spawn initial swarm (via scripting library - handles plugin dependency)
+        // Step 2: Trigger spawn policy for the current startup mode.
         UE_LOG(LogFlightGameMode, Log, TEXT("Spawning initial swarm..."));
         int32 SpawnedCount = UFlightScriptingLibrary::SpawnInitialSwarm(this);
         UE_LOG(LogFlightGameMode, Log, TEXT("Spawned %d swarm entities"), SpawnedCount);

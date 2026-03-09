@@ -10,10 +10,8 @@
 #include "uLang/Toolchain/ModularFeatureManager.h"
 #endif
 
-#if WITH_EDITOR
-#include "UI/FlightLogTab.h"
-#include "UI/SwarmOrchestratorTab.h"
-#endif
+#include "Core/FlightLogging.h"
+#include "UI/FlightLogCapture.h"
 
 DEFINE_LOG_CATEGORY(LogFlightProject);
 IMPLEMENT_PRIMARY_GAME_MODULE(FFlightProjectModule, FlightProject, "FlightProject");
@@ -28,6 +26,14 @@ namespace
 void FFlightProjectModule::StartupModule()
 {
     UE_LOG(LogFlightProject, Log, TEXT("FlightProject module initialized"));
+
+    // Ensure global log capture is active
+    Flight::Log::FGlobalLogCapture::Initialize();
+
+    // Register our custom logging sinks
+    using namespace Flight::Logging;
+    FLogger::Get().AddSink(MakeShared<FInternalLogService>());
+    FLogger::Get().AddSink(MakeShared<FUnrealLogSink>());
 
     // Register shader directory with virtual path /FlightProject
     // This allows shaders to be referenced as "/FlightProject/Private/ShaderName.usf"
@@ -47,14 +53,6 @@ void FFlightProjectModule::StartupModule()
             TEXT("Shader directory not found at %s - custom shaders unavailable"), *ShaderDirectory);
     }
 
-#if WITH_EDITOR
-    // Register Flight Log Viewer tab
-    Flight::Log::RegisterLogViewerTab();
-
-    // Register Swarm Orchestrator tab
-    Flight::Swarm::RegisterSwarmOrchestrator();
-#endif
-
 #if WITH_VERSE_VM || defined(__INTELLISENSE__)
 	if (!GVerseAssemblerPassHandle.IsValid())
 	{
@@ -66,12 +64,6 @@ void FFlightProjectModule::StartupModule()
 
 void FFlightProjectModule::ShutdownModule()
 {
-#if WITH_EDITOR
-    // Unregister tabs
-    Flight::Log::UnregisterLogViewerTab();
-    Flight::Swarm::UnregisterSwarmOrchestrator();
-#endif
-
 #if WITH_VERSE_VM || defined(__INTELLISENSE__)
 	if (GVerseAssemblerPassHandle.IsValid())
 	{

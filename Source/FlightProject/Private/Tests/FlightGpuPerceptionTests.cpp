@@ -9,6 +9,7 @@
 #include "Engine/Engine.h"
 #include "Tests/AutomationCommon.h"
 #include "RenderingThread.h"
+#include "FlightTestUtils.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -16,10 +17,15 @@
 // Logic Path Verification
 // ============================================================================
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightGpuPerceptionTest, "FlightProject.Spatial.GpuPerception", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightGpuPerceptionTest, "FlightProject.Gpu.Spatial.Perception", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FFlightGpuPerceptionTest::RunTest(const FString& Parameters)
 {
+	if (Flight::Test::ShouldSkipGpuTest())
+	{
+		return true;
+	}
+
 	UWorld* World = nullptr;
 	if (GEngine)
 	{
@@ -168,11 +174,16 @@ private:
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FFlightGpuPerceptionCompletionTest,
-	"FlightProject.Spatial.GpuPerception.CallbackResolves",
+	"FlightProject.Gpu.Spatial.Perception.CallbackResolves",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FFlightGpuPerceptionCompletionTest::RunTest(const FString& Parameters)
 {
+	if (Flight::Test::ShouldSkipGpuTest())
+	{
+		return true;
+	}
+
 	UWorld* World = nullptr;
 	if (GEngine)
 	{
@@ -300,10 +311,15 @@ private:
 	double LastLogTime;
 };
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightGpuPerceptionBenchmark, "FlightProject.Benchmark.GpuPerception", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightGpuPerceptionBenchmark, "FlightProject.Perf.GpuPerception", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FFlightGpuPerceptionBenchmark::RunTest(const FString& Parameters)
 {
+	if (Flight::Test::ShouldSkipGpuTest())
+	{
+		return true;
+	}
+
 	UWorld* World = nullptr;
 	if (GEngine)
 	{

@@ -19,6 +19,8 @@ Keeping all of this logic in the game mode makes it difficult to:
 
 This plan decomposes StartPlay into modular subsystems/components that orchestrate their own lifecycles and expose clean APIs for future tooling.
 
+For the explicit ownership split between `AFlightGameMode` and `UFlightWorldBootstrapSubsystem`, see `Docs/Architecture/GameModeBootstrapBoundary.md`.
+
 ## Target architecture
 ```
                ┌─────────────────────────────┐
@@ -42,7 +44,22 @@ This plan decomposes StartPlay into modular subsystems/components that orchestra
 
 - **`UFlightWorldBootstrapSubsystem` (world subsystem)** handles all environment/bootstrap work that should happen exactly once per world. It binds to `FWorldDelegates::OnWorldBeginPlay` (and can expose manual `RebuildEnvironment()` for runtime refresh).
 - **`UFlightSwarmSpawnerSubsystem` (world subsystem)** owns drone swarm orchestration. It depends on the data subsystem, nav graph hub, and future mission scripts. The subsystem can be triggered on world begin play or by other systems (e.g., mission reset, debug console).
-- `AFlightGameMode::StartPlay` shrinks to logging, delegating to these subsystems, and performing any mode-specific work.
+- `AFlightGameMode::StartPlay` shrinks to selecting an explicit startup profile asset/config, delegating to these subsystems, and performing any mode-specific work.
+
+### Current Implementation Note
+
+The current codebase has completed the decomposition of responsibilities, but the main trigger surface is still `AFlightGameMode::StartPlay()`, not a world-begin-play delegate owned by the bootstrap subsystem.
+
+For the planned migration of that trigger into a dedicated coordination layer, see `Docs/Workflow/OrchestrationImplementationPlan.md`.
+
+In practice, the ordering is:
+
+1. subsystem initialization
+2. `AFlightGameMode::StartPlay()`
+3. `UFlightWorldBootstrapSubsystem::RunBootstrap()`
+4. swarm spawn or GPU-swarm initialization path
+
+That still fits the decomposition goal, but it is important not to confuse the target architecture with the exact current trigger path.
 
 ## Subsystem responsibilities
 

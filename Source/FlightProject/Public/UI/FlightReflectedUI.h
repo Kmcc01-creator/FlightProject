@@ -31,7 +31,7 @@ public:
 		auto VerticalBox = SNew(SVerticalBox);
 
 		// Iterate over fields using our C++23 reflection traits
-		TReflectionTraits<T>::Fields::ForEachDescriptor([&](auto Descriptor) {
+		TReflectTraits<T>::Fields::ForEachDescriptor([&](auto Descriptor) {
 			using FieldType = typename decltype(Descriptor)::FieldType;
 			FString Name = ANSI_TO_TCHAR(decltype(Descriptor)::Name.data());
 			

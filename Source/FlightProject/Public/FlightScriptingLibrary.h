@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Kismet/BlueprintFunctionLibrary.h"
+#include "Rendering/FlightSimpleSCSLShaderPipelineSubsystem.h"
 #include "Schema/FlightRequirementSchema.h"
 #include "Verse/UFlightVerseSubsystem.h"
 #include "FlightScriptingLibrary.generated.h"
@@ -91,6 +92,18 @@ public:
     /** Legacy name - calls GetConfiguredDataTablePaths. */
     UFUNCTION(BlueprintPure, Category = "Flight|Scripting|Validation")
     static TArray<FString> GetConfiguredCSVPaths();
+
+    /**
+     * Ensure a Mass entity config asset contains the requested trait classes.
+     * Trait classes should be passed as script class paths (for example "/Script/SwarmEncounter.FlightSwarmTrait").
+     * Returns issues encountered during load/class resolution or trait insertion.
+     */
+    UFUNCTION(BlueprintCallable, Category = "Flight|Scripting|Editor")
+    static TArray<FString> EnsureMassEntityConfigTraits(const FString& ConfigAssetPath, const TArray<FString>& TraitClassPaths);
+
+    /** Return the trait class names currently hosted by a Mass entity config asset. */
+    UFUNCTION(BlueprintPure, Category = "Flight|Scripting|Editor")
+    static TArray<FString> GetMassEntityConfigTraitClassNames(const FString& ConfigAssetPath);
 
     // ============================================================================
     // Schema Contracts
@@ -182,6 +195,46 @@ public:
     /** Returns current PIE trace event count for the active world. */
     UFUNCTION(BlueprintPure, Category = "Flight|Scripting|Observability", meta = (WorldContext = "WorldContextObject"))
     static int32 GetPIEEntityTraceEventCount(const UObject* WorldContextObject);
+
+    /**
+     * Rebuild the current world's orchestration visibility and execution plan,
+     * then return the report as JSON.
+     */
+    UFUNCTION(BlueprintCallable, Category = "Flight|Scripting|Observability", meta = (WorldContext = "WorldContextObject"))
+    static FString GetOrchestrationReportJson(const UObject* WorldContextObject, bool bRefresh = true);
+
+    /**
+     * Export the current world's orchestration report to disk.
+     * Relative paths are rooted to the project directory.
+     * Returns absolute output path on success, empty string on failure.
+     */
+    UFUNCTION(BlueprintCallable, Category = "Flight|Scripting|Observability", meta = (WorldContext = "WorldContextObject"))
+    static FString ExportOrchestrationReport(
+        const UObject* WorldContextObject,
+        const FString& RelativeOutputPath = TEXT("Saved/Flight/Orchestration/orchestration_report.json"),
+        bool bRefresh = true);
+
+    // ============================================================================
+    // Rendering
+    // ============================================================================
+
+    /** Enable or disable the lightweight SimpleSCSL preview pipeline for the current world. */
+    UFUNCTION(BlueprintCallable, Category = "Flight|Scripting|Rendering", meta = (WorldContext = "WorldContextObject"))
+    static bool SetSimpleSCSLShaderPipelineEnabled(const UObject* WorldContextObject, bool bEnabled);
+
+    /** Replace the SimpleSCSL preview pipeline configuration for the current world. */
+    UFUNCTION(BlueprintCallable, Category = "Flight|Scripting|Rendering", meta = (WorldContext = "WorldContextObject"))
+    static bool ConfigureSimpleSCSLShaderPipeline(
+        const UObject* WorldContextObject,
+        const FFlightSimpleSCSLShaderPipelineConfig& Config);
+
+    /** Return the current SimpleSCSL preview pipeline configuration. */
+    UFUNCTION(BlueprintPure, Category = "Flight|Scripting|Rendering", meta = (WorldContext = "WorldContextObject"))
+    static FFlightSimpleSCSLShaderPipelineConfig GetSimpleSCSLShaderPipelineConfig(const UObject* WorldContextObject);
+
+    /** Return the current SimpleSCSL preview pipeline state as JSON. */
+    UFUNCTION(BlueprintPure, Category = "Flight|Scripting|Rendering", meta = (WorldContext = "WorldContextObject"))
+    static FString GetSimpleSCSLShaderPipelineStateJson(const UObject* WorldContextObject);
 
     // ============================================================================
     // VEX & Verse

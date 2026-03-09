@@ -18,7 +18,8 @@ enum class EVexUiNodeType : uint8
 	Slider,
 	TableSymbol,
 	SchemaTable,
-	SchemaForm
+	SchemaForm,
+	Log
 };
 
 struct FLIGHTPROJECT_API FVexUiTableRow

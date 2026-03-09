@@ -16,69 +16,26 @@ namespace Flight::Log
     // Log Capture Device - Intercepts all UE_LOG output
     // ============================================================================
 
-    class FLogCaptureDevice : public FOutputDevice
+    class FLIGHTPROJECT_API FLogCaptureDevice : public FOutputDevice
     {
     public:
         using FOnLogReceived = TMulticastDelegate<void(const FLogEntry&)>;
 
-        FLogCaptureDevice()
-            : StartTime(FPlatformTime::Seconds())
-        {}
-
-        virtual ~FLogCaptureDevice() override
-        {
-            Detach();
-        }
+        FLogCaptureDevice();
+        virtual ~FLogCaptureDevice() override;
 
         // Attach to global log output
-        void Attach()
-        {
-            if (!bAttached)
-            {
-                GLog->AddOutputDevice(this);
-                bAttached = true;
-            }
-        }
+        void Attach();
 
         // Detach from global log output
-        void Detach()
-        {
-            if (bAttached)
-            {
-                GLog->RemoveOutputDevice(this);
-                bAttached = false;
-            }
-        }
+        void Detach();
 
         bool IsAttached() const { return bAttached; }
 
         // FOutputDevice interface
-        virtual void Serialize(const TCHAR* V, ELogVerbosity::Type Verbosity, const FName& Category) override
-        {
-            const double Timestamp = FPlatformTime::Seconds() - StartTime;
-
-            FLogEntry Entry(
-                0,  // ID assigned by buffer
-                Timestamp,
-                FromUE(Verbosity),
-                Category,
-                FString(V)
-            );
-            Entry.FrameNumber = GFrameNumber;
-            Entry.ThreadId = FPlatformTLS::GetCurrentThreadId();
-
-            // Add to buffer
-            const FLogEntry CapturedEntry = Buffer.Add(MoveTemp(Entry));
-
-            // Notify subscribers
-            OnLogReceived.Broadcast(CapturedEntry);
-        }
-
+        virtual void Serialize(const TCHAR* V, ELogVerbosity::Type Verbosity, const FName& Category) override;
         virtual void Serialize(const TCHAR* V, ELogVerbosity::Type Verbosity, const FName& Category,
-                               const double Time) override
-        {
-            Serialize(V, Verbosity, Category);
-        }
+                               const double Time) override;
 
         virtual bool CanBeUsedOnAnyThread() const override
         {
@@ -118,24 +75,12 @@ namespace Flight::Log
     // Global Log Capture Singleton
     // ============================================================================
 
-    class FGlobalLogCapture
+    class FLIGHTPROJECT_API FGlobalLogCapture
     {
     public:
-        static FLogCaptureDevice& Get()
-        {
-            static FLogCaptureDevice Instance;
-            return Instance;
-        }
-
-        static void Initialize()
-        {
-            Get().Attach();
-        }
-
-        static void Shutdown()
-        {
-            Get().Detach();
-        }
+        static FLogCaptureDevice& Get();
+        static void Initialize();
+        static void Shutdown();
 
     private:
         FGlobalLogCapture() = delete;

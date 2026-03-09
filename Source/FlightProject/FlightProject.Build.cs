@@ -65,21 +65,6 @@ public class FlightProject : ModuleRules
             PublicDefinitions.Add("VULKAN_RHI_AVAILABLE=1");
             // Vulkan functions loaded dynamically at runtime via dlopen
         }
-
-        if (Target.Type == TargetRules.TargetType.Editor)
-        {
-            PrivateDependencyModuleNames.AddRange(new string[]
-            {
-                "UnrealEd",
-                "LevelEditor",
-                "NiagaraEditor",
-                "MassEntityEditor",
-                "WorldPartitionEditor",
-                "ToolMenus",
-                "WorkspaceMenuStructure"
-            });
-        }
-
         bUseUnity = false;
     }
 }

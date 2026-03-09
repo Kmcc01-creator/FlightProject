@@ -110,7 +110,7 @@ namespace Flight::Reflection
 /**
  * Test: Basic Reflection Validity
  */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FReflectionValidityTest, "FlightProject.Reflection.Core.Validity", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FReflectionValidityTest, "FlightProject.Unit.Reflection.Core.Validity", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
 
 bool FReflectionValidityTest::RunTest(const FString& Parameters)
 {
@@ -137,7 +137,7 @@ bool FReflectionValidityTest::RunTest(const FString& Parameters)
 /**
  * Test: Attribute Queries
  */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FReflectionAttributeTest, "FlightProject.Reflection.Core.Attributes", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FReflectionAttributeTest, "FlightProject.Unit.Reflection.Core.Attributes", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
 
 bool FReflectionAttributeTest::RunTest(const FString& Parameters)
 {
@@ -158,7 +158,7 @@ bool FReflectionAttributeTest::RunTest(const FString& Parameters)
 /**
  * Test: Field Iteration and Access
  */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FReflectionIterationTest, "FlightProject.Reflection.Core.Iteration", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FReflectionIterationTest, "FlightProject.Unit.Reflection.Core.Iteration", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
 
 bool FReflectionIterationTest::RunTest(const FString& Parameters)
 {
@@ -184,7 +184,7 @@ bool FReflectionIterationTest::RunTest(const FString& Parameters)
 /**
  * Test: Row Type Composition
  */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FReflectionRowCompositionTest, "FlightProject.Reflection.RowTypes.Composition", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FReflectionRowCompositionTest, "FlightProject.Unit.Reflection.RowTypes.Composition", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
 
 bool FReflectionRowCompositionTest::RunTest(const FString& Parameters)
 {
@@ -202,7 +202,7 @@ bool FReflectionRowCompositionTest::RunTest(const FString& Parameters)
 /**
  * Test: Serialization
  */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FReflectionSerializationTest, "FlightProject.Reflection.Core.Serialization", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FReflectionSerializationTest, "FlightProject.Unit.Reflection.Core.Serialization", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
 
 bool FReflectionSerializationTest::RunTest(const FString& Parameters)
 {
@@ -229,7 +229,7 @@ bool FReflectionSerializationTest::RunTest(const FString& Parameters)
 /**
  * Test: Serialization respects transient/skip policies
  */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FReflectionSerializationPolicyTest, "FlightProject.Reflection.Core.SerializationPolicy", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FReflectionSerializationPolicyTest, "FlightProject.Unit.Reflection.Core.SerializationPolicy", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
 
 bool FReflectionSerializationPolicyTest::RunTest(const FString& Parameters)
 {
@@ -262,7 +262,7 @@ bool FReflectionSerializationPolicyTest::RunTest(const FString& Parameters)
 /**
  * Test: Diff/Patch respects transient/skip policies
  */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FReflectionDiffPolicyTest, "FlightProject.Reflection.Core.DiffPolicy", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FReflectionDiffPolicyTest, "FlightProject.Unit.Reflection.Core.DiffPolicy", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
 
 bool FReflectionDiffPolicyTest::RunTest(const FString& Parameters)
 {
@@ -294,7 +294,7 @@ bool FReflectionDiffPolicyTest::RunTest(const FString& Parameters)
 /**
  * Test: Drone Asset Mock Composition
  */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FReflectionDroneMockTest, "FlightProject.Reflection.Mocks.DroneAsset", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FReflectionDroneMockTest, "FlightProject.Unit.Reflection.Mocks.DroneAsset", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
 
 bool FReflectionDroneMockTest::RunTest(const FString& Parameters)
 {

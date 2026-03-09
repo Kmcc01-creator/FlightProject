@@ -8,7 +8,12 @@
 		{
 			"Name": "FlightProject",
 			"Type": "Runtime",
-			"LoadingPhase": "Default"
+			"LoadingPhase": "PostConfigInit"
+		},
+		{
+			"Name": "FlightProjectEditor",
+			"Type": "Editor",
+			"LoadingPhase": "PostEngineInit"
 		}
 	],
 	"Plugins": [

@@ -1,0 +1,56 @@
+// Copyright Kelly Rey Wilson. All Rights Reserved.
+
+#include "Common.ush"
+#include "ScreenPass.ush"
+
+SCREEN_PASS_TEXTURE_VIEWPORT(Input)
+SCREEN_PASS_TEXTURE_VIEWPORT(Output)
+
+Texture2D InputTexture;
+SamplerState InputSampler;
+
+float4 Tint;
+float BlendWeight;
+float PosterizeSteps;
+float EdgeWeight;
+float ScanlineWeight;
+float TimeSeconds;
+float TimeScale;
+
+float3 PosterizeColor(float3 Color, float Steps)
+{
+	const float Quantization = max(Steps, 1.0);
+	return floor(saturate(Color) * Quantization) / Quantization;
+}
+
+void Main(
+	noperspective float4 UVAndScreenPos : TEXCOORD0,
+	FStereoVSOutput StereoOutput,
+	float4 SvPosition : SV_POSITION,
+	out float4 OutColor : SV_Target0)
+{
+	const float2 UV = UVAndScreenPos.xy;
+	const float2 Texel = Input_ViewportSizeInverse;
+
+	const float3 BaseColor = Texture2DSample(InputTexture, InputSampler, UV).rgb;
+	const float3 LeftColor = Texture2DSample(InputTexture, InputSampler, UV + float2(-Texel.x, 0.0)).rgb;
+	const float3 RightColor = Texture2DSample(InputTexture, InputSampler, UV + float2(Texel.x, 0.0)).rgb;
+	const float3 UpColor = Texture2DSample(InputTexture, InputSampler, UV + float2(0.0, -Texel.y)).rgb;
+	const float3 DownColor = Texture2DSample(InputTexture, InputSampler, UV + float2(0.0, Texel.y)).rgb;
+
+	const float3 TintedColor = BaseColor * Tint.rgb;
+	const float3 PosterizedColor = PosterizeColor(TintedColor, PosterizeSteps);
+
+	const float3 HorizontalGradient = RightColor - LeftColor;
+	const float3 VerticalGradient = DownColor - UpColor;
+	const float EdgeMagnitude = saturate(length(HorizontalGradient) + length(VerticalGradient));
+
+	const float ScanlinePhase = UV.y * Output_ViewportSize.y * 1.5 + TimeSeconds * TimeScale * 6.2831853;
+	const float ScanlineMask = 1.0 - ScanlineWeight * (0.35 + 0.65 * (0.5 + 0.5 * sin(ScanlinePhase)));
+
+	float3 StylizedColor = PosterizedColor;
+	StylizedColor += EdgeMagnitude * EdgeWeight * Tint.rgb;
+	StylizedColor *= ScanlineMask;
+
+	OutColor = float4(lerp(BaseColor, saturate(StylizedColor), saturate(BlendWeight)), 1.0);
+}

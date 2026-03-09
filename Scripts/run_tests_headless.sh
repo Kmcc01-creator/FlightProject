@@ -26,18 +26,34 @@ ENABLE_TIMESTAMPS=false
 EXTRA_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --all-cpu)
+            TEST_FILTER="FlightProject.Unit+FlightProject.Integration+FlightProject.Functional"
+            shift
+            ;;
+        --unit)
+            TEST_FILTER="FlightProject.Unit"
+            shift
+            ;;
+        --integration)
+            TEST_FILTER="FlightProject.Integration"
+            shift
+            ;;
+        --functional)
+            TEST_FILTER="FlightProject.Functional"
+            shift
+            ;;
         --breaking)
             TEST_FILTER="FlightProject.Unit.Safety+FlightProject.Integration.SchemaDriven"
             shift
             ;;
         --verse)
-            TEST_FILTER="FlightProject.Verse+FlightProject.Integration.Vex.VerticalSlice"
+            TEST_FILTER="FlightProject.Functional.Verse+FlightProject.Integration.Verse"
             TEST_LOG_PROFILE="focused"
             EXTRA_ARGS+=("-NoShaderCompile")
             shift
             ;;
         --simd)
-            TEST_FILTER="FlightProject.Vex.Simd"
+            TEST_FILTER="FlightProject.Integration.Vex.SimdParity"
             TEST_LOG_PROFILE="focused"
             EXTRA_ARGS+=("-NoShaderCompile")
             shift
@@ -86,14 +102,21 @@ if [[ -n "$LOG_CMDS" ]]; then
     LOG_CMDS_ARGS+=("-LogCmds=$LOG_CMDS")
 fi
 
+# Headless automation should not depend on persisted editor privacy settings.
+# This also avoids an engine crash path when -NoShaderCompile is active.
+EDITOR_SETTINGS_ARGS=(
+    "-ini:EditorSettings:[/Script/UnrealEd.AnalyticsPrivacySettings]:bSendUsageData=False"
+)
+
 UE_CMD=(
     "$UE_ROOT/Engine/Binaries/Linux/UnrealEditor-Cmd"
     "$PROJECT_DIR/FlightProject.uproject"
     -ExecCmds="Automation RunTests $TEST_FILTER; quit"
     -unattended -nopause -nosplash -stdout -FullStdOutLogOutput
-    -NullRHI -NoPCH -NoBT -NoSound -NoDDCMaintenance -NoShaderCompile
+    -NullRHI -NoPCH -NoBT -NoSound -NoDDCMaintenance -NoAnalytics -NoTelemetry -EpicAnalyticsDisable -NoCrashHandler
     -DDC=NoZenLocalFallback -LocalDataCachePath="$DDC_PATH"
     "${LOG_CMDS_ARGS[@]}"
+    "${EDITOR_SETTINGS_ARGS[@]}"
     "${EXTRA_ARGS[@]}"
 )
 

@@ -10,8 +10,9 @@ struct FFlightLightingConfigRow;
 DECLARE_MULTICAST_DELEGATE(FOnFlightWorldBootstrapCompleted);
 
 /**
- * Handles environment bootstrap tasks (Mass runtime, lighting, spatial layout)
- * so GameModes and level loaders can reuse the same setup logic.
+ * Handles reusable world-preparation tasks (Mass runtime, lighting, spatial layout)
+ * so GameModes, level loaders, scripting surfaces, and orchestration can reuse
+ * the same setup logic without coupling that work to a specific mode asset.
  */
 UCLASS()
 class FLIGHTPROJECT_API UFlightWorldBootstrapSubsystem : public UWorldSubsystem

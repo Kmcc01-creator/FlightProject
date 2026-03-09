@@ -14,7 +14,8 @@ DEFINE_LOG_CATEGORY_STATIC(LogFlightTestCompute, Log, All);
 
 namespace
 {
-	static FGlobalShaderMap* TryGetFlightGlobalShaderMap()
+	inline FGlobalShaderMap* TryGetFlightGlobalShaderMap()
+
 	{
 		if (!FApp::CanEverRender())
 		{

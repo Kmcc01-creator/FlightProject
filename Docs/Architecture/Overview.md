@@ -27,10 +27,13 @@ FlightProject is an Unreal Engine 5 simulation sandbox for autonomous aircraft a
 
 ## Pipeline & Tooling
 - **Plugins Enabled**: Enhanced Input, Niagara, MassGameplay (incl. MassActors/MassSimulation), MassAI, StateTree, ComputeFramework, ChaosCaching, GeometryScripting, WorldPartitionHLODUtilities.
-- **Module Dependencies**: FlightProject runtime module links AI, Mass, Niagara, ComputeFramework, DeveloperSettings, and editor hooks for tooling.
+- **Module Dependencies**: `FlightProject` owns runtime/render dependencies; `FlightProjectEditor` owns editor tabs, menus, and tooling hooks that should not load with the early runtime module.
 - **Input Mapping**: `DefaultInput.ini` exposes throttle/pitch/yaw/roll/climb axes plus Mass debugger tooling shortcuts.
 - **Developer Settings**: `UFlightProjectDeveloperSettings` centralizes altitude thresholds, Mass batch sizing, and shader directory hints.
 - **Shader Source**: Project shaders live in `/Shaders` (backed by the `Shaders/` folder); the runtime module registers the directory so custom RDG/compute shaders compile in editor and staged builds.
+- **Execution Model**: See `Docs/Architecture/WorldExecutionModel.md` for the recommended split between world services, simulation domains, render adapters, and scripting boundaries.
+- **Project Organization**: See `Docs/Architecture/ProjectOrganization.md` for directory ownership, naming conventions, generated-output placement, and the intended home for orchestration types.
+- **Foundation Runtime Boundaries**: See `Docs/Architecture/LoggingReflectionFunctionalBoundary.md` for the current separation between Flight logging, Unreal log bridging, reflection/codegen metadata, and functional utility code.
 
 ## Roadmap Highlights
 1. **Flight AI Behaviors**: Implement Behavior Tree services for altitude stratification and collision avoidance; author State Trees for autopilot tasks.

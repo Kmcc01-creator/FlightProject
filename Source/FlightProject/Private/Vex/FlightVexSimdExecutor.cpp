@@ -245,100 +245,123 @@ void FVexSimdExecutor::ExecuteDirect(
 	const int32 NumEntities = DroidStates.Num();
 	if (NumEntities == 0 || !Ir.IsValid()) return;
 
+	// 1. Alignment Validation (Mass fragments should be 16-byte aligned for optimal SIMD)
+	checkf(((PTRINT)Transforms.GetData() % 16) == 0, TEXT("Transforms fragment data must be 16-byte aligned for VEX SIMD."));
+	checkf(((PTRINT)DroidStates.GetData() % 16) == 0, TEXT("DroidStates fragment data must be 16-byte aligned for VEX SIMD."));
+
 	TArray<FVector4f> Registers;
 	Registers.SetNumZeroed(Ir->MaxRegisters);
 
-	for (int32 i = 0; i < NumEntities; i += 4)
+	// 2. SIMD 4-wide Main Loop
+	const int32 SimdEnd = NumEntities - (NumEntities % 4);
+	for (int32 i = 0; i < SimdEnd; i += 4)
 	{
-		const int32 BatchSize = FMath::Min(4, NumEntities - i);
-		
 		for (const auto& Inst : Ir->Instructions)
 		{
 			switch (Inst.Op)
 			{
 			case EVexIrOp::LoadSymbol:
 			{
-				if (!Registers.IsValidIndex(Inst.Dest.Index)
-					|| Inst.Args.Num() < 1
-					|| !Ir->SymbolNames.IsValidIndex(Inst.Args[0].Index))
-				{
-					break;
-				}
-
 				const FString& SymbolName = Ir->SymbolNames[Inst.Args[0].Index];
 				FVector4f& Reg = Registers[Inst.Dest.Index];
-				for (int32 b = 0; b < BatchSize; ++b)
+				if (SymbolName == TEXT("@position"))
 				{
-					if (SymbolName == TEXT("@position")) Reg[b] = Transforms[i + b].Location.X;
-					else if (SymbolName == TEXT("@shield")) Reg[b] = DroidStates[i + b].Shield;
-					else if (SymbolName == TEXT("@energy")) Reg[b] = DroidStates[i + b].Energy;
-					else Reg[b] = 0.0f;
+					Reg = FVector4f(Transforms[i+0].Location.X, Transforms[i+1].Location.X, Transforms[i+2].Location.X, Transforms[i+3].Location.X);
+				}
+				else if (SymbolName == TEXT("@shield"))
+				{
+					Reg = FVector4f(DroidStates[i+0].Shield, DroidStates[i+1].Shield, DroidStates[i+2].Shield, DroidStates[i+3].Shield);
+				}
+				else if (SymbolName == TEXT("@energy"))
+				{
+					Reg = FVector4f(DroidStates[i+0].Energy, DroidStates[i+1].Energy, DroidStates[i+2].Energy, DroidStates[i+3].Energy);
 				}
 				break;
 			}
 			case EVexIrOp::StoreSymbol:
 			{
-				if (Inst.Args.Num() < 1 || !Ir->SymbolNames.IsValidIndex(Inst.Dest.Index))
-				{
-					break;
-				}
-
 				const FString& SymbolName = Ir->SymbolNames[Inst.Dest.Index];
 				const FVector4f Reg = ResolveOperandValue(Inst.Args[0], *Ir, Registers);
-				for (int32 b = 0; b < BatchSize; ++b)
+				if (SymbolName == TEXT("@shield"))
 				{
-					if (SymbolName == TEXT("@shield")) { DroidStates[i + b].Shield = Reg[b]; DroidStates[i + b].bIsDirty = true; }
-					else if (SymbolName == TEXT("@energy")) { DroidStates[i + b].Energy = Reg[b]; DroidStates[i + b].bIsDirty = true; }
+					DroidStates[i+0].Shield = Reg.X; DroidStates[i+0].bIsDirty = true;
+					DroidStates[i+1].Shield = Reg.Y; DroidStates[i+1].bIsDirty = true;
+					DroidStates[i+2].Shield = Reg.Z; DroidStates[i+2].bIsDirty = true;
+					DroidStates[i+3].Shield = Reg.W; DroidStates[i+3].bIsDirty = true;
+				}
+				else if (SymbolName == TEXT("@energy"))
+				{
+					DroidStates[i+0].Energy = Reg.X; DroidStates[i+0].bIsDirty = true;
+					DroidStates[i+1].Energy = Reg.Y; DroidStates[i+1].bIsDirty = true;
+					DroidStates[i+2].Energy = Reg.Z; DroidStates[i+2].bIsDirty = true;
+					DroidStates[i+3].Energy = Reg.W; DroidStates[i+3].bIsDirty = true;
 				}
 				break;
 			}
-			case EVexIrOp::Const:
-				if (Registers.IsValidIndex(Inst.Dest.Index) && Inst.Args.Num() >= 1)
-				{
-					Registers[Inst.Dest.Index] = ResolveOperandValue(Inst.Args[0], *Ir, Registers);
-				}
-				break;
-			case EVexIrOp::Add:
-				if (Registers.IsValidIndex(Inst.Dest.Index) && Inst.Args.Num() >= 2)
-				{
-					Registers[Inst.Dest.Index] = ResolveOperandValue(Inst.Args[0], *Ir, Registers) + ResolveOperandValue(Inst.Args[1], *Ir, Registers);
-				}
-				break;
-			case EVexIrOp::Sub:
-				if (Registers.IsValidIndex(Inst.Dest.Index) && Inst.Args.Num() >= 2)
-				{
-					Registers[Inst.Dest.Index] = ResolveOperandValue(Inst.Args[0], *Ir, Registers) - ResolveOperandValue(Inst.Args[1], *Ir, Registers);
-				}
-				break;
-			case EVexIrOp::Mul:
-				if (Registers.IsValidIndex(Inst.Dest.Index) && Inst.Args.Num() >= 2)
-				{
-					Registers[Inst.Dest.Index] = ResolveOperandValue(Inst.Args[0], *Ir, Registers) * ResolveOperandValue(Inst.Args[1], *Ir, Registers);
-				}
-				break;
+			case EVexIrOp::Const: Registers[Inst.Dest.Index] = ResolveOperandValue(Inst.Args[0], *Ir, Registers); break;
+			case EVexIrOp::Add: Registers[Inst.Dest.Index] = ResolveOperandValue(Inst.Args[0], *Ir, Registers) + ResolveOperandValue(Inst.Args[1], *Ir, Registers); break;
+			case EVexIrOp::Sub: Registers[Inst.Dest.Index] = ResolveOperandValue(Inst.Args[0], *Ir, Registers) - ResolveOperandValue(Inst.Args[1], *Ir, Registers); break;
+			case EVexIrOp::Mul: Registers[Inst.Dest.Index] = ResolveOperandValue(Inst.Args[0], *Ir, Registers) * ResolveOperandValue(Inst.Args[1], *Ir, Registers); break;
 			case EVexIrOp::Div:
 			{
-				if (Registers.IsValidIndex(Inst.Dest.Index) && Inst.Args.Num() >= 2)
-				{
-					const FVector4f Den = ResolveOperandValue(Inst.Args[1], *Ir, Registers);
-					const FVector4f Num = ResolveOperandValue(Inst.Args[0], *Ir, Registers);
-					Registers[Inst.Dest.Index] = FVector4f(
-						FMath::IsNearlyZero(Den.X) ? 0.0f : (Num.X / Den.X),
-						FMath::IsNearlyZero(Den.Y) ? 0.0f : (Num.Y / Den.Y),
-						FMath::IsNearlyZero(Den.Z) ? 0.0f : (Num.Z / Den.Z),
-						FMath::IsNearlyZero(Den.W) ? 0.0f : (Num.W / Den.W));
-				}
+				const FVector4f Den = ResolveOperandValue(Inst.Args[1], *Ir, Registers);
+				const FVector4f Num = ResolveOperandValue(Inst.Args[0], *Ir, Registers);
+				Registers[Inst.Dest.Index] = FVector4f(
+					FMath::IsNearlyZero(Den.X) ? 0.0f : (Num.X / Den.X),
+					FMath::IsNearlyZero(Den.Y) ? 0.0f : (Num.Y / Den.Y),
+					FMath::IsNearlyZero(Den.Z) ? 0.0f : (Num.Z / Den.Z),
+					FMath::IsNearlyZero(Den.W) ? 0.0f : (Num.W / Den.W));
 				break;
 			}
 			case EVexIrOp::Sin:
 			{
-				if (Registers.IsValidIndex(Inst.Dest.Index) && Inst.Args.Num() >= 1)
-				{
-					const FVector4f Src = ResolveOperandValue(Inst.Args[0], *Ir, Registers);
-					Registers[Inst.Dest.Index] = FVector4f(FMath::Sin(Src.X), FMath::Sin(Src.Y), FMath::Sin(Src.Z), FMath::Sin(Src.W));
-				}
+				const FVector4f Src = ResolveOperandValue(Inst.Args[0], *Ir, Registers);
+				Registers[Inst.Dest.Index] = FVector4f(FMath::Sin(Src.X), FMath::Sin(Src.Y), FMath::Sin(Src.Z), FMath::Sin(Src.W));
 				break;
 			}
+			default: break;
+			}
+		}
+	}
+
+	// 3. Scalar Cleanup Loop (Tail)
+	for (int32 i = SimdEnd; i < NumEntities; ++i)
+	{
+		TArray<float> ScalarRegs;
+		ScalarRegs.SetNumZeroed(Ir->MaxRegisters);
+
+		for (const auto& Inst : Ir->Instructions)
+		{
+			auto GetScalar = [&](const FVexIrValue& Val) -> float
+			{
+				if (Val.Kind == FVexIrValue::EKind::Constant) return Ir->Constants[Val.Index];
+				return ScalarRegs[Val.Index];
+			};
+
+			switch (Inst.Op)
+			{
+			case EVexIrOp::LoadSymbol:
+			{
+				const FString& SymbolName = Ir->SymbolNames[Inst.Args[0].Index];
+				if (SymbolName == TEXT("@position")) ScalarRegs[Inst.Dest.Index] = Transforms[i].Location.X;
+				else if (SymbolName == TEXT("@shield")) ScalarRegs[Inst.Dest.Index] = DroidStates[i].Shield;
+				else if (SymbolName == TEXT("@energy")) ScalarRegs[Inst.Dest.Index] = DroidStates[i].Energy;
+				break;
+			}
+			case EVexIrOp::StoreSymbol:
+			{
+				const FString& SymbolName = Ir->SymbolNames[Inst.Dest.Index];
+				float Val = GetScalar(Inst.Args[0]);
+				if (SymbolName == TEXT("@shield")) { DroidStates[i].Shield = Val; DroidStates[i].bIsDirty = true; }
+				else if (SymbolName == TEXT("@energy")) { DroidStates[i].Energy = Val; DroidStates[i].bIsDirty = true; }
+				break;
+			}
+			case EVexIrOp::Const: ScalarRegs[Inst.Dest.Index] = Ir->Constants[Inst.Args[0].Index]; break;
+			case EVexIrOp::Add: ScalarRegs[Inst.Dest.Index] = GetScalar(Inst.Args[0]) + GetScalar(Inst.Args[1]); break;
+			case EVexIrOp::Sub: ScalarRegs[Inst.Dest.Index] = GetScalar(Inst.Args[0]) - GetScalar(Inst.Args[1]); break;
+			case EVexIrOp::Mul: ScalarRegs[Inst.Dest.Index] = GetScalar(Inst.Args[0]) * GetScalar(Inst.Args[1]); break;
+			case EVexIrOp::Div: { float D = GetScalar(Inst.Args[1]); ScalarRegs[Inst.Dest.Index] = FMath::IsNearlyZero(D) ? 0.0f : (GetScalar(Inst.Args[0]) / D); break; }
+			case EVexIrOp::Sin: ScalarRegs[Inst.Dest.Index] = FMath::Sin(GetScalar(Inst.Args[0])); break;
 			default: break;
 			}
 		}

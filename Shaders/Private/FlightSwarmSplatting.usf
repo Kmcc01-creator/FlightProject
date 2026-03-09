@@ -21,10 +21,13 @@ Texture2D<uint> AccumBufferPhase_SRV;
 
 float4 ShadowColor;
 float4 LitColor;
-float2 ViewSize;
-float3 CloudGridCenter;
+float4 CloudGridCenter;
 float CloudGridExtent;
 uint CloudGridResolution;
+uint NumEntities;
+float SplatSize;
+float4x4 WorldToClip;
+float4 ViewSizeAndInvSize;
 
 // --- Resolve Pass Outputs ---
 RWTexture2D<float4> OutSceneColor;
@@ -47,19 +50,19 @@ void SplattingMain(uint3 DispatchThreadId : SV_DispatchThreadID)
     uint Status = asuint(VelStatus.w);
 
     // Transform to clip space
-    float4 ClipPos = mul(float4(WorldPos, 1.0f), View.WorldToClip);
+    float4 ClipPos = mul(float4(WorldPos, 1.0f), WorldToClip);
     if (ClipPos.w <= 0.0f || any(abs(ClipPos.xyz) > ClipPos.w)) return;
 
     float3 NDC = ClipPos.xyz / ClipPos.w;
     float2 ScreenUV = float2(NDC.x * 0.5f + 0.5f, 0.5f - NDC.y * 0.5f);
-    uint2 PixelCoord = uint2(ScreenUV * View.ViewSizeAndInvSize.xy);
+    uint2 PixelCoord = uint2(ScreenUV * ViewSizeAndInvSize.xy);
     
     // Guard against OOB atomics
-    if (any(PixelCoord >= (uint2)View.ViewSizeAndInvSize.xy)) return;
+    if (any(PixelCoord >= (uint2)ViewSizeAndInvSize.xy)) return;
 
     // --- SCSL Potential Calculation ---
     float3 RelativePos = (WorldPos - GridCenter) / GridExtent + 0.5f;
-    float3 CloudRelativePos = (WorldPos - CloudGridCenter) / CloudGridExtent + 0.5f;
+    float3 CloudRelativePos = (WorldPos - CloudGridCenter.xyz) / CloudGridExtent + 0.5f;
     
     // 1. Irradiance Potential
     float3 LocalIrradiance = ReadLatticeArray.SampleLevel(ReadLatticeSampler, RelativePos, 0).rgb;
@@ -92,7 +95,7 @@ void SplattingMain(uint3 DispatchThreadId : SV_DispatchThreadID)
 void SplatResolveMain(uint3 DispatchThreadId : SV_DispatchThreadID)
 {
     uint2 PixelCoord = DispatchThreadId.xy;
-    if (any(PixelCoord >= (uint2)ViewSize)) return;
+    if (any(PixelCoord >= (uint2)ViewSizeAndInvSize.xy)) return;
 
     // Read F-Buffer Potentials
     float Alignment = (float)AccumBufferAlignment_SRV.Load(int3(PixelCoord, 0)) / FixedPointScale;

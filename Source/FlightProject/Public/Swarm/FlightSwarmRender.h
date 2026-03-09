@@ -34,7 +34,7 @@ public:
 	// ~End FSceneViewExtensionBase Interface
 
 	// The actual render pass delegate
-	FScreenPassTexture PostProcessPass_RenderThread(FRDGBuilder& GraphBuilder, const FSceneView& View, const struct FPostProcessMaterialInputs& Inputs);
+	FScreenPassTexture PostProcessPass_RenderThread(FRDGBuilder& GraphBuilder, const FSceneView& View, const FPostProcessMaterialInputs& Inputs);
 
 	// --- Custom Swarm Interface ---
 	

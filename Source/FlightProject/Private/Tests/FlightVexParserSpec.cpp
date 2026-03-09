@@ -39,7 +39,7 @@ void FFlightVexParserSpec::Define()
 				auto Result = Flight::Vex::ParseAndValidate(Source, MockSymbols, false);
 				
 				bool bHasError = false;
-				for (const auto& I : Result.Issues) if (I.Message.Contains(TEXT("GPU-only"))) bHasError = true;
+				for (const auto& I : Result.Issues) if (I.Message.Contains(TEXT("residency error"))) bHasError = true;
 				TestTrue("Detected Residency Violation", bHasError);
 			});
 		});
@@ -50,7 +50,7 @@ void FFlightVexParserSpec::Define()
 				auto Result = Flight::Vex::ParseAndValidate(Source, MockSymbols, false);
 				
 				bool bHasError = false;
-				for (const auto& I : Result.Issues) if (I.Message.Contains(TEXT("Game Thread"))) bHasError = true;
+				for (const auto& I : Result.Issues) if (I.Message.Contains(TEXT("affinity error"))) bHasError = true;
 				TestTrue("Detected Affinity Violation", bHasError);
 			});
 		});

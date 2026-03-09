@@ -1,11 +1,51 @@
 # FlightProject Asset Creation and Manipulation Tools
 import unreal
 
+SWARM_TRAIT_CLASS_PATHS = [
+    "/Script/SwarmEncounter.FlightSwarmTrait",
+]
+
+STARTUP_PROFILE_ASSET_PATHS = {
+    "default_sandbox": "/Game/Data/StartupProfiles/DA_FlightStartup_DefaultSandbox",
+    "gauntlet_gpu_swarm": "/Game/Data/StartupProfiles/DA_FlightStartup_GauntletGpuSwarm",
+}
+
+
+def resolve_startup_profile_enum(enum_name: str):
+    """
+    Resolve Flight startup profile enum values safely across Unreal Python enum naming styles.
+    """
+    enum_type = unreal.EFlightStartupProfile
+    candidates = [
+        enum_name,
+        enum_name.upper(),
+        enum_name.replace(" ", "_").upper(),
+    ]
+
+    for candidate in candidates:
+        if hasattr(enum_type, candidate):
+            return getattr(enum_type, candidate)
+
+    raise AttributeError(f"Could not resolve EFlightStartupProfile value for '{enum_name}'")
+
+
+def ensure_mass_entity_config_traits(asset_path: str, trait_class_paths: list[str]) -> list[str]:
+    """
+    Ensure a MassEntityConfigAsset contains the requested trait classes.
+    Requires the FlightProject editor shim in C++.
+    """
+    if not hasattr(unreal, "FlightScriptingLibrary"):
+        return ["FlightScriptingLibrary unavailable"]
+
+    try:
+        return unreal.FlightScriptingLibrary.ensure_mass_entity_config_traits(asset_path, trait_class_paths)
+    except Exception as exc:
+        return [f"trait ensure failed for {asset_path}: {exc}"]
+
 
 def create_swarm_config(name: str, package_path: str = "/Game/Data/Swarms") -> unreal.Object:
     """
-    Create a new MassEntityConfigAsset for swarm drones.
-    The asset still needs traits configured manually in editor.
+    Create a new MassEntityConfigAsset for swarm drones and apply the default Flight trait set.
     """
     asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
 
@@ -13,6 +53,10 @@ def create_swarm_config(name: str, package_path: str = "/Game/Data/Swarms") -> u
     full_path = f"{package_path}/DA_{name}"
     if unreal.EditorAssetLibrary.does_asset_exist(full_path):
         unreal.log(f"Asset already exists: {full_path}")
+        issues = ensure_mass_entity_config_traits(full_path, SWARM_TRAIT_CLASS_PATHS)
+        for issue in issues:
+            unreal.log_warning(f"Swarm config trait ensure: {issue}")
+        unreal.EditorAssetLibrary.save_asset(full_path)
         return unreal.EditorAssetLibrary.load_asset(full_path)
 
     # Create using DataAssetFactory
@@ -28,12 +72,84 @@ def create_swarm_config(name: str, package_path: str = "/Game/Data/Swarms") -> u
 
     if asset:
         unreal.log(f"Created swarm config: {full_path}")
-        unreal.log_warning("ACTION: Add traits (PathFollow, Visual, SwarmMember) in editor")
+        issues = ensure_mass_entity_config_traits(full_path, SWARM_TRAIT_CLASS_PATHS)
+        for issue in issues:
+            unreal.log_warning(f"Swarm config trait ensure: {issue}")
         unreal.EditorAssetLibrary.save_asset(full_path)
     else:
         unreal.log_error(f"Failed to create swarm config: {full_path}")
 
     return asset
+
+
+def create_startup_profile(
+    name: str,
+    startup_profile,
+    gauntlet_gpu_swarm_entity_count: int = 100000,
+    description: str = "",
+    package_path: str = "/Game/Data/StartupProfiles",
+) -> unreal.Object:
+    """
+    Create or update a FlightStartupProfile data asset.
+    """
+    asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
+    asset_name = f"DA_{name}"
+    full_path = f"{package_path}/{asset_name}"
+
+    if unreal.EditorAssetLibrary.does_asset_exist(full_path):
+        asset = unreal.EditorAssetLibrary.load_asset(full_path)
+        unreal.log(f"Startup profile already exists: {full_path}")
+    else:
+        factory = unreal.DataAssetFactory()
+        factory.set_editor_property("data_asset_class", unreal.FlightStartupProfile)
+
+        asset = asset_tools.create_asset(
+            asset_name=asset_name,
+            package_path=package_path,
+            asset_class=unreal.FlightStartupProfile,
+            factory=factory,
+        )
+
+        if asset:
+            unreal.log(f"Created startup profile: {full_path}")
+        else:
+            unreal.log_error(f"Failed to create startup profile: {full_path}")
+            return None
+
+    if asset is None:
+        unreal.log_error(f"Could not load startup profile asset: {full_path}")
+        return None
+
+    asset.set_editor_property("startup_profile", startup_profile)
+    asset.set_editor_property("gauntlet_gpu_swarm_entity_count", max(1, int(gauntlet_gpu_swarm_entity_count)))
+    asset.set_editor_property("description", description)
+    unreal.EditorAssetLibrary.save_asset(full_path)
+    return asset
+
+
+def ensure_flight_startup_profiles() -> dict[str, unreal.Object]:
+    """
+    Ensure the standard Flight startup profile assets exist.
+    """
+    unreal.log("=== Ensuring Flight Startup Profiles ===")
+
+    created = {
+        "default_sandbox": create_startup_profile(
+            name="FlightStartup_DefaultSandbox",
+            startup_profile=resolve_startup_profile_enum("DEFAULT_SANDBOX"),
+            gauntlet_gpu_swarm_entity_count=100000,
+            description="Default sandbox startup. Runs reusable world bootstrap and initial swarm spawn.",
+        ),
+        "gauntlet_gpu_swarm": create_startup_profile(
+            name="FlightStartup_GauntletGpuSwarm",
+            startup_profile=resolve_startup_profile_enum("GAUNTLET_GPU_SWARM"),
+            gauntlet_gpu_swarm_entity_count=100000,
+            description="Gauntlet GPU swarm startup. Skips normal sandbox bootstrap and initializes the GPU swarm path.",
+        ),
+    }
+
+    unreal.log("=== Flight Startup Profiles Ready ===")
+    return created
 
 
 def create_game_feature_data(plugin_name: str, package_path: str = None) -> unreal.Object:
@@ -160,9 +276,16 @@ def ensure_swarm_encounter_assets():
 
         if asset:
             unreal.log(f"Created: {config_path}")
-            unreal.log_warning("ACTION: Add Flight traits to DA_SwarmDroneConfig")
-            unreal.EditorAssetLibrary.save_asset(config_path)
     else:
         unreal.log(f"Asset exists: {config_path}")
+
+    trait_issues = ensure_mass_entity_config_traits(config_path, SWARM_TRAIT_CLASS_PATHS)
+    if trait_issues:
+        for issue in trait_issues:
+            unreal.log_warning(f"SwarmEncounter config: {issue}")
+    else:
+        unreal.log("SwarmEncounter config traits ensured")
+
+    unreal.EditorAssetLibrary.save_asset(config_path)
 
     unreal.log("=== SwarmEncounter Assets Ready ===")

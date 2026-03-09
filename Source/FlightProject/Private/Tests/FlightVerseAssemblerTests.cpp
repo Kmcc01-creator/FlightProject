@@ -10,7 +10,7 @@
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FFlightVerseBytecodeLiteralTest,
-	"FlightProject.Verse.Bytecode.Literal",
+	"FlightProject.Functional.Verse.Bytecode.Literal",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FFlightVerseBytecodeLiteralTest::RunTest(const FString& Parameters)

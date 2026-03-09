@@ -2,6 +2,10 @@
 // Log category definitions for FlightProject
 
 #include "FlightLogCategories.h"
+#include "UI/FlightLogTypes.h"
+
+// Recursion guard for FlightProject logging system
+thread_local bool Flight::Log::bIsLoggingInternal = false;
 
 // Core flight simulation
 DEFINE_LOG_CATEGORY(LogFlight);

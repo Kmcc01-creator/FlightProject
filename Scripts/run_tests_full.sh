@@ -47,10 +47,10 @@ fi
 
 case "${TEST_SCOPE,,}" in
     benchmark)
-        TEST_FILTER="FlightProject.Benchmark.GpuPerception"
+        TEST_FILTER="FlightProject.Perf.GpuPerception"
         ;;
     gpu_smoke|gpu)
-        TEST_FILTER="FlightProject.Spatial.GpuPerception+FlightProject.Spatial.GpuPerception.CallbackResolves+FlightProject.Swarm.Pipeline.FullIntegration+FlightProject.Benchmark.GpuPerception"
+        TEST_FILTER="FlightProject.Gpu.Spatial.Perception+FlightProject.Gpu.Spatial.Perception.CallbackResolves+FlightProject.Perf.GpuPerception"
         ;;
     all|full)
         TEST_FILTER="FlightProject"
@@ -72,7 +72,7 @@ UE_CMD=(
     -unattended -nopause -nosplash -stdout -FullStdOutLogOutput
     -Vulkan -RenderOffscreen
     -NoDDCMaintenance
-    -DDC=NoZenLocalFallback -LocalDataCachePath="$DDC_PATH"
+    -DDC=Default -LocalDataCachePath="$DDC_PATH"
     -NoSound -NoVerifyGC
     -vulkanextension="VK_KHR_external_semaphore_fd"
     -vulkanextension="VK_KHR_external_semaphore"

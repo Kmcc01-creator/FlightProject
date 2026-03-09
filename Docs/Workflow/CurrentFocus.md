@@ -1,49 +1,29 @@
-# Current Focus: Vertical Slice + Verse Bridge
+# Current Focus: Verse VM & Meta-System Hardening
 
 ## Active Goals
-1. Implement the vertical-slice complex test from schema manifest rows (`vexSymbolRequirements`).
-2. Advance Verse bridge from native fallback execution to real Verse VM procedure/native registration.
-3. Keep parser + mixed validation buckets green as the baseline safety gate.
-4. Keep triage output high-signal (`focused` profile + error filtering + ANSI coloring).
+1. **Verse VM Bytecode**: Advance the VVM assembler to support complex IR-to-bytecode lowering (loops, branching).
+2. **Native Function Registry**: Implement a performant bridge for calling C++ native logic from Verse-authored behaviors.
+3. **Validation Stability**: Fix identified regressions in residency and thread-affinity checks.
+4. **Tooling Synergy**: Leverage the new structured logging bridge to enhance VEX diagnostic panels.
 
 ## Current Status (2026-03-09)
-- Development build is green (`./Scripts/build_targets.sh Development` succeeded).
-- Non-parser hardening landed:
-  - schema-driven command typo and silent-pass behavior fixed.
-  - `uint32` schema mapping corrected (`@status` now validates as `int` in VEX symbol contract).
-  - `CompileVex` now enforces required symbols and produces executable native fallback behavior for supported scripts.
-  - focused hardening bucket passes.
-- Parser stabilization landed:
-  - function-call, dot operator, and pipe-node AST support implemented.
-  - parser semantic/type inference coverage expanded and aligned with tests.
-  - parser bucket is green (`FlightProject.Schema.Vex.Parser`, `17/17`).
-  - mixed bucket is green (schema-driven + manifest + Verse + parser).
-  - extended mixed + vertical-slice bucket is green (`32/32`).
-  - operator diagnostics added for invalid extract operator and invalid single ampersand tokenization.
-- Vertical-slice integration test landed:
-  - `FlightProject.Integration.Vex.VerticalSlice` now generates manifest-driven contract and negative residency checks.
-  - compile contract assertions are validated per symbol via scripting APIs, including executable fallback state.
-- Verse online validation bucket is green (`10/10`):
-  - `FlightProject.Verse.CompileContract`
-  - `FlightProject.Verse.Subsystem`
-  - `FlightProject.Integration.Vex.VerticalSlice`
-  - `FlightProject.Integration.Concurrency`
-- Verse bridge phase 2 landed:
-  - executable VM procedure wrapper path is active (`VProcedure` + `VFunction::Invoke`).
-  - generated Verse source is compiler-validated before behavior activation.
-  - native fallback execution remains as a safety path.
-- Verse assembler scaffold phase started:
-  - experimental `IAssemblerPass` is now registered from `FlightProject` module startup.
-  - codegen/link hooks are active for future bytecode emission work.
+- **Unified Meta-Logging Landed**:
+  - `FLogger` sink-based architecture is stable.
+  - VEX UI now supports `log()` directive for both static and symbol-driven structured data.
+  - `TReflectTraits` normalization layer ensures stable reflection for all cv-ref types.
+- **VEX IR Control Flow Hardened**:
+  - `FVexIrProgram` now supports `JumpIf`, blocks, and comparison operators.
+  - Verse lowerer generates idiomatic `logic`-type `if` structures.
+  - HLSL lowerer supports IR-fidelity via labels and `goto`.
+- **Testing Maturity**:
+  - New complex automation tests for Logging, Reflection, and Functional systems provide high coverage.
+  - Module initialization timing (LoadingPhase) resolved for shader/UI stability.
 
-## Immediate Next Steps
-1. Expand vertical-slice generation to include explicit affinity-negative rows as schemas add GameThread symbols.
-2. Implement minimal bytecode emission in the project-owned `IAssemblerPass` scaffold (literal/move/return subset).
-3. Add parser + mixed-bucket test commands as required pre-merge gates in CI notes.
-4. Add a dedicated headless bucket including `FlightProject.Integration.Vex.VerticalSlice`.
-5. Add schema snapshot replay + retention tooling (`schema_edits.jl` rebuild, history prune policy) and wire it into UI workflow docs/tests.
+## Immediate Next Steps (2026-03-10)
+1. **VVM ASSEMBLER**: Transition the assembler to consume `FVexIrProgram` directly for VVM bytecode generation.
+2. **NATIVE REGISTRY**: Implement `UFlightVerseSubsystem::RegisterNativeVerseFunctions` with a schema-driven thunk generator.
+3. **CI/RENDER**: Proceed with software-Vulkan (lavapipe) tests to bypass engine-level analytics shader assertions.
 
 ## Risks / Watch Items
-- Parser changes can still perturb lowering semantics; keep parser and mixed buckets mandatory after parser edits.
-- False confidence from `NullRHI` contexts for GPU behavior; keep expected-skip semantics explicit.
-- Shared automation output can obscure true failures; continue focused/error-filtered runs for triage.
+- **VVM Bytecode Fidelity**: Ensuring our IR Jumps map correctly to VVM's stack-based branching.
+- **Module Cycles**: Maintaining strict decoupling between the Core Meta module and the VEX/Verse higher-level systems.

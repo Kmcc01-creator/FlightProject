@@ -655,7 +655,7 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 			{
 				Behavior.SimdPlan = Flight::Vex::FVexSimdExecutor::Compile(IrProgram);
 				Behavior.SimdCompileDiagnostics = Behavior.SimdPlan.IsValid()
-					? TEXT("SIMD Tier 1 plan compiled successfully via IR.")
+					? FString::Printf(TEXT("SIMD Tier 1 plan compiled successfully via IR. (%d instructions, %d registers)"), IrProgram->Instructions.Num(), IrProgram->MaxRegisters)
 					: TEXT("SIMD Tier 1 IR generation passed, but plan generation failed.");
 			}
 			else

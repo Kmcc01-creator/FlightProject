@@ -27,10 +27,18 @@ void FFlightGpuComputeModule::StartupModule()
 
 	if (FPaths::DirectoryExists(PluginShaderDir))
 	{
-		AddShaderSourceDirectoryMapping(TEXT("/FlightProject"), PluginShaderDir);
-
-		UE_LOG(LogFlightGpuCompute, Log,
-			TEXT("FlightGpuCompute: Mapped /FlightProject -> %s"), *PluginShaderDir);
+		const FString VirtualPath = TEXT("/FlightProject");
+		if (!AllShaderSourceDirectoryMappings().Contains(VirtualPath))
+		{
+			AddShaderSourceDirectoryMapping(VirtualPath, PluginShaderDir);
+			UE_LOG(LogFlightGpuCompute, Log,
+				TEXT("FlightGpuCompute: Mapped /FlightProject -> %s"), *PluginShaderDir);
+		}
+		else
+		{
+			UE_LOG(LogFlightGpuCompute, Log,
+				TEXT("FlightGpuCompute: Shader directory already mapped for /FlightProject"));
+		}
 
 		bShadersRegistered = true;
 	}

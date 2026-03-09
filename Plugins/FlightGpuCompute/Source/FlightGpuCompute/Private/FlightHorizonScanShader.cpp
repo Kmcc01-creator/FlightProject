@@ -13,7 +13,8 @@ DEFINE_LOG_CATEGORY_STATIC(LogFlightHorizonScan, Log, All);
 
 namespace
 {
-	static FGlobalShaderMap* TryGetFlightGlobalShaderMap()
+	inline FGlobalShaderMap* TryGetFlightGlobalShaderMap()
+
 	{
 		if (!FApp::CanEverRender())
 		{

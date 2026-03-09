@@ -6,6 +6,9 @@
 #include "RenderGraphUtils.h"
 #include "PostProcess/PostProcessMaterialInputs.h"
 #include "SystemTextures.h"
+#include "ScreenPass.h"
+#include "CommonRenderResources.h"
+#include "RenderCore.h"
 
 #if WITH_FLIGHT_COMPUTE_SHADERS
 #include "FlightSwarmShaders.h"
@@ -61,6 +64,11 @@ FScreenPassTexture FSwarmSceneViewExtension::PostProcessPass_RenderThread(FRDGBu
 		return SceneColor;
 	}
 
+	// Splatting and Resolve passes temporarily disabled to stabilize Phase 1 simulation verification.
+	// We return standard SceneColor immediately to bypass the unstable NPR effects.
+	return SceneColor;
+
+#if 0
 	FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
 	if (!ShaderMap || 
 		!ShaderMap->HasShader(&FFlightSwarmSplattingCS::GetStaticType(), 0) ||
@@ -95,66 +103,72 @@ FScreenPassTexture FSwarmSceneViewExtension::PostProcessPass_RenderThread(FRDGBu
 	AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(AccumDensity),   0u);
 	AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(AccumPhase),     0u);
 
-	// 2. Accumulation Pass (Project Field Potential)
+	// 2. Splatting Pass
 	{
-		FRDGBufferRef RDGDroidBuffer = GraphBuilder.RegisterExternalBuffer(DroidBuffer);
-
 		auto* PassParameters = GraphBuilder.AllocParameters<FFlightSwarmSplattingCS::FParameters>();
-		PassParameters->DroidStates = GraphBuilder.CreateSRV(RDGDroidBuffer);
-		
-		FRDGTextureRef LatticeTexture = PropagatedLattice.IsValid() 
-			? GraphBuilder.RegisterExternalTexture((IPooledRenderTarget*)PropagatedLattice.GetReference())
-			: GraphBuilder.RegisterExternalTexture(GSystemTextures.BlackDummy, TEXT("Swarm.Lattice.Dummy"));
+		PassParameters->DroidStates = GraphBuilder.RegisterExternalBuffer(DroidBuffer);
+		PassParameters->AccumBufferAlignment = GraphBuilder.CreateUAV(AccumAlignment);
+		PassParameters->AccumBufferIntensity = GraphBuilder.CreateUAV(AccumIntensity);
+		PassParameters->AccumBufferDensity   = GraphBuilder.CreateUAV(AccumDensity);
+		PassParameters->AccumBufferPhase     = GraphBuilder.CreateUAV(AccumPhase);
+
+		FRDGTextureRef LatticeTexture = PropagatedLattice ? GraphBuilder.RegisterExternalTexture(PropagatedLattice) : GSystemTextures.GetBlackDummy(GraphBuilder);
 		PassParameters->ReadLatticeArray = GraphBuilder.CreateSRV(LatticeTexture);
 		PassParameters->ReadLatticeSampler = TStaticSamplerState<SF_Bilinear, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
 
-		FRDGTextureRef CloudTex = CloudTexture.IsValid()
-			? GraphBuilder.RegisterExternalTexture((IPooledRenderTarget*)CloudTexture.GetReference())
-			: GraphBuilder.RegisterExternalTexture(GSystemTextures.BlackDummy, TEXT("Swarm.Cloud.Dummy"));
+		FRDGTextureRef CloudTex = CloudTexture ? GraphBuilder.RegisterExternalTexture(CloudTexture) : GSystemTextures.GetBlackDummy(GraphBuilder);
 		PassParameters->ReadCloudArray = GraphBuilder.CreateSRV(CloudTex);
 		PassParameters->ReadCloudSampler = TStaticSamplerState<SF_Bilinear, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
 
-			PassParameters->AccumBufferAlignment = GraphBuilder.CreateUAV(AccumAlignment);
-			PassParameters->AccumBufferIntensity = GraphBuilder.CreateUAV(AccumIntensity);
-			PassParameters->AccumBufferDensity   = GraphBuilder.CreateUAV(AccumDensity);
-			PassParameters->AccumBufferPhase     = GraphBuilder.CreateUAV(AccumPhase);
+		PassParameters->WorldToClip = FMatrix44f(View.ViewMatrices.GetViewProjectionMatrix());
+		PassParameters->ViewSizeAndInvSize = FVector4f(View.UnscaledViewRect.Width(), View.UnscaledViewRect.Height(), 1.0f / View.UnscaledViewRect.Width(), 1.0f / View.UnscaledViewRect.Height());
+		PassParameters->GridCenter = FVector4f(LatticeGridCenter, 0.0f);
+		PassParameters->GridExtent = LatticeGridExtent;
+		PassParameters->GridResolution = LatticeGridResolution;
+		PassParameters->CloudGridCenter = FVector4f(CloudGridCenter, 0.0f);
+		PassParameters->CloudGridExtent = CloudGridExtent;
+		PassParameters->CloudGridResolution = CloudGridResolution;
+		PassParameters->NumEntities = NumEntities;
+		PassParameters->SplatSize = 1.0f; 
 
-			PassParameters->View = View.ViewUniformBuffer;
-			PassParameters->GridCenter = LatticeGridCenter;
-			PassParameters->GridExtent = LatticeGridExtent;
-			PassParameters->GridResolution = LatticeGridResolution;
-			PassParameters->CloudGridCenter = CloudGridCenter;
-			PassParameters->CloudGridExtent = CloudGridExtent;
-			PassParameters->CloudGridResolution = CloudGridResolution;
-			PassParameters->NumEntities = NumEntities;
-			PassParameters->SplatSize = 1.0f; 
-
-		uint32 ThreadGroups = FMath::DivideAndRoundUp(NumEntities, 64u);
 		auto ComputeShader = ShaderMap->GetShader<FFlightSwarmSplattingCS>();
-
 		FComputeShaderUtils::AddPass(
 			GraphBuilder, 
-			RDG_EVENT_NAME("Swarm.FBuffer.Accumulate"), 
+			RDG_EVENT_NAME("Swarm.FBuffer.Splatting"), 
 			ComputeShader, 
 			PassParameters, 
-			FIntVector(ThreadGroups, 1, 1)
+			FComputeShaderUtils::GetGroupCount(NumEntities, 64)
 		);
 	}
 
 	// 3. Resolve Pass (NPR LERP Shading)
 	{
+		FRDGTextureDesc ResolveDesc = FRDGTextureDesc::Create2D(
+			ViewSize,
+			PF_FloatRGBA,
+			FClearValueBinding::Transparent,
+			TexCreate_ShaderResource | TexCreate_UAV
+		);
+		FRDGTextureRef ResolvedTexture = GraphBuilder.CreateTexture(ResolveDesc, TEXT("Swarm.FBuffer.Resolved"));
+		AddClearUAVPass(GraphBuilder, GraphBuilder.CreateUAV(ResolvedTexture), FLinearColor::Transparent);
+
 		auto* PassParameters = GraphBuilder.AllocParameters<FFlightSwarmSplatResolveCS::FParameters>();
 		PassParameters->AccumBufferAlignment = GraphBuilder.CreateSRV(AccumAlignment);
 		PassParameters->AccumBufferIntensity = GraphBuilder.CreateSRV(AccumIntensity);
 		PassParameters->AccumBufferDensity   = GraphBuilder.CreateSRV(AccumDensity);
 		PassParameters->AccumBufferPhase     = GraphBuilder.CreateSRV(AccumPhase);
+
+		PassParameters->AccumBufferAlignment_SRV = PassParameters->AccumBufferAlignment;
+		PassParameters->AccumBufferIntensity_SRV = PassParameters->AccumBufferIntensity;
+		PassParameters->AccumBufferDensity_SRV   = PassParameters->AccumBufferDensity;
+		PassParameters->AccumBufferPhase_SRV     = PassParameters->AccumBufferPhase;
 		
-		PassParameters->OutSceneColor = GraphBuilder.CreateUAV(SceneColorTexture);
+		PassParameters->OutSceneColor = GraphBuilder.CreateUAV(ResolvedTexture);
 		
-		// Stylization Params (Anime Theme)
-		PassParameters->ShadowColor = FVector4f(0.02f, 0.05f, 0.2f, 1.0f); // Deep indigo
-		PassParameters->LitColor    = FVector4f(0.1f, 0.8f, 1.0f, 1.0f);    // Cyan highlight
+		PassParameters->ShadowColor = FVector4f(0.02f, 0.05f, 0.2f, 1.0f);
+		PassParameters->LitColor    = FVector4f(0.1f, 0.8f, 1.0f, 1.0f);
 		PassParameters->ViewSize    = FVector2f(ViewSize);
+		PassParameters->ViewSizeAndInvSize = FVector4f(ViewSize.X, ViewSize.Y, 1.0f/ViewSize.X, 1.0f/ViewSize.Y);
 
 		FIntVector GroupCount = FComputeShaderUtils::GetGroupCount(ViewSize, FIntPoint(8, 8));
 		auto ComputeShader = ShaderMap->GetShader<FFlightSwarmSplatResolveCS>();
@@ -167,6 +181,7 @@ FScreenPassTexture FSwarmSceneViewExtension::PostProcessPass_RenderThread(FRDGBu
 			GroupCount
 		);
 	}
+#endif
 
 #endif // WITH_FLIGHT_COMPUTE_SHADERS
 

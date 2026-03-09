@@ -41,10 +41,10 @@ EFlightVexSymbolValueType GetVexValueType()
 template<CReflectable T>
 FString GenerateStructHLSL(const FString& InStructName = FString())
 {
-	FString StructName = InStructName.IsEmpty() ? FString(TReflectionTraits<T>::Name) : InStructName;
+	FString StructName = InStructName.IsEmpty() ? FString(TReflectTraits<T>::Name) : InStructName;
 	FString Hlsl = FString::Printf(TEXT("struct %s\n{\n"), *StructName);
 
-    TReflectionTraits<T>::Fields::ForEachDescriptor([&Hlsl](auto Descriptor)
+    TReflectTraits<T>::Fields::ForEachDescriptor([&Hlsl](auto Descriptor)
     {
         using DescType = decltype(Descriptor);
 		if constexpr (requires { typename DescType::FieldType; })
@@ -68,7 +68,7 @@ template<CReflectable T>
 uint32 ComputeLayoutHash()
 {
 	FString LayoutStr;
-    TReflectionTraits<T>::Fields::ForEachDescriptor([&LayoutStr](auto Descriptor)
+    TReflectTraits<T>::Fields::ForEachDescriptor([&LayoutStr](auto Descriptor)
     {
         using DescType = decltype(Descriptor);
 		if constexpr (requires { typename DescType::FieldType; })
@@ -116,7 +116,7 @@ TArray<FFlightVexSymbolRow> GenerateVexSymbolsFromStruct(FName Owner)
 {
 	TArray<FFlightVexSymbolRow> Rows;
 
-	TReflectionTraits<T>::Fields::ForEachDescriptor([&](auto Descriptor)
+	TReflectTraits<T>::Fields::ForEachDescriptor([&](auto Descriptor)
 	{
 		using DescType = decltype(Descriptor);
 		if constexpr (requires { typename DescType::FieldType; } && DescType::template HasAttrTemplate<Attr::VexSymbol>)

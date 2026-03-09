@@ -13,7 +13,7 @@ using namespace Flight::Reactive;
 /**
  * Test: Basic Pipeline Operators
  */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFunctionalPipeTest, "FlightProject.Functional.Pipes.Basic", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFunctionalPipeTest, "FlightProject.Unit.Functional.Pipes.Basic", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
 
 bool FFunctionalPipeTest::RunTest(const FString& Parameters)
 {
@@ -37,7 +37,7 @@ bool FFunctionalPipeTest::RunTest(const FString& Parameters)
 /**
  * Test: Temporal Projection (TProjectedState)
  */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFunctionalProjectionTest, "FlightProject.Functional.Pipes.Projection", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFunctionalProjectionTest, "FlightProject.Unit.Functional.Pipes.Projection", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
 
 bool FFunctionalProjectionTest::RunTest(const FString& Parameters)
 {
@@ -60,7 +60,7 @@ bool FFunctionalProjectionTest::RunTest(const FString& Parameters)
 /**
  * Test: Control Fusion (Fuse Operator)
  */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFunctionalFusionTest, "FlightProject.Functional.Pipes.ControlFusion", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFunctionalFusionTest, "FlightProject.Unit.Functional.Pipes.ControlFusion", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
 
 bool FFunctionalFusionTest::RunTest(const FString& Parameters)
 {
@@ -91,7 +91,7 @@ bool FFunctionalFusionTest::RunTest(const FString& Parameters)
 /**
  * Integration: Lazy Chain with Heterogeneous Results
  */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFunctionalLazyChainIntegrationTest, "FlightProject.Functional.Integration.LazyChain", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFunctionalLazyChainIntegrationTest, "FlightProject.Unit.Functional.Integration.LazyChain", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
 
 bool FFunctionalLazyChainIntegrationTest::RunTest(const FString& Parameters)
 {
@@ -137,7 +137,7 @@ namespace Flight::Reflection {
 	FLIGHT_REFLECT_FIELDS(FSimState, FLIGHT_FIELD(float, Value), FLIGHT_FIELD(bool, bValid))
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFunctionalReactiveStateFlowTest, "FlightProject.Functional.Integration.StateFlow", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFunctionalReactiveStateFlowTest, "FlightProject.Unit.Functional.Integration.StateFlow", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
 
 bool FFunctionalReactiveStateFlowTest::RunTest(const FString& Parameters)
 {
@@ -175,7 +175,7 @@ bool FFunctionalReactiveStateFlowTest::RunTest(const FString& Parameters)
 /**
  * Test: Async continuation chain propagation
  */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFunctionalAsyncChainTest, "FlightProject.Functional.Async.ChainPropagation", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFunctionalAsyncChainTest, "FlightProject.Unit.Functional.Async.ChainPropagation", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
 
 bool FFunctionalAsyncChainTest::RunTest(const FString& Parameters)
 {

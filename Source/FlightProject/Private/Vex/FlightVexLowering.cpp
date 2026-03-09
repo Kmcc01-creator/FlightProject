@@ -271,6 +271,7 @@ FString LowerMegaKernel(const TMap<uint32, FVexProgramAst>& Scripts, const TArra
 	TArray<FString> UsedOrdered = UsedSymbols.Array();
 	UsedOrdered.Sort();
 
+	// LocalMap is the source of truth for the GPU Mega-Kernel (aliasing globals to locals)
 	TMap<FString, FString> LocalMap = SymbolMap;
 	FString Hoist = TEXT("// --- Global Attribute Hoisting ---\n");
 	for (const FString& Symbol : UsedOrdered)
@@ -285,17 +286,32 @@ FString LowerMegaKernel(const TMap<uint32, FVexProgramAst>& Scripts, const TArra
 	for (const TPair<uint32, FVexProgramAst>& Pair : Scripts)
 	{
 		Dispatch += FString::Printf(TEXT("    case %u:\n    {\n"), Pair.Key);
-		// Note: Mega-Kernel still uses legacy AST lowering for complex hoisting/dispatch blocks
-		const FString CaseBody = Lower::Program(Pair.Value, LocalMap, false);
-		TArray<FString> BodyLines;
-		CaseBody.ParseIntoArrayLines(BodyLines);
-		for (const FString& Line : BodyLines)
+		
+		FString Errors;
+		TSharedPtr<FVexIrProgram> Ir = FVexIrCompiler::Compile(Pair.Value, SymbolDefinitions, Errors);
+		if (Ir.IsValid())
 		{
-			if (!Line.IsEmpty())
+			// FIX: We MUST pass LocalMap here so IR lowering uses the '_local' aliases generated in Hoist
+			const FString CaseBody = FVexIrCompiler::LowerToHLSL(*Ir, LocalMap);
+			
+			// DEBUG: Log the generated HLSL for validation
+			UE_LOG(LogTemp, Warning, TEXT("VEX Mega-Kernel Case %u HLSL:\n%s"), Pair.Key, *CaseBody);
+
+			TArray<FString> BodyLines;
+			CaseBody.ParseIntoArrayLines(BodyLines);
+			for (const FString& Line : BodyLines)
 			{
-				Dispatch += TEXT("        ") + Line + TEXT("\n");
+				if (!Line.IsEmpty())
+				{
+					Dispatch += TEXT("        ") + Line + TEXT("\n");
+				}
 			}
 		}
+		else
+		{
+			Dispatch += FString::Printf(TEXT("        // IR Compile Failed: %s\n"), *Errors);
+		}
+		
 		Dispatch += TEXT("        break;\n");
 		Dispatch += TEXT("    }\n");
 	}

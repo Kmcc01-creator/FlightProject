@@ -5,9 +5,11 @@
 #include "FlightWorldBootstrapSubsystem.h"
 #include "FlightSpatialLayoutDirector.h"
 #include "FlightProjectDeveloperSettings.h"
+#include "Rendering/FlightSimpleSCSLShaderPipelineSubsystem.h"
 #include "Swarm/FlightSwarmSubsystem.h"
 #include "Schema/FlightRequirementRegistry.h"
 #include "Diagnostics/FlightPIEObservationSubsystem.h"
+#include "Orchestration/FlightOrchestrationSubsystem.h"
 
 #include "MassEntitySubsystem.h"
 #include "MassExecutionContext.h"
@@ -28,7 +30,13 @@
 #include "NiagaraUserRedirectionParameterStore.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
+#include "Misc/PackageName.h"
 #include "UObject/UObjectGlobals.h"
+
+#if WITH_EDITOR
+#include "MassEntityConfigAsset.h"
+#include "MassEntityTraitBase.h"
+#endif
 
 namespace
 {
@@ -51,6 +59,31 @@ bool TryParseBool(const FString& InValue, bool& OutValue)
 	}
 
 	return false;
+}
+
+FString NormalizeAssetObjectPath(const FString& InPath)
+{
+	const FString TrimmedPath = InPath.TrimStartAndEnd();
+	if (TrimmedPath.IsEmpty())
+	{
+		return FString();
+	}
+
+	if (FPackageName::IsValidObjectPath(TrimmedPath, nullptr))
+	{
+		return TrimmedPath;
+	}
+
+	if (FPackageName::IsValidLongPackageName(TrimmedPath, true))
+	{
+		const FString AssetName = FPackageName::GetLongPackageAssetName(TrimmedPath);
+		if (!AssetName.IsEmpty())
+		{
+			return FString::Printf(TEXT("%s.%s"), *TrimmedPath, *AssetName);
+		}
+	}
+
+	return TrimmedPath;
 }
 
 FString CVarValueTypeToString(const EFlightCVarValueType ValueType)
@@ -799,6 +832,118 @@ TArray<FString> UFlightScriptingLibrary::GetConfiguredCSVPaths()
     return GetConfiguredDataTablePaths();
 }
 
+TArray<FString> UFlightScriptingLibrary::EnsureMassEntityConfigTraits(
+	const FString& ConfigAssetPath,
+	const TArray<FString>& TraitClassPaths)
+{
+	TArray<FString> Issues;
+
+	if (ConfigAssetPath.TrimStartAndEnd().IsEmpty())
+	{
+		Issues.Add(TEXT("Mass config trait ensure: config asset path is empty"));
+		return Issues;
+	}
+
+#if !WITH_EDITOR
+	Issues.Add(TEXT("Mass config trait ensure: editor-only operation is unavailable in this target"));
+	return Issues;
+#else
+	const FString ObjectPath = NormalizeAssetObjectPath(ConfigAssetPath);
+	UMassEntityConfigAsset* ConfigAsset = Cast<UMassEntityConfigAsset>(
+		StaticLoadObject(UMassEntityConfigAsset::StaticClass(), nullptr, *ObjectPath, nullptr, LOAD_NoWarn));
+	if (!ConfigAsset)
+	{
+		Issues.Add(FString::Printf(
+			TEXT("Mass config trait ensure: failed to load MassEntityConfigAsset '%s'"),
+			*ConfigAssetPath));
+		return Issues;
+	}
+
+	TArray<FString> AddedTraitNames;
+	for (const FString& TraitClassPath : TraitClassPaths)
+	{
+		const FString TrimmedTraitPath = TraitClassPath.TrimStartAndEnd();
+		if (TrimmedTraitPath.IsEmpty())
+		{
+			Issues.Add(TEXT("Mass config trait ensure: encountered empty trait class path"));
+			continue;
+		}
+
+		UClass* TraitClass = StaticLoadClass(UMassEntityTraitBase::StaticClass(), nullptr, *TrimmedTraitPath, nullptr, LOAD_NoWarn);
+		if (!TraitClass)
+		{
+			Issues.Add(FString::Printf(
+				TEXT("Mass config trait ensure: failed to load trait class '%s'"),
+				*TrimmedTraitPath));
+			continue;
+		}
+
+		if (ConfigAsset->FindTrait(TraitClass, /*bExactMatch=*/true))
+		{
+			continue;
+		}
+
+		if (!ConfigAsset->AddTrait(TraitClass))
+		{
+			Issues.Add(FString::Printf(
+				TEXT("Mass config trait ensure: failed to add trait '%s' to '%s'"),
+				*TraitClass->GetPathName(),
+				*ConfigAsset->GetPathName()));
+			continue;
+		}
+
+		AddedTraitNames.Add(TraitClass->GetName());
+	}
+
+	if (AddedTraitNames.Num() > 0)
+	{
+		ConfigAsset->MarkPackageDirty();
+		UE_LOG(
+			LogFlightProject,
+			Log,
+			TEXT("FlightScriptingLibrary: ensured %d Mass traits on '%s' (%s)"),
+			AddedTraitNames.Num(),
+			*ConfigAsset->GetPathName(),
+			*FString::Join(AddedTraitNames, TEXT(", ")));
+	}
+
+	return Issues;
+#endif
+}
+
+TArray<FString> UFlightScriptingLibrary::GetMassEntityConfigTraitClassNames(const FString& ConfigAssetPath)
+{
+	TArray<FString> TraitClassNames;
+
+	if (ConfigAssetPath.TrimStartAndEnd().IsEmpty())
+	{
+		return TraitClassNames;
+	}
+
+#if !WITH_EDITOR
+	return TraitClassNames;
+#else
+	const FString ObjectPath = NormalizeAssetObjectPath(ConfigAssetPath);
+	const UMassEntityConfigAsset* ConfigAsset = Cast<UMassEntityConfigAsset>(
+		StaticLoadObject(UMassEntityConfigAsset::StaticClass(), nullptr, *ObjectPath, nullptr, LOAD_NoWarn));
+	if (!ConfigAsset)
+	{
+		return TraitClassNames;
+	}
+
+	for (UMassEntityTraitBase* Trait : ConfigAsset->GetConfig().GetTraits())
+	{
+		if (Trait && Trait->GetClass())
+		{
+			TraitClassNames.AddUnique(Trait->GetClass()->GetName());
+		}
+	}
+
+	TraitClassNames.Sort();
+	return TraitClassNames;
+#endif
+}
+
 // ============================================================================
 // Schema Contracts
 // ============================================================================
@@ -1352,6 +1497,169 @@ int32 UFlightScriptingLibrary::GetPIEEntityTraceEventCount(const UObject* WorldC
 
 	const UFlightPIEObservationSubsystem* ObservationSubsystem = World->GetSubsystem<UFlightPIEObservationSubsystem>();
 	return ObservationSubsystem ? ObservationSubsystem->GetObservedEventCount() : 0;
+}
+
+FString UFlightScriptingLibrary::GetOrchestrationReportJson(const UObject* WorldContextObject, const bool bRefresh)
+{
+	if (!WorldContextObject)
+	{
+		return FString();
+	}
+
+	UWorld* World = GEngine
+		? GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull)
+		: nullptr;
+	if (!World)
+	{
+		return FString();
+	}
+
+	UFlightOrchestrationSubsystem* OrchestrationSubsystem = World->GetSubsystem<UFlightOrchestrationSubsystem>();
+	if (!OrchestrationSubsystem)
+	{
+		UE_LOG(LogFlightProject, Warning, TEXT("FlightScriptingLibrary: orchestration subsystem is not available for world '%s'"), *World->GetName());
+		return FString();
+	}
+
+	if (bRefresh)
+	{
+		OrchestrationSubsystem->RebuildVisibility();
+		OrchestrationSubsystem->RebuildExecutionPlan();
+	}
+
+	return OrchestrationSubsystem->BuildReportJson();
+}
+
+FString UFlightScriptingLibrary::ExportOrchestrationReport(
+	const UObject* WorldContextObject,
+	const FString& RelativeOutputPath,
+	const bool bRefresh)
+{
+	const FString ReportJson = GetOrchestrationReportJson(WorldContextObject, bRefresh);
+	if (ReportJson.IsEmpty())
+	{
+		return FString();
+	}
+
+	FString AbsolutePath = RelativeOutputPath;
+	if (FPaths::IsRelative(AbsolutePath))
+	{
+		AbsolutePath = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir(), AbsolutePath);
+	}
+
+	const FString DirectoryPath = FPaths::GetPath(AbsolutePath);
+	if (!DirectoryPath.IsEmpty())
+	{
+		IFileManager::Get().MakeDirectory(*DirectoryPath, true);
+	}
+
+	if (!FFileHelper::SaveStringToFile(ReportJson, *AbsolutePath))
+	{
+		UE_LOG(LogFlightProject, Error, TEXT("FlightScriptingLibrary: Failed to write orchestration report '%s'"), *AbsolutePath);
+		return FString();
+	}
+
+	UE_LOG(LogFlightProject, Log, TEXT("FlightScriptingLibrary: Exported orchestration report to '%s'"), *AbsolutePath);
+	return AbsolutePath;
+}
+
+bool UFlightScriptingLibrary::SetSimpleSCSLShaderPipelineEnabled(const UObject* WorldContextObject, const bool bEnabled)
+{
+	if (!WorldContextObject)
+	{
+		return false;
+	}
+
+	UWorld* World = GEngine
+		? GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull)
+		: nullptr;
+	if (!World)
+	{
+		return false;
+	}
+
+	UFlightSimpleSCSLShaderPipelineSubsystem* PipelineSubsystem = World->GetSubsystem<UFlightSimpleSCSLShaderPipelineSubsystem>();
+	if (!PipelineSubsystem)
+	{
+		UE_LOG(LogFlightProject, Warning, TEXT("FlightScriptingLibrary: SimpleSCSL shader pipeline subsystem is not available for world '%s'"), *World->GetName());
+		return false;
+	}
+
+	PipelineSubsystem->SetEnabled(bEnabled);
+	return true;
+}
+
+bool UFlightScriptingLibrary::ConfigureSimpleSCSLShaderPipeline(
+	const UObject* WorldContextObject,
+	const FFlightSimpleSCSLShaderPipelineConfig& Config)
+{
+	if (!WorldContextObject)
+	{
+		return false;
+	}
+
+	UWorld* World = GEngine
+		? GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull)
+		: nullptr;
+	if (!World)
+	{
+		return false;
+	}
+
+	UFlightSimpleSCSLShaderPipelineSubsystem* PipelineSubsystem = World->GetSubsystem<UFlightSimpleSCSLShaderPipelineSubsystem>();
+	if (!PipelineSubsystem)
+	{
+		UE_LOG(LogFlightProject, Warning, TEXT("FlightScriptingLibrary: SimpleSCSL shader pipeline subsystem is not available for world '%s'"), *World->GetName());
+		return false;
+	}
+
+	PipelineSubsystem->SetConfig(Config);
+	return true;
+}
+
+FFlightSimpleSCSLShaderPipelineConfig UFlightScriptingLibrary::GetSimpleSCSLShaderPipelineConfig(const UObject* WorldContextObject)
+{
+	FFlightSimpleSCSLShaderPipelineConfig Config;
+	if (!WorldContextObject)
+	{
+		return Config;
+	}
+
+	UWorld* World = GEngine
+		? GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull)
+		: nullptr;
+	if (!World)
+	{
+		return Config;
+	}
+
+	const UFlightSimpleSCSLShaderPipelineSubsystem* PipelineSubsystem = World->GetSubsystem<UFlightSimpleSCSLShaderPipelineSubsystem>();
+	return PipelineSubsystem ? PipelineSubsystem->GetConfig() : Config;
+}
+
+FString UFlightScriptingLibrary::GetSimpleSCSLShaderPipelineStateJson(const UObject* WorldContextObject)
+{
+	if (!WorldContextObject)
+	{
+		return FString();
+	}
+
+	UWorld* World = GEngine
+		? GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull)
+		: nullptr;
+	if (!World)
+	{
+		return FString();
+	}
+
+	const UFlightSimpleSCSLShaderPipelineSubsystem* PipelineSubsystem = World->GetSubsystem<UFlightSimpleSCSLShaderPipelineSubsystem>();
+	if (!PipelineSubsystem)
+	{
+		UE_LOG(LogFlightProject, Warning, TEXT("FlightScriptingLibrary: SimpleSCSL shader pipeline subsystem is not available for world '%s'"), *World->GetName());
+		return FString();
+	}
+
+	return PipelineSubsystem->BuildStateJson();
 }
 
 #include "Verse/UFlightVerseSubsystem.h"

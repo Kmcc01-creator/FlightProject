@@ -18,7 +18,7 @@ using namespace Flight::Slate;
 /**
  * Test: Core Reactive Primitives
  */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FReactiveCoreTest, "FlightProject.Reactive.Core.Primitives", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FReactiveCoreTest, "FlightProject.Unit.Reactive.Core.Primitives", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
 
 bool FReactiveCoreTest::RunTest(const FString& Parameters)
 {
@@ -49,7 +49,7 @@ bool FReactiveCoreTest::RunTest(const FString& Parameters)
 /**
  * Test: Lambda subscription ownership and cleanup
  */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FReactiveSubscriptionLifecycleTest, "FlightProject.Reactive.Core.SubscriptionLifecycle", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FReactiveSubscriptionLifecycleTest, "FlightProject.Unit.Reactive.Core.SubscriptionLifecycle", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
 
 bool FReactiveSubscriptionLifecycleTest::RunTest(const FString& Parameters)
 {
@@ -81,7 +81,7 @@ bool FReactiveSubscriptionLifecycleTest::RunTest(const FString& Parameters)
 /**
  * Test: Effect teardown removes dependency subscriptions
  */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FReactiveEffectTeardownTest, "FlightProject.Reactive.Core.EffectTeardown", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FReactiveEffectTeardownTest, "FlightProject.Unit.Reactive.Core.EffectTeardown", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
 
 bool FReactiveEffectTeardownTest::RunTest(const FString& Parameters)
 {
@@ -105,7 +105,7 @@ bool FReactiveEffectTeardownTest::RunTest(const FString& Parameters)
 /**
  * Test: Slate Integration and Cleanup
  */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FReactiveSlateTest, "FlightProject.Reactive.UI.SlateBindings", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FReactiveSlateTest, "FlightProject.Functional.Reactive.UI.SlateBindings", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
 
 bool FReactiveSlateTest::RunTest(const FString& Parameters)
 {
@@ -166,7 +166,7 @@ namespace Flight::Reflection
 	);
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FReactiveStateContainerTest, "FlightProject.Reactive.Core.StateContainer", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FReactiveStateContainerTest, "FlightProject.Unit.Reactive.Core.StateContainer", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
 
 bool FReactiveStateContainerTest::RunTest(const FString& Parameters)
 {
@@ -190,7 +190,7 @@ bool FReactiveStateContainerTest::RunTest(const FString& Parameters)
 /**
  * Test: Non-UI Reactive Reuse (Mass Fragment style)
  */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FReactiveNonUITest, "FlightProject.Reactive.Core.NonUIReuse", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FReactiveNonUITest, "FlightProject.Unit.Reactive.Core.NonUIReuse", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
 
 bool FReactiveNonUITest::RunTest(const FString& Parameters)
 {
@@ -236,7 +236,7 @@ bool FReactiveNonUITest::RunTest(const FString& Parameters)
 /**
  * Test: Declarative Builder Syntax
  */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FReactiveBuilderTest, "FlightProject.Reactive.UI.DeclarativeBuilders", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FReactiveBuilderTest, "FlightProject.Functional.Reactive.UI.DeclarativeBuilders", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
 
 bool FReactiveBuilderTest::RunTest(const FString& Parameters)
 {

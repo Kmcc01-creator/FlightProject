@@ -8,6 +8,7 @@
 #include "FlightScriptingLibrary.h"
 #include "Swarm/SwarmSimulationTypes.h"
 #include "Engine/Engine.h"
+#include "FlightTestUtils.h"
 
 namespace
 {
@@ -30,7 +31,7 @@ namespace
 	}
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVexParsingTest, "FlightProject.Vex.Parsing", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVexParsingTest, "FlightProject.Unit.Vex.Parsing", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FFlightVexParsingTest::RunTest(const FString& Parameters)
 {
@@ -62,7 +63,7 @@ bool FFlightVexParsingTest::RunTest(const FString& Parameters)
 		TMap<FString, FString> SymbolMap;
 		SymbolMap.Add(TEXT("@position"), TEXT("Droid.Position"));
 		
-		FString VerseOutput = Flight::Vex::LowerToVerse(Result.Program, TArray<Flight::Vex::FVexSymbolDefinition>(), SymbolMap);
+		FString VerseOutput = Flight::Vex::LowerToVerse(Result.Program, Defs, SymbolMap);
 		
 		// Check for idiomatic Verse syntax
 		TestTrue(TEXT("Verse output should use 'set' for assignment"), VerseOutput.Contains(TEXT("set Droid.Position =")));
@@ -78,7 +79,7 @@ bool FFlightVexParsingTest::RunTest(const FString& Parameters)
 		bool bFoundResidencyError = false;
 		for (const auto& Issue : Result.Issues)
 		{
-			if (Issue.Message.Contains(TEXT("GPU-only")) && Issue.Message.Contains(TEXT("@cpu")))
+			if (Issue.Message.Contains(TEXT("residency error")))
 			{
 				bFoundResidencyError = true;
 				break;
@@ -103,7 +104,7 @@ bool FFlightVexParsingTest::RunTest(const FString& Parameters)
 		bool bFoundAffinityError = false;
 		for (const auto& Issue : Result.Issues)
 		{
-			if (Issue.Message.Contains(TEXT("Game Thread")) && Issue.Message.Contains(TEXT("@job")))
+			if (Issue.Message.Contains(TEXT("affinity error")))
 			{
 				bFoundAffinityError = true;
 				break;
@@ -144,7 +145,7 @@ bool FFlightVexParsingTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVerseSubsystemTest, "FlightProject.Verse.Subsystem", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVerseSubsystemTest, "FlightProject.Functional.Verse.Subsystem", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FFlightVerseSubsystemTest::RunTest(const FString& Parameters)
 {
@@ -174,7 +175,7 @@ bool FFlightVerseSubsystemTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVerseCompileContractTest, "FlightProject.Verse.CompileContract", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVerseCompileContractTest, "FlightProject.Integration.Verse.CompileContract", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FFlightVerseCompileContractTest::RunTest(const FString& Parameters)
 {
@@ -254,7 +255,7 @@ bool FFlightVerseCompileContractTest::RunTest(const FString& Parameters)
 
 #include "AutoRTFM.h"
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightAutoRTFMIntegrationTest, "FlightProject.AutoRTFM.Integration", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightAutoRTFMIntegrationTest, "FlightProject.Integration.AutoRTFM", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FFlightAutoRTFMIntegrationTest::RunTest(const FString& Parameters)
 {
@@ -267,7 +268,7 @@ bool FFlightAutoRTFMIntegrationTest::RunTest(const FString& Parameters)
 	bool bCommitCalled = false;
 	bool bAbortCalled = false;
 
-	AutoRTFM::ETransactionResult Result = AutoRTFM::Transact([&]()
+	AutoRTFM::ETransactionResult TransactionResult = AutoRTFM::Transact([&]()
 	{
 		AutoRTFM::OnCommit([&]() { bCommitCalled = true; });
 		AutoRTFM::OnAbort([&]() { bAbortCalled = true; });
@@ -282,7 +283,7 @@ bool FFlightAutoRTFMIntegrationTest::RunTest(const FString& Parameters)
 		}
 	});
 
-	const bool bAbortedByRequest = (Result == AutoRTFM::ETransactionResult::AbortedByRequest);
+	const bool bAbortedByRequest = (TransactionResult == AutoRTFM::ETransactionResult::AbortedByRequest);
 	if (bAbortedByRequest)
 	{
 		TestEqual(TEXT("Droid Position should be rolled back to original"), Droid.Position, FVector3f(0, 0, 0));
@@ -293,12 +294,12 @@ bool FFlightAutoRTFMIntegrationTest::RunTest(const FString& Parameters)
 	{
 		AddInfo(TEXT("AutoRTFM transactional runtime is inactive; validating fallback non-transactional semantics."));
 		TestEqual(TEXT("Droid Position should reflect non-transactional execution"), Droid.Position, FVector3f(10, 0, 0));
-		TestEqual(TEXT("Fallback transaction result should be committed"), Result, AutoRTFM::ETransactionResult::Committed);
+		TestEqual(TEXT("Fallback transaction result should be committed"), TransactionResult, AutoRTFM::ETransactionResult::Committed);
 		TestFalse(TEXT("Abort handler should not fire in non-transactional mode"), bAbortCalled);
 		TestTrue(TEXT("Commit handler should fire immediately in non-transactional mode"), bCommitCalled);
 	}
 
-	Result = AutoRTFM::Transact([&]()
+	TransactionResult = AutoRTFM::Transact([&]()
 	{
 		bCommitCalled = false;
 		bAbortCalled = false;
@@ -309,7 +310,7 @@ bool FFlightAutoRTFMIntegrationTest::RunTest(const FString& Parameters)
 
 	const FVector3f ExpectedCommittedPosition = bAbortedByRequest ? FVector3f(10, 0, 0) : FVector3f(20, 0, 0);
 	TestEqual(TEXT("Droid Position should match expected committed value"), Droid.Position, ExpectedCommittedPosition);
-	TestEqual(TEXT("Transaction should have committed"), Result, AutoRTFM::ETransactionResult::Committed);
+	TestEqual(TEXT("Transaction should have committed"), TransactionResult, AutoRTFM::ETransactionResult::Committed);
 	TestTrue(TEXT("Commit handler should have fired"), bCommitCalled);
 
 	return true;
@@ -321,6 +322,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightGpuReactiveTest, "FlightProject.Gpu.Reac
 
 bool FFlightGpuReactiveTest::RunTest(const FString& Parameters)
 {
+	if (Flight::Test::ShouldSkipGpuTest())
+	{
+		return true;
+	}
+
 	using namespace Flight::Async;
 
 	TUniquePtr<IFlightAsyncExecutor> Executor = CreatePlatformExecutor();

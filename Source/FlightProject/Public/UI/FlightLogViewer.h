@@ -423,6 +423,15 @@ namespace Flight::Log
                         *Selected->File, Selected->Line);
                 }
 
+                if (Selected->Context.Num() > 0)
+                {
+                    Details += TEXT("\n\n--- Context ---");
+                    for (const auto& KVP : Selected->Context)
+                    {
+                        Details += FString::Printf(TEXT("\n%s: %s"), *KVP.Key, *KVP.Value);
+                    }
+                }
+
                 DetailText->SetText(FText::FromString(Details));
             }
         }

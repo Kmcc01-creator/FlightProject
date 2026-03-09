@@ -18,6 +18,7 @@ enum class EVexIrOp : uint8
 	StoreSymbol,
 	Const,
 	Add, Sub, Mul, Div,
+	Less, Greater, LessEqual, GreaterEqual, Equal, NotEqual,
 	Normalize,
 	Sin, Cos, Log, Exp, Pow,
 	VectorCompose, // compose vec2/3/4

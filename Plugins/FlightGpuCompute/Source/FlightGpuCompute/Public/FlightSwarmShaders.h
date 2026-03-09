@@ -18,6 +18,10 @@ class FLIGHTGPUCOMPUTE_API FFlightSwarmClearGridCS : public FGlobalShader
 
 	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint32>, GridHeadBuffer)
+		SHADER_PARAMETER(FVector4f, GridCenter)
+
+		SHADER_PARAMETER(float, GridExtent)
+		SHADER_PARAMETER(uint32, GridResolution)
 	END_SHADER_PARAMETER_STRUCT()
 
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
@@ -36,6 +40,10 @@ class FLIGHTGPUCOMPUTE_API FFlightSwarmBuildGridCS : public FGlobalShader
 		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, DroidStates)
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint32>, GridHeadBuffer)
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<uint32>, GridNextBuffer)
+		SHADER_PARAMETER(FVector4f, GridCenter)
+
+		SHADER_PARAMETER(float, GridExtent)
+		SHADER_PARAMETER(uint32, GridResolution)
 		SHADER_PARAMETER(uint32, NumEntities)
 	END_SHADER_PARAMETER_STRUCT()
 
@@ -119,6 +127,10 @@ class FLIGHTGPUCOMPUTE_API FFlightSwarmDensityCS : public FGlobalShader
 		SHADER_PARAMETER(float, GasConstant)
 		SHADER_PARAMETER(float, RestDensity)
 		SHADER_PARAMETER(float, Viscosity)
+		SHADER_PARAMETER(FVector4f, GridCenter)
+
+		SHADER_PARAMETER(float, GridExtent)
+		SHADER_PARAMETER(uint32, GridResolution)
 		SHADER_PARAMETER(uint32, NumEntities)
 	END_SHADER_PARAMETER_STRUCT()
 
@@ -157,7 +169,8 @@ class FLIGHTGPUCOMPUTE_API FFlightSwarmForceCS : public FGlobalShader
 		SHADER_PARAMETER_SAMPLER(SamplerState, ReadCloudSampler)
 		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture3D<uint>, OutCloudAccumArray)
 
-		SHADER_PARAMETER(FVector3f, GridCenter)
+		SHADER_PARAMETER(FVector4f, GridCenter)
+
 		SHADER_PARAMETER(float, GridExtent)
 		SHADER_PARAMETER(uint32, GridResolution)
 
@@ -180,27 +193,7 @@ class FLIGHTGPUCOMPUTE_API FFlightSwarmForceCS : public FGlobalShader
 	}
 };
 
-/** Pass 3: Integration and Bounds */
-class FLIGHTGPUCOMPUTE_API FFlightSwarmIntegrationCS : public FGlobalShader
-{
-	DECLARE_GLOBAL_SHADER(FFlightSwarmIntegrationCS);
-	SHADER_USE_PARAMETER_STRUCT(FFlightSwarmIntegrationCS, FGlobalShader);
-
-	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
-		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, ForceBlackboard)
-		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, DroidStates)
-		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, DroidStatesRW)
-		SHADER_PARAMETER(float, DeltaTime)
-		SHADER_PARAMETER(uint32, NumEntities)
-	END_SHADER_PARAMETER_STRUCT()
-
-	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
-	{
-		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
-	}
-};
-
-/** Pass 5: Future Rollout (Predictive) */
+/** Pass 3: Predictive Rollout */
 class FLIGHTGPUCOMPUTE_API FFlightSwarmPredictiveCS : public FGlobalShader
 {
 	DECLARE_GLOBAL_SHADER(FFlightSwarmPredictiveCS);
@@ -208,7 +201,7 @@ class FLIGHTGPUCOMPUTE_API FFlightSwarmPredictiveCS : public FGlobalShader
 
 	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
 		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, DroidStates)
-		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, ForceBlackboard)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<FVector4f>, ForceBlackboard)
 		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FTransientEvent>, EventBuffer)
 		SHADER_PARAMETER(FVector4f, PlayerPosRadius)
 		SHADER_PARAMETER(FVector4f, BeaconPosStrength)
@@ -231,59 +224,18 @@ class FLIGHTGPUCOMPUTE_API FFlightSwarmPredictiveCS : public FGlobalShader
 	}
 };
 
-/** Pass 6: F-Buffer Splatting (Projection of Field Potential) */
-class FLIGHTGPUCOMPUTE_API FFlightSwarmSplattingCS : public FGlobalShader
+/** Pass 4: Integration and Status Update */
+class FLIGHTGPUCOMPUTE_API FFlightSwarmIntegrationCS : public FGlobalShader
 {
-	DECLARE_GLOBAL_SHADER(FFlightSwarmSplattingCS);
-	SHADER_USE_PARAMETER_STRUCT(FFlightSwarmSplattingCS, FGlobalShader);
+	DECLARE_GLOBAL_SHADER(FFlightSwarmIntegrationCS);
+	SHADER_USE_PARAMETER_STRUCT(FFlightSwarmIntegrationCS, FGlobalShader);
 
 	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<FVector4f>, ForceBlackboard)
 		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, DroidStates)
-		SHADER_PARAMETER_RDG_TEXTURE_SRV(Texture3D<float4>, ReadLatticeArray)
-		SHADER_PARAMETER_SAMPLER(SamplerState, ReadLatticeSampler)
-		SHADER_PARAMETER_RDG_TEXTURE_SRV(Texture3D<float>, ReadCloudArray)
-		SHADER_PARAMETER_SAMPLER(SamplerState, ReadCloudSampler)
-		
-		// F-Buffer Accumulators (Atomics)
-		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<uint>, AccumBufferAlignment) // N dot L
-			SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<uint>, AccumBufferIntensity) // |L|
-			SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<uint>, AccumBufferDensity)   // C_d
-			SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<uint>, AccumBufferPhase)     // Phi
-			
-			SHADER_PARAMETER_STRUCT_REF(FViewUniformShaderParameters, View)
-			SHADER_PARAMETER(FVector3f, GridCenter)
-			SHADER_PARAMETER(float, GridExtent)
-			SHADER_PARAMETER(uint32, GridResolution)
-			SHADER_PARAMETER(FVector3f, CloudGridCenter)
-			SHADER_PARAMETER(float, CloudGridExtent)
-			SHADER_PARAMETER(uint32, CloudGridResolution)
-			SHADER_PARAMETER(uint32, NumEntities)
-			SHADER_PARAMETER(float, SplatSize)
-		END_SHADER_PARAMETER_STRUCT()
-
-	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
-	{
-		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
-	}
-};
-
-/** Pass 7: F-Buffer Resolve & NPR Stylize */
-class FLIGHTGPUCOMPUTE_API FFlightSwarmSplatResolveCS : public FGlobalShader
-{
-	DECLARE_GLOBAL_SHADER(FFlightSwarmSplatResolveCS);
-	SHADER_USE_PARAMETER_STRUCT(FFlightSwarmSplatResolveCS, FGlobalShader);
-
-	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
-		SHADER_PARAMETER_RDG_TEXTURE_SRV(Texture2D<uint>, AccumBufferAlignment)
-		SHADER_PARAMETER_RDG_TEXTURE_SRV(Texture2D<uint>, AccumBufferIntensity)
-		SHADER_PARAMETER_RDG_TEXTURE_SRV(Texture2D<uint>, AccumBufferDensity)
-		SHADER_PARAMETER_RDG_TEXTURE_SRV(Texture2D<uint>, AccumBufferPhase)
-		
-		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<float4>, OutSceneColor)
-		
-		SHADER_PARAMETER(FVector4f, ShadowColor)
-		SHADER_PARAMETER(FVector4f, LitColor)
-		SHADER_PARAMETER(FVector2f, ViewSize)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWStructuredBuffer<float4>, DroidStatesRW)
+		SHADER_PARAMETER(float, DeltaTime)
+		SHADER_PARAMETER(uint32, NumEntities)
 	END_SHADER_PARAMETER_STRUCT()
 
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
@@ -292,7 +244,7 @@ class FLIGHTGPUCOMPUTE_API FFlightSwarmSplatResolveCS : public FGlobalShader
 	}
 };
 
-/** Pass 8: Light Injection (Swarm points to 3D Grid) */
+/** SCSL Pass: Light Lattice Injection */
 class FLIGHTGPUCOMPUTE_API FFlightLightInjectionCS : public FGlobalShader
 {
 	DECLARE_GLOBAL_SHADER(FFlightLightInjectionCS);
@@ -303,7 +255,8 @@ class FLIGHTGPUCOMPUTE_API FFlightLightInjectionCS : public FGlobalShader
 		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture3D<uint>, OutLatticeRArray)
 		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture3D<uint>, OutLatticeGArray)
 		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture3D<uint>, OutLatticeBArray)
-		SHADER_PARAMETER(FVector3f, GridCenter)
+		SHADER_PARAMETER(FVector4f, GridCenter)
+
 		SHADER_PARAMETER(float, GridExtent)
 		SHADER_PARAMETER(uint32, GridResolution)
 		SHADER_PARAMETER(uint32, NumEntities)
@@ -315,27 +268,7 @@ class FLIGHTGPUCOMPUTE_API FFlightLightInjectionCS : public FGlobalShader
 	}
 };
 
-/** Pass 9: Light Propagation (3D Diffusion) */
-class FLIGHTGPUCOMPUTE_API FFlightLightPropagationCS : public FGlobalShader
-{
-	DECLARE_GLOBAL_SHADER(FFlightLightPropagationCS);
-	SHADER_USE_PARAMETER_STRUCT(FFlightLightPropagationCS, FGlobalShader);
-
-	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
-		SHADER_PARAMETER_RDG_TEXTURE_SRV(Texture3D<float4>, ReadLatticeArray)
-		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture3D<float4>, WriteLatticeArray)
-		SHADER_PARAMETER(float, DecayRate)
-		SHADER_PARAMETER(float, PropagationStrength)
-		SHADER_PARAMETER(uint32, GridResolution)
-	END_SHADER_PARAMETER_STRUCT()
-
-	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
-	{
-		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
-	}
-};
-
-/** Pass 10: Lattice Convert (UINT to FLOAT) */
+/** SCSL Pass: Light Fix-to-Float and Persistence */
 class FLIGHTGPUCOMPUTE_API FFlightLightConvertCS : public FGlobalShader
 {
 	DECLARE_GLOBAL_SHADER(FFlightLightConvertCS);
@@ -357,7 +290,27 @@ class FLIGHTGPUCOMPUTE_API FFlightLightConvertCS : public FGlobalShader
 	}
 };
 
-/** Pass 11: Cloud Injection (Swarm to Density Field) */
+/** SCSL Pass: Light Propagation (Diffusion) */
+class FLIGHTGPUCOMPUTE_API FFlightLightPropagationCS : public FGlobalShader
+{
+	DECLARE_GLOBAL_SHADER(FFlightLightPropagationCS);
+	SHADER_USE_PARAMETER_STRUCT(FFlightLightPropagationCS, FGlobalShader);
+
+	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+		SHADER_PARAMETER_RDG_TEXTURE_SRV(Texture3D<float4>, ReadLatticeArray)
+		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture3D<float4>, WriteLatticeArray)
+		SHADER_PARAMETER(float, DecayRate)
+		SHADER_PARAMETER(float, PropagationStrength)
+		SHADER_PARAMETER(uint32, GridResolution)
+	END_SHADER_PARAMETER_STRUCT()
+
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
+	{
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
+	}
+};
+
+/** SCSL Pass: Cloud Injection */
 class FLIGHTGPUCOMPUTE_API FFlightCloudInjectionCS : public FGlobalShader
 {
 	DECLARE_GLOBAL_SHADER(FFlightCloudInjectionCS);
@@ -366,7 +319,8 @@ class FLIGHTGPUCOMPUTE_API FFlightCloudInjectionCS : public FGlobalShader
 	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
 		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, DroidStates)
 		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture3D<uint>, OutCloudAccumArray)
-		SHADER_PARAMETER(FVector3f, GridCenter)
+		SHADER_PARAMETER(FVector4f, GridCenter)
+
 		SHADER_PARAMETER(float, GridExtent)
 		SHADER_PARAMETER(uint32, GridResolution)
 		SHADER_PARAMETER(uint32, NumEntities)
@@ -379,7 +333,7 @@ class FLIGHTGPUCOMPUTE_API FFlightCloudInjectionCS : public FGlobalShader
 	}
 };
 
-/** Pass 12: Cloud Simulation (Diffusion/Dissipation) */
+/** SCSL Pass: Cloud Simulation */
 class FLIGHTGPUCOMPUTE_API FFlightCloudSimCS : public FGlobalShader
 {
 	DECLARE_GLOBAL_SHADER(FFlightCloudSimCS);
@@ -392,6 +346,78 @@ class FLIGHTGPUCOMPUTE_API FFlightCloudSimCS : public FGlobalShader
 		SHADER_PARAMETER(float, DecayRate)
 		SHADER_PARAMETER(float, DiffusionStrength)
 		SHADER_PARAMETER(uint32, GridResolution)
+	END_SHADER_PARAMETER_STRUCT()
+
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
+	{
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
+	}
+};
+
+/** Pass 6: F-Buffer Potential Splatting */
+class FLIGHTGPUCOMPUTE_API FFlightSwarmSplattingCS : public FGlobalShader
+{
+	DECLARE_GLOBAL_SHADER(FFlightSwarmSplattingCS);
+	SHADER_USE_PARAMETER_STRUCT(FFlightSwarmSplattingCS, FGlobalShader);
+
+	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, DroidStates)
+		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<uint>, AccumBufferAlignment)
+		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<uint>, AccumBufferIntensity)
+		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<uint>, AccumBufferDensity)
+		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<uint>, AccumBufferPhase)
+		
+		// SCSL: Light Lattice Array
+		SHADER_PARAMETER_RDG_TEXTURE_SRV(Texture3D<float4>, ReadLatticeArray)
+		SHADER_PARAMETER_SAMPLER(SamplerState, ReadLatticeSampler)
+
+		// SCSL: Cloud Field Array
+		SHADER_PARAMETER_RDG_TEXTURE_SRV(Texture3D<float>, ReadCloudArray)
+		SHADER_PARAMETER_SAMPLER(SamplerState, ReadCloudSampler)
+
+		SHADER_PARAMETER(FMatrix44f, WorldToClip)
+		SHADER_PARAMETER(FVector4f, ViewSizeAndInvSize)
+		SHADER_PARAMETER(FVector4f, GridCenter)
+
+		SHADER_PARAMETER(float, GridExtent)
+		SHADER_PARAMETER(uint32, GridResolution)
+		SHADER_PARAMETER(FVector4f, CloudGridCenter)
+		SHADER_PARAMETER(float, CloudGridExtent)
+		SHADER_PARAMETER(uint32, CloudGridResolution)
+		SHADER_PARAMETER(uint32, NumEntities)
+		SHADER_PARAMETER(float, SplatSize)
+	END_SHADER_PARAMETER_STRUCT()
+
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
+	{
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
+	}
+};
+
+/** Pass 7: NPR Resolve */
+class FLIGHTGPUCOMPUTE_API FFlightSwarmSplatResolveCS : public FGlobalShader
+{
+	DECLARE_GLOBAL_SHADER(FFlightSwarmSplatResolveCS);
+	SHADER_USE_PARAMETER_STRUCT(FFlightSwarmSplatResolveCS, FGlobalShader);
+
+	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+		SHADER_PARAMETER_RDG_TEXTURE_SRV(Texture2D<uint>, AccumBufferAlignment)
+		SHADER_PARAMETER_RDG_TEXTURE_SRV(Texture2D<uint>, AccumBufferIntensity)
+		SHADER_PARAMETER_RDG_TEXTURE_SRV(Texture2D<uint>, AccumBufferDensity)
+		SHADER_PARAMETER_RDG_TEXTURE_SRV(Texture2D<uint>, AccumBufferPhase)
+		
+		// Map explicit SRV aliases used in shader
+		SHADER_PARAMETER_RDG_TEXTURE_SRV(Texture2D<uint>, AccumBufferAlignment_SRV)
+		SHADER_PARAMETER_RDG_TEXTURE_SRV(Texture2D<uint>, AccumBufferIntensity_SRV)
+		SHADER_PARAMETER_RDG_TEXTURE_SRV(Texture2D<uint>, AccumBufferDensity_SRV)
+		SHADER_PARAMETER_RDG_TEXTURE_SRV(Texture2D<uint>, AccumBufferPhase_SRV)
+
+		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<float4>, OutSceneColor)
+		
+		SHADER_PARAMETER(FVector4f, ShadowColor)
+		SHADER_PARAMETER(FVector4f, LitColor)
+		SHADER_PARAMETER(FVector2f, ViewSize)
+		SHADER_PARAMETER(FVector4f, ViewSizeAndInvSize)
 	END_SHADER_PARAMETER_STRUCT()
 
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)

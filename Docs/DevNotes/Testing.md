@@ -14,14 +14,22 @@ Tests must follow a hierarchical naming convention to allow for precise filterin
 
 `FlightProject.<Category>.<Subsystem>.<Feature>`
 
-### Categories
-- **`Unit`**: Isolated logic tests (no world/render state required).
-- **`Functional`**: Low-level engine integrations (UObjects, Subsystems).
-- **`Integration`**: Multi-subsystem workflows (VEX -> Verse -> Task Graph).
-- **`Gpu`**: Hardware-bound tests (RDG passes, io_uring, buffers).
-- **`Perf`**: Benchmarking and scale stress tests.
+## 2. Hardware Requirements & Bucketing
 
-## 2. Test Styles
+To streamline CI and local development, tests are bucketed by their hardware requirements.
+
+| Category | Requirement | Headless (`-NullRHI`) | Notes |
+| :--- | :--- | :--- | :--- |
+| **`Unit`** | CPU Only | **Supported** | No `UWorld` or RHI access. |
+| **`Functional`** | CPU + `UWorld` | **Supported** | May use `IsRunningCommandlet()` guards for rendering components. |
+| **`Integration`** | CPU + Subsystems | **Supported** | Multi-subsystem logic. |
+| **`Gpu`** | RHI SM6+ | **Skipped** | Direct RDG/Vulkan/io_uring hardware verification. |
+| **`Perf`** | Stable HW | **Discouraged** | Results in `-NullRHI` are non-representative. |
+
+### Graceful Skipping
+Tests requiring GPU/RHI should use the `Flight::Test::ShouldSkipGpuTest()` helper to skip execution in headless environments without failing the test suite.
+
+## 3. Test Styles
 
 ### Spec-Based Testing (Preferred)
 Use `BEGIN_DEFINE_SPEC` for all behavioral and semantic testing. It provides better readability through nesting and shared setup logic.
@@ -51,9 +59,18 @@ Performance tests should be tagged with `EAutomationTestFlags::PerfFilter` and s
 
 ## 5. Current Baseline (March 9, 2026)
 
-- Headless phase-2 filter is currently passing (`63` tests, exit code `0`).
-- The previous phase-2 regressions in:
-  - `FlightProject.AutoRTFM.Integration`
-  - `FlightProject.Vex.Simd.Parity`
-  are fixed and now pass in targeted reruns.
-- GPU/Vulkan automation still depends on local driver/device availability; treat Vulkan initialization failures (for example `VK_ERROR_INITIALIZATION_FAILED` with `0` devices) as environment issues first, then investigate test logic.
+### Verified Headless (Unit/Integration)
+- `FlightProject.Unit.Vex.Parser.*` (Full AST validation)
+- `FlightProject.Unit.Reflection.*` (Schema traits)
+- `FlightProject.Unit.Reactive.Core.*` (Primitive streams)
+- `FlightProject.Integration.Vex.SimdParity` (CPU SIMD path)
+- `FlightProject.Integration.Concurrency` (Task Graph / Async)
+
+### Verified Full RHI (Gpu/Perf)
+- `FlightProject.Gpu.Spatial.Perception` (RDG / io_uring)
+- `FlightProject.Gpu.Swarm.Pipeline.*` (Full RDG simulation)
+- `FlightProject.Perf.GpuPerception` (Scalability benchmark)
+
+### Known Limitations
+- GPU/Vulkan automation still depends on local driver/device availability; treat Vulkan initialization failures (e.g. `VK_ERROR_INITIALIZATION_FAILED`) as environment issues.
+- `-NullRHI` mode currently crashes during engine analytics initialization; use the `ShouldSkipGpuTest()` helper to bypass hardware-bound logic in headless CI.

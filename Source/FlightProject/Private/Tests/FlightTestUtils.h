@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "RHI.h"
 #include "Vex/FlightVexParser.h"
 #include "Schema/FlightRequirementRegistry.h"
 
@@ -50,5 +51,14 @@ namespace Flight::Test
 	inline Vex::FVexParseResult ParseChecked(const FString& Source, const TArray<Vex::FVexSymbolDefinition>& Defs)
 	{
 		return Vex::ParseAndValidate(Source, Defs, false);
+	}
+
+	/** Returns true if the current environment is headless (-NullRHI) and GPU tests should be skipped. */
+	inline bool ShouldSkipGpuTest()
+	{
+		// In UE 5.x, NullRHI is indicated by the RHI name
+		static const FString RhiName = GDynamicRHI ? GDynamicRHI->GetName() : TEXT("None");
+		const bool bIsHeadless = (RhiName == TEXT("Null")) || IsRunningCommandlet();
+		return bIsHeadless;
 	}
 }

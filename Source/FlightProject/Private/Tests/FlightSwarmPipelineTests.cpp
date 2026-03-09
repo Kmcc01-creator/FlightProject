@@ -10,6 +10,7 @@
 #include "Misc/Paths.h"
 #include "HAL/IConsoleManager.h"
 #include "Tests/AutomationCommon.h"
+#include "FlightTestUtils.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -38,7 +39,7 @@ namespace
 		UWorld* World = FindAutomationWorld();
 		if (!World)
 		{
-			Test->AddError(TEXT("Could not find valid World for Swarm pipeline test."));
+			Test->AddError(TEXT("Could find no valid World for Swarm pipeline test."));
 			return nullptr;
 		}
 
@@ -50,18 +51,6 @@ namespace
 		}
 
 		return SwarmSubsystem;
-	}
-
-	bool ShouldSkipNoGpu(FAutomationTestBase* Test, const TCHAR* TestLabel)
-	{
-		const bool bSupportsGpuCompute = FApp::CanEverRender() && (GMaxRHIFeatureLevel >= ERHIFeatureLevel::SM5);
-		if (bSupportsGpuCompute)
-		{
-			return false;
-		}
-
-		Test->AddInfo(FString::Printf(TEXT("Skipping %s: no GPU-capable RHI is available (headless/NullRHI context)."), TestLabel));
-		return true;
 	}
 
 	struct FScopedPersistenceMode
@@ -141,21 +130,21 @@ private:
 	int32 CurrentTicks;
 };
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightSwarmFullPipelineTest, "FlightProject.Swarm.Pipeline.FullIntegration", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightSwarmFullPipelineTest, "FlightProject.Gpu.Swarm.Pipeline.FullIntegration", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FFlightSwarmGridHashConsistencyTest,
-	"FlightProject.Swarm.Pipeline.GridHashSizeConsistency",
+	"FlightProject.Unit.Swarm.ShaderConsistency",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FFlightSwarmPersistenceStatelessTest,
-	"FlightProject.Swarm.Pipeline.Persistence.StatelessMode",
+	"FlightProject.Gpu.Swarm.Persistence.Stateless",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FFlightSwarmPersistenceEnabledTest,
-	"FlightProject.Swarm.Pipeline.Persistence.PersistentMode",
+	"FlightProject.Gpu.Swarm.Persistence.Persistent",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FFlightSwarmGridHashConsistencyTest::RunTest(const FString& Parameters)
@@ -206,7 +195,7 @@ bool FFlightSwarmGridHashConsistencyTest::RunTest(const FString& Parameters)
 
 bool FFlightSwarmPersistenceStatelessTest::RunTest(const FString& Parameters)
 {
-	if (ShouldSkipNoGpu(this, TEXT("Swarm stateless persistence test")))
+	if (Flight::Test::ShouldSkipGpuTest())
 	{
 		return true;
 	}
@@ -241,7 +230,7 @@ bool FFlightSwarmPersistenceStatelessTest::RunTest(const FString& Parameters)
 
 bool FFlightSwarmPersistenceEnabledTest::RunTest(const FString& Parameters)
 {
-	if (ShouldSkipNoGpu(this, TEXT("Swarm persistent mode test")))
+	if (Flight::Test::ShouldSkipGpuTest())
 	{
 		return true;
 	}
@@ -278,7 +267,7 @@ bool FFlightSwarmPersistenceEnabledTest::RunTest(const FString& Parameters)
 
 bool FFlightSwarmFullPipelineTest::RunTest(const FString& Parameters)
 {
-	if (ShouldSkipNoGpu(this, TEXT("Swarm full integration test")))
+	if (Flight::Test::ShouldSkipGpuTest())
 	{
 		return true;
 	}

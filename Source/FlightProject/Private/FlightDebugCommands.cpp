@@ -2,6 +2,7 @@
 #include "Engine/Engine.h"
 #include "FlightNavGraphDataHubSubsystem.h"
 #include "FlightNavGraphTypes.h"
+#include "Orchestration/FlightOrchestrationSubsystem.h"
 #include "HAL/IConsoleManager.h"
 #include "Logging/StructuredLog.h"
 
@@ -110,10 +111,40 @@ namespace FlightDebugConsole
                     *TagString);
             }
         }
+
+        void DumpOrchestrationReport(const TArray<FString>& Args, UWorld* World)
+        {
+            if (!World)
+            {
+                World = ResolveDebugWorld();
+            }
+
+            if (!World)
+            {
+                UE_LOGFMT(LogTemp, Warning, "Flight.Debug.DumpOrchestrationReport: No active world context available.");
+                return;
+            }
+
+            UFlightOrchestrationSubsystem* OrchestrationSubsystem = World->GetSubsystem<UFlightOrchestrationSubsystem>();
+            if (!OrchestrationSubsystem)
+            {
+                UE_LOG(LogTemp, Warning, TEXT("Flight.Debug.DumpOrchestrationReport: UFlightOrchestrationSubsystem not found on world '%s'."), *World->GetName());
+                return;
+            }
+
+            OrchestrationSubsystem->RebuildVisibility();
+            OrchestrationSubsystem->RebuildExecutionPlan();
+            OrchestrationSubsystem->LogReport(Args.Contains(TEXT("verbose")));
+        }
     }
 
     static FAutoConsoleCommandWithWorldAndArgs GDumpNavGraphCommand(
         TEXT("Flight.Debug.DumpNavGraph"),
         TEXT("Dump the current nav graph snapshot. Pass 'verbose' for per-node output."),
         FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&DumpNavGraph));
+
+    static FAutoConsoleCommandWithWorldAndArgs GDumpOrchestrationReportCommand(
+        TEXT("Flight.Debug.DumpOrchestrationReport"),
+        TEXT("Dump the current orchestration report. Pass 'verbose' to emit the full JSON report."),
+        FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&DumpOrchestrationReport));
 }

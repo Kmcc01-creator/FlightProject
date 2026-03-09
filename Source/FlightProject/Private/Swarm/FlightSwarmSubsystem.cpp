@@ -96,6 +96,7 @@ namespace
         FRDGTextureRef PrevLatticeArray = nullptr;
         FRDGTextureRef CloudReadArray = nullptr;
 
+		FVector3f GridCenter;
         bool bPersistenceRequested = false;
         bool bPersistenceApplied = false;
         bool bLatticePersistentValid = false;
@@ -147,6 +148,7 @@ namespace
 		ESwarmSortRequirement RequiredSort)
     {
         FSwarmRDGContext Ctx{ GraphBuilder, ShaderMap, Command, NumEntities, RequiredSort };
+		Ctx.GridCenter = Command.PlayerPosRadius.GetSafeNormal().IsNearlyZero() ? FVector3f::ZeroVector : FVector3f(Command.PlayerPosRadius.X, Command.PlayerPosRadius.Y, Command.PlayerPosRadius.Z);
 
         Ctx.DroidBuffer = GraphBuilder->RegisterExternalBuffer(DroidStateBuffer);
         
@@ -165,10 +167,14 @@ namespace
         if (NumActiveEvents > 0)
         {
             Ctx.EventBuffer = GraphBuilder->CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(FTransientEvent), NumActiveEvents), TEXT("Swarm.Events"));
+			// ... upload logic here ...
         }
         else
         {
             Ctx.EventBuffer = GraphBuilder->CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(FTransientEvent), 1), TEXT("Swarm.Events.Dummy"));
+			FTransientEvent DummyEv;
+			FMemory::Memset(&DummyEv, 0, sizeof(FTransientEvent));
+			GraphBuilder->QueueBufferUpload(Ctx.EventBuffer, &DummyEv, sizeof(FTransientEvent));
         }
 
         // SCSL: Allocate Light Lattice
@@ -231,6 +237,10 @@ namespace
     {
         auto* PassParameters = Ctx.GraphBuilder->AllocParameters<FFlightSwarmClearGridCS::FParameters>();
         PassParameters->GridHeadBuffer = Ctx.GraphBuilder->CreateUAV(Ctx.GridHeadBuffer);
+		PassParameters->GridCenter = FVector4f(Ctx.GridCenter, 0.0f);
+		PassParameters->GridExtent = Ctx.Command.LatticeExtent;
+		PassParameters->GridResolution = Ctx.Command.LatticeResolution;
+
         auto ComputeShader = Ctx.ShaderMap->GetShader<FFlightSwarmClearGridCS>();
         FComputeShaderUtils::AddPass(*Ctx.GraphBuilder, RDG_EVENT_NAME("Swarm.ClearGrid"), ComputeShader, PassParameters, FIntVector(Ctx.GridGroups, 1, 1));
         return Ok(true);
@@ -243,7 +253,11 @@ namespace
         PassParameters->DroidStates = Ctx.GraphBuilder->CreateSRV(Ctx.DroidBuffer);
         PassParameters->GridHeadBuffer = Ctx.GraphBuilder->CreateUAV(Ctx.GridHeadBuffer);
         PassParameters->GridNextBuffer = Ctx.GraphBuilder->CreateUAV(Ctx.GridNextBuffer);
+		PassParameters->GridCenter = FVector4f(Ctx.GridCenter, 0.0f);
+		PassParameters->GridExtent = Ctx.Command.LatticeExtent;
+		PassParameters->GridResolution = Ctx.Command.LatticeResolution;
         PassParameters->NumEntities = Ctx.NumEntities;
+
         auto ComputeShader = Ctx.ShaderMap->GetShader<FFlightSwarmBuildGridCS>();
         FComputeShaderUtils::AddPass(*Ctx.GraphBuilder, RDG_EVENT_NAME("Swarm.BuildGrid"), ComputeShader, PassParameters, FIntVector(Ctx.ThreadGroups, 1, 1));
         return Ok(true);
@@ -299,6 +313,7 @@ namespace
         PassParameters->GridHeadBuffer = Ctx.GraphBuilder->CreateSRV(Ctx.GridHeadBuffer);
         PassParameters->GridNextBuffer = Ctx.GraphBuilder->CreateSRV(Ctx.GridNextBuffer);
         PassParameters->DensityPressureBuffer = Ctx.GraphBuilder->CreateUAV(Ctx.DensityBuffer);
+		PassParameters->GridCenter = FVector4f(Ctx.GridCenter, 0.0f);
         PassParameters->PlayerPosRadius = Ctx.Command.PlayerPosRadius;
         PassParameters->BeaconPosStrength = Ctx.Command.BeaconPosStrength;
         PassParameters->SmoothingRadius = Ctx.Command.SmoothingRadius;
@@ -333,7 +348,7 @@ namespace
         PassParameters->ReadCloudSampler = TStaticSamplerState<SF_Bilinear, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
         PassParameters->OutCloudAccumArray = Ctx.GraphBuilder->CreateUAV(Ctx.CloudInjectionBufferArray);
 
-        PassParameters->GridCenter = FVector3f(0, 0, 0);
+        PassParameters->GridCenter = FVector4f(Ctx.GridCenter, 0.0f);
         PassParameters->GridExtent = Ctx.Command.LatticeExtent;
         PassParameters->GridResolution = Ctx.Command.LatticeResolution;
 
@@ -405,7 +420,7 @@ namespace
         PassParameters->OutLatticeRArray = Ctx.GraphBuilder->CreateUAV(Ctx.LatticeInjectionRArray);
         PassParameters->OutLatticeGArray = Ctx.GraphBuilder->CreateUAV(Ctx.LatticeInjectionGArray);
         PassParameters->OutLatticeBArray = Ctx.GraphBuilder->CreateUAV(Ctx.LatticeInjectionBArray);
-        PassParameters->GridCenter = FVector3f(0, 0, 0);
+        PassParameters->GridCenter = FVector4f(Ctx.GridCenter, 0.0f);
         PassParameters->GridExtent = Ctx.Command.LatticeExtent;
         PassParameters->GridResolution = Ctx.Command.LatticeResolution;
         PassParameters->NumEntities = Ctx.NumEntities;
@@ -454,7 +469,7 @@ namespace
         auto* PassParameters = Ctx.GraphBuilder->AllocParameters<FFlightCloudInjectionCS::FParameters>();
         PassParameters->DroidStates = Ctx.GraphBuilder->CreateSRV(Ctx.DroidBuffer);
         PassParameters->OutCloudAccumArray = Ctx.GraphBuilder->CreateUAV(Ctx.CloudInjectionBufferArray);
-        PassParameters->GridCenter = FVector3f(0, 0, 0);
+        PassParameters->GridCenter = FVector4f(Ctx.GridCenter, 0.0f);
         PassParameters->GridExtent = Ctx.Command.CloudExtent;
         PassParameters->GridResolution = Ctx.Command.CloudResolution;
         PassParameters->NumEntities = Ctx.NumEntities;

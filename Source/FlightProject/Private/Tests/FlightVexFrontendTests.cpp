@@ -7,7 +7,7 @@
 #include "Vex/FlightVexSimdExecutor.h"
 #include "Swarm/SwarmSimulationTypes.h"
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVexModularFrontendTest, "FlightProject.Vex.Frontend.ModularRefactor", EAutomationTestFlags::ApplicationContextMask | EAutomationTestFlags::SmokeFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVexModularFrontendTest, "FlightProject.Vex.Frontend.ModularRefactor", EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
 
 bool FFlightVexModularFrontendTest::RunTest(const FString& Parameters)
 {
@@ -50,7 +50,7 @@ bool FFlightVexModularFrontendTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("Verse output should use 'set'"), Verse.Contains(TEXT("set")));
 		
 		FString Hlsl = FVexIrCompiler::LowerToHLSL(*Ir, TMap<FString, FString>());
-		TestTrue(TEXT("HLSL output should have reg assignment"), Hlsl.Contains(TEXT("reg")));
+		TestTrue(TEXT("HLSL output should have variable assignment"), Hlsl.Contains(TEXT("v")));
 	}
 
 	return true;

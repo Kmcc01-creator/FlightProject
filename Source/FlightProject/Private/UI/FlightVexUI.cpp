@@ -13,6 +13,8 @@
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Input/SSpinBox.h"
 
+#include "Core/FlightLogging.h"
+
 namespace Flight::VexUI
 {
 namespace
@@ -753,6 +755,32 @@ FVexUiCompileResult FVexUiCompiler::CompileWithIncludes(const FString& Script, c
 				continue;
 			}
 
+			if (ParseInvocation(Line, TEXT("log"), Args))
+			{
+				FVexUiNode Node;
+				Node.Type = EVexUiNodeType::Log;
+				Node.Tab = CurrentTab;
+				Node.SectionPath = ComposeSectionPath(SectionStack);
+
+				if (Args.StartsWith(TEXT("@")))
+				{
+					Node.Symbol = Args;
+					Result.Nodes.Add(MoveTemp(Node));
+					continue;
+				}
+
+				FString Literal;
+				if (ParseQuoted(Args, Literal))
+				{
+					Node.Text = Literal;
+					Result.Nodes.Add(MoveTemp(Node));
+					continue;
+				}
+
+				Result.Errors.Add(FString::Printf(TEXT("%s:%d: invalid log() argument '%s'"), *Origin, LineIndex + 1, *Args));
+				continue;
+			}
+
 			if (ParseInvocation(Line, TEXT("text"), Args))
 			{
 				FVexUiNode Node;
@@ -1143,6 +1171,68 @@ void SVexPanel::BuildNodeInto(TSharedRef<SVerticalBox> TargetBox, const FVexUiNo
 				*BoolSignal,
 				[](const bool bValue) { return bValue ? FText::FromString(TEXT("true")) : FText::FromString(TEXT("false")); });
 		}
+		break;
+	}
+	case EVexUiNodeType::Log:
+	{
+		const FString DisplayText = Node.Symbol.IsEmpty() ? Node.Text : Node.Symbol;
+		TargetBox->AddSlot()
+		.AutoHeight()
+		.Padding(2.0f)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot()
+			.AutoWidth()
+			[
+				SNew(SButton)
+				.Text(FText::FromString(TEXT("Log")))
+				.OnClicked_Lambda([StoreWeak = TWeakPtr<FVexUiStore>(Store), Node]()
+				{
+					const TSharedPtr<FVexUiStore> PinnedStore = StoreWeak.Pin();
+					if (!PinnedStore.IsValid()) return FReply::Handled();
+
+					using namespace Flight::Logging;
+					if (Node.Symbol.IsEmpty())
+					{
+						FLogger::Get().Log(ELogLevel::Log, "LogFlightVexUI", Node.Text);
+					}
+					else
+					{
+						FLogContext Context;
+						FString Message = FString::Printf(TEXT("VEX Symbol Log: %s"), *Node.Symbol);
+
+						if (const FVexUiStore::FTextSignal* TextSignal = PinnedStore->FindText(Node.Symbol))
+						{
+							Context.KeyValues.Add(TEXT("Value"), TextSignal->Get());
+						}
+						else if (const FVexUiStore::FNumberSignal* NumberSignal = PinnedStore->FindNumber(Node.Symbol))
+						{
+							Context.KeyValues.Add(TEXT("Value"), FString::Printf(TEXT("%g"), NumberSignal->Get()));
+						}
+						else if (const FVexUiStore::FBoolSignal* BoolSignal = PinnedStore->FindBool(Node.Symbol))
+						{
+							Context.KeyValues.Add(TEXT("Value"), BoolSignal->Get() ? TEXT("true") : TEXT("false"));
+						}
+						else if (const FVexUiStore::FTableSignal* TableSignal = PinnedStore->FindTable(Node.Symbol))
+						{
+							const TArray<FVexUiTableRow>& Rows = TableSignal->Get();
+							Context.KeyValues.Add(TEXT("RowCount"), FString::FromInt(Rows.Num()));
+							// We could log more table details here if needed
+						}
+
+						FLogger::Get().Log(ELogLevel::Log, "LogFlightVexUI", Message, Context);
+					}
+					return FReply::Handled();
+				})
+			]
+			+ SHorizontalBox::Slot()
+			.FillWidth(1.0f)
+			.Padding(4, 0)
+			.VAlign(VAlign_Center)
+			[
+				SNew(STextBlock).Text(FText::FromString(DisplayText))
+			]
+		];
 		break;
 	}
 	case EVexUiNodeType::Slider:

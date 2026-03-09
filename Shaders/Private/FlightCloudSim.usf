@@ -7,7 +7,7 @@
 StructuredBuffer<float4> DroidStates;
 RWTexture3D<uint> OutCloudAccumArray;
 
-float3 GridCenter;
+float4 GridCenter;
 float GridExtent;
 uint GridResolution;
 uint NumEntities;
@@ -25,7 +25,7 @@ void CloudInjectionMain(uint3 DispatchThreadId : SV_DispatchThreadID)
     float3 WorldPos = DroidStates[EntityIndex * 2].xyz;
 
     // Calculate Voxel Coord
-    float3 RelativePos = (WorldPos - GridCenter) / GridExtent + 0.5f;
+    float3 RelativePos = (WorldPos - GridCenter.xyz) / GridExtent + 0.5f;
     if (any(RelativePos < 0.0f) || any(RelativePos > 1.0f)) return;
 
     uint3 VoxelCoord = (uint3)(RelativePos * (float)GridResolution);

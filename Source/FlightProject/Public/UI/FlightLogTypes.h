@@ -14,8 +14,10 @@ using namespace Flight::RowTypes;
 namespace Flight::Log
 {
     // ============================================================================
-    // Verbosity Level Wrapper
+    // Global Recursion Guard
     // ============================================================================
+
+    FLIGHTPROJECT_API extern thread_local bool bIsLoggingInternal;
 
     enum class EVerbosity : uint8
     {
@@ -165,6 +167,9 @@ namespace Flight::Log
         int32       Line;        // Source line (if available)
         uint32      ThreadId;
         uint32      FrameNumber;
+        
+        // Structured data (optional)
+        TMap<FString, FString> Context;
 
         FLogEntry() = default;
 

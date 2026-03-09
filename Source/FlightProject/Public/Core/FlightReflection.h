@@ -54,6 +54,12 @@ TStaticString(const char (&)[N]) -> TStaticString<N>;
 // Core Concepts - What makes a type reflectable?
 // ============================================================================
 
+/**
+ * TReflectBase - The canonical base type for reflection lookup (removes const/volatile/reference).
+ */
+template<typename T>
+using TReflectBase = std::remove_cvref_t<T>;
+
 // A type is reflectable if it opts in via a trait specialization
 template<typename T>
 struct TReflectionTraits
@@ -61,21 +67,28 @@ struct TReflectionTraits
 	static constexpr bool IsReflectable = false;
 };
 
+/**
+ * TReflectTraits - Primary alias for trait lookup that ensures base-type normalization.
+ */
+template<typename T>
+using TReflectTraits = TReflectionTraits<TReflectBase<T>>;
+
 // Concept: type has reflection traits
 template<typename T>
-concept CReflectable = TReflectionTraits<T>::IsReflectable;
+concept CReflectable = TReflectTraits<T>::IsReflectable;
 
 // Concept: type has fields we can iterate
 template<typename T>
 concept CHasFields = CReflectable<T> && requires {
-	typename TReflectionTraits<T>::Fields;
+	typename TReflectTraits<T>::Fields;
 };
 
-// Concept: type can be serialized
+// Concept: type can be serialized (requires non-const T for the Ar mutation)
 template<typename T>
 concept CSerializable = CReflectable<T> && requires(T& t, FArchive& Ar) {
-	{ TReflectionTraits<T>::Serialize(t, Ar) };
+	{ TReflectionTraits<TReflectBase<T>>::Serialize(t, Ar) };
 };
+
 
 // Forward declarations for policy checks used before full attribute definitions.
 namespace Attr
@@ -254,13 +267,13 @@ public:
 	void Register()
 	{
 		FTypeInfo Info;
-		Info.TypeName = TReflectionTraits<T>::Name;
+		Info.TypeName = TReflectTraits<T>::Name;
 		Info.Size = sizeof(T);
 		Info.Alignment = alignof(T);
 
 		if constexpr (CHasFields<T>)
 		{
-			TReflectionTraits<T>::Fields::ForEachDescriptor([&Info](auto Descriptor) {
+			TReflectTraits<T>::Fields::ForEachDescriptor([&Info](auto Descriptor) {
 				using DescType = decltype(Descriptor);
 				Info.FieldNames.Add(FName(DescType::NameCStr));
 			});
@@ -312,7 +325,7 @@ void Serialize(T& Value, FArchive& Ar)
 {
 	if constexpr (CHasFields<T>)
 	{
-		TReflectionTraits<T>::Fields::ForEachValue(Value, [&Ar](auto& FieldValue, auto Descriptor) {
+		TReflectTraits<T>::Fields::ForEachValue(Value, [&Ar](auto& FieldValue, auto Descriptor) {
 			using DescType = decltype(Descriptor);
 			using FieldType = std::decay_t<decltype(FieldValue)>;
 
@@ -498,7 +511,7 @@ TArray<void*> GetReflectedChildren(T& Value)
 
 	if constexpr (CHasFields<T>)
 	{
-		TReflectionTraits<T>::Fields::ForEachValue(Value, [&Children](auto& FieldValue, auto) {
+		TReflectTraits<T>::Fields::ForEachValue(Value, [&Children](auto& FieldValue, auto) {
 			using FieldType = std::decay_t<decltype(FieldValue)>;
 			if constexpr (CReflectable<FieldType>)
 			{
@@ -515,7 +528,7 @@ void ForEachField(T& Value, TVisitor&& Visitor)
 {
 	if constexpr (CHasFields<T>)
 	{
-		TReflectionTraits<T>::Fields::ForEachValue(Value, [&Visitor](auto& FieldValue, auto Descriptor) {
+		TReflectTraits<T>::Fields::ForEachValue(Value, [&Visitor](auto& FieldValue, auto Descriptor) {
 			using DescType = decltype(Descriptor);
 			Visitor(FieldValue, DescType::NameCStr);
 		});
@@ -1013,7 +1026,7 @@ TStructPatch<T> Diff(const T& Old, const T& New)
 
 	if constexpr (CHasFields<T>)
 	{
-		TReflectionTraits<T>::Fields::ForEachValue(Old, [&](const auto& OldField, auto Descriptor) {
+		TReflectTraits<T>::Fields::ForEachValue(Old, [&](const auto& OldField, auto Descriptor) {
 			using DescType = decltype(Descriptor);
 			using FieldType = std::decay_t<decltype(OldField)>;
 			const auto& NewField = DescType::Get(New);
@@ -1028,8 +1041,15 @@ TStructPatch<T> Diff(const T& Old, const T& New)
 						FFieldPatchData PatchData;
 						PatchData.FieldName = DescType::Name;
 
+						// Nested reflectable types serialize recursively so field policies still apply.
+						if constexpr (CReflectable<FieldType>)
+						{
+							FMemoryWriter Writer(PatchData.SerializedValue);
+							FieldType Copy = NewField;
+							Serialize(Copy, Writer);
+						}
 						// POD types: direct memory copy
-						if constexpr (CPod<FieldType>)
+						else if constexpr (CPod<FieldType>)
 						{
 							PatchData.SerializedValue.SetNumUninitialized(sizeof(FieldType));
 							FMemory::Memcpy(PatchData.SerializedValue.GetData(), &NewField, sizeof(FieldType));
@@ -1068,7 +1088,7 @@ void Apply(T& Target, const TStructPatch<T>& Patch)
 	{
 		for (const FFieldPatchData& PatchData : Patch.ChangedFields)
 		{
-			TReflectionTraits<T>::Fields::ForEachDescriptor([&](auto Descriptor) {
+			TReflectTraits<T>::Fields::ForEachDescriptor([&](auto Descriptor) {
 				using DescType = decltype(Descriptor);
 				using FieldType = typename DescType::FieldType;
 
@@ -1080,6 +1100,12 @@ void Apply(T& Target, const TStructPatch<T>& Patch)
 						if (PatchData.Applier)
 						{
 							PatchData.Applier(&DescType::Get(Target));
+						}
+						// Nested reflectable types deserialize recursively so field policies still apply.
+						else if constexpr (CReflectable<FieldType>)
+						{
+							FMemoryReader Reader(PatchData.SerializedValue);
+							Serialize(DescType::Get(Target), Reader);
 						}
 						// POD types: direct memory copy
 						else if constexpr (CPod<FieldType>)
@@ -1126,7 +1152,7 @@ void ReplicateFields(T& Value, FArchive& Ar, TBitArray<>& DirtyFlags)
 	if constexpr (CHasFields<T>)
 	{
 		int32 FieldIndex = 0;
-		TReflectionTraits<T>::Fields::ForEachValue(Value, [&](auto& FieldValue, auto Descriptor) {
+		TReflectTraits<T>::Fields::ForEachValue(Value, [&](auto& FieldValue, auto Descriptor) {
 			using DescType = decltype(Descriptor);
 
 			// Only replicate fields marked as Replicated

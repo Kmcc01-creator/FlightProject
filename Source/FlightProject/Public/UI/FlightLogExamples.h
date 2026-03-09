@@ -5,7 +5,9 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
-#include "FlightLogCapture.h"
+#include "GameFramework/Actor.h"
+#include "FlightLogCategories.h"
+
 #include "FlightLogViewer.h"
 #include "FlightLogCategories.h"
 #include "FlightLogExamples.generated.h"

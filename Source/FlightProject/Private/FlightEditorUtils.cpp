@@ -4,19 +4,10 @@
 #include "GameFramework/Actor.h"
 #include "Engine/Engine.h"
 
-#if WITH_EDITOR
-#include "Editor.h"
-#endif
-
 void UFlightEditorUtils::GenerateDebugGrid(const UObject* WorldContextObject, int32 Rows, int32 Cols, float Spacing)
 {
     UWorld* World = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull);
     if (!World) return;
-
-    // Use a transaction so this action is undoable in the Editor
-#if WITH_EDITOR
-    if (GEditor) GEditor->BeginTransaction(NSLOCTEXT("FlightTools", "GenGrid", "Generate Debug Grid"));
-#endif
 
     const FVector StartLoc = FVector::ZeroVector;
 
@@ -42,10 +33,6 @@ void UFlightEditorUtils::GenerateDebugGrid(const UObject* WorldContextObject, in
         }
     }
 
-#if WITH_EDITOR
-    if (GEditor) GEditor->EndTransaction();
-#endif
-
     UE_LOG(LogTemp, Log, TEXT("Generated %d debug actors."), Rows * Cols);
 }
 
@@ -53,10 +40,6 @@ void UFlightEditorUtils::ClearDebugGrid(const UObject* WorldContextObject)
 {
     UWorld* World = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull);
     if (!World) return;
-
-#if WITH_EDITOR
-    if (GEditor) GEditor->BeginTransaction(NSLOCTEXT("FlightTools", "ClearGrid", "Clear Debug Grid"));
-#endif
 
     TArray<AActor*> ActorsToDestroy;
     for (TActorIterator<AActor> It(World); It; ++It)
@@ -72,10 +55,6 @@ void UFlightEditorUtils::ClearDebugGrid(const UObject* WorldContextObject)
     {
         World->DestroyActor(Actor);
     }
-
-#if WITH_EDITOR
-    if (GEditor) GEditor->EndTransaction();
-#endif
 
     UE_LOG(LogTemp, Log, TEXT("Cleared %d debug actors."), ActorsToDestroy.Num());
 }

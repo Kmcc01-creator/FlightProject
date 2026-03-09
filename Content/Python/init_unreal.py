@@ -14,13 +14,14 @@ def on_editor_startup():
         unreal.log_error(f"Failed to import FlightProject module: {e}")
         return
 
-    # 1. Validate data files
-    from FlightProject import Validation
-    validation_ok = Validation.run_all_validation()
-
-    # 2. Ensure required assets exist
+    # 1. Ensure required assets exist before validation.
     from FlightProject import AssetTools
     AssetTools.ensure_swarm_encounter_assets()
+    AssetTools.ensure_flight_startup_profiles()
+
+    # 2. Validate data files
+    from FlightProject import Validation
+    validation_ok = Validation.run_all_validation()
 
     # 3. Ensure schema-based contracts (PoC: Niagara + render profile manifest)
     from FlightProject import SchemaTools
