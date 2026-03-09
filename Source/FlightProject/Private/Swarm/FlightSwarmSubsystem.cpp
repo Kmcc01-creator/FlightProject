@@ -581,7 +581,7 @@ void UFlightSwarmSubsystem::TickSimulation(float DeltaTime)
 	ENQUEUE_RENDER_COMMAND(FlightSwarmTick)([WeakThis, PackedCmd, NumEntities = (uint32)TotalEntities](FRHICommandListImmediate& RHICmdList)
 	{
 		UFlightSwarmSubsystem* Self = WeakThis.Get();
-		if (!Self || !Self->DroidStateBuffer.IsValid()) return;
+		if (!Self || !Self->DroidStateBuffer.IsValid() || IsRunningCommandlet()) return;
 		FRDGBuilder GraphBuilder(RHICmdList);
 		auto PipelineResult = CheckShaders(GetGlobalShaderMap(GMaxRHIFeatureLevel))
 			.AndThen([&](FGlobalShaderMap* ShaderMap) { return InitResources(&GraphBuilder, ShaderMap, PackedCmd, NumEntities, Self->DroidStateBuffer, Self->LatticeTexture, Self->CloudTexture, Self->RequiredSort); })

@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "Vex/FlightVexParser.h"
+#include "Vex/FlightVexOptics.h"
 
 #if WITH_VERSE_VM || defined(__INTELLISENSE__)
 #include "VerseVM/VVMVerse.h"
@@ -17,7 +18,8 @@
 
 #include "UFlightVerseSubsystem.generated.h"
 
-// Forward declaration in correct namespace
+// Forward declarations in correct namespace
+namespace Flight::Vex { class FVexSimdExecutor; }
 namespace Flight::Swarm { struct FDroidState; }
 
 UENUM(BlueprintType)
@@ -55,6 +57,21 @@ public:
 	 */
 	void ExecuteBehavior(uint32 BehaviorID, Flight::Swarm::FDroidState& DroidState);
 
+	/**
+	 * Executes a behavior on multiple entities in bulk.
+	 * Optimized path for Tier 1 (Literal) scripts using SIMD where possible.
+	 */
+	void ExecuteBehaviorBulk(uint32 BehaviorID, TArrayView<Flight::Swarm::FDroidState> DroidStates);
+
+	/**
+	 * Executes a behavior directly on Mass fragments.
+	 * Bypasses gather/scatter for eligible Tier 1 scripts.
+	 */
+	void ExecuteBehaviorDirect(
+		uint32 BehaviorID,
+		TArrayView<struct FFlightTransformFragment> Transforms,
+		TArrayView<struct FFlightDroidStateFragment> DroidStates);
+
 	/** Returns compile-state metadata for a behavior ID. */
 	EFlightVerseCompileState GetBehaviorCompileState(uint32 BehaviorID) const;
 
@@ -64,25 +81,28 @@ public:
 	/** Returns the most recent compile diagnostics string for a behavior ID. */
 	FString GetBehaviorCompileDiagnostics(uint32 BehaviorID) const;
 
-		struct FVerseBehavior
-		{
+	struct FVerseBehavior
+	{
 #if WITH_VERSE_VM || defined(__INTELLISENSE__)
-			TWriteBarrier<Verse::VProcedure> Procedure;
+		TWriteBarrier<Verse::VProcedure> Procedure;
 #endif
-			float ExecutionRateHz = 0.0f;
-			uint32 FrameInterval = 1;
-			bool bIsAsync = false;
-			bool bHasExecutableProcedure = false;
-			bool bUsesNativeFallback = false;
-			bool bUsesVmEntryPoint = false;
-			EFlightVerseCompileState CompileState = EFlightVerseCompileState::VmCompileFailed;
-			Flight::Vex::FVexProgramAst NativeProgram;
-			FString GeneratedVerseCode;
-			FString LastCompileDiagnostics;
+		Flight::Vex::EVexTier Tier = Flight::Vex::EVexTier::Full;
+		TSharedPtr<Flight::Vex::FVexSimdExecutor> SimdPlan;
+		FString SimdCompileDiagnostics;
+		float ExecutionRateHz = 0.0f;
+		uint32 FrameInterval = 1;
+		bool bIsAsync = false;
+		bool bHasExecutableProcedure = false;
+		bool bUsesNativeFallback = false;
+		bool bUsesVmEntryPoint = false;
+		EFlightVerseCompileState CompileState = EFlightVerseCompileState::VmCompileFailed;
+		Flight::Vex::FVexProgramAst NativeProgram;
+		FString GeneratedVerseCode;
+		FString LastCompileDiagnostics;
 #if WITH_VERSE_VM || defined(__INTELLISENSE__)
-			TWriteBarrier<Verse::VNativeFunction> VmEntryPoint;
+		TWriteBarrier<Verse::VNativeFunction> VmEntryPoint;
 #endif
-		};
+	};
 
 	/** Map of BehaviorID to compiled Verse behavior */
 	TMap<uint32, FVerseBehavior> Behaviors;

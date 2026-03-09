@@ -182,6 +182,21 @@ struct FFlightVexSymbolRow : public FTableRowBase
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Schema")
 	bool bRequired = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Schema")
+	bool bSimdReadAllowed = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Schema")
+	bool bSimdWriteAllowed = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Schema")
+	bool bGpuTier1Allowed = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Schema")
+	EFlightVexAlignmentRequirement AlignmentRequirement = EFlightVexAlignmentRequirement::Any;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Schema")
+	EFlightVexMathDeterminismProfile MathDeterminismProfile = EFlightVexMathDeterminismProfile::Fast;
 };
 
 /**

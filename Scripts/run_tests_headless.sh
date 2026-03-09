@@ -36,6 +36,12 @@ while [[ $# -gt 0 ]]; do
             EXTRA_ARGS+=("-NoShaderCompile")
             shift
             ;;
+        --simd)
+            TEST_FILTER="FlightProject.Vex.Simd"
+            TEST_LOG_PROFILE="focused"
+            EXTRA_ARGS+=("-NoShaderCompile")
+            shift
+            ;;
         --no-shaders)
             EXTRA_ARGS+=("-NoShaderCompile")
             shift

@@ -9,6 +9,7 @@
 #include "CoreMinimal.h"
 #include "Vex/FlightVexTypes.h"
 #include "Vex/FlightVexParser.h"
+#include "Vex/FlightVexRewriteRegistry.h"
 
 namespace Flight::Vex
 {
@@ -78,17 +79,11 @@ public:
 	static void Optimize(FVexProgramAst& Program);
 
 	/** Formally classify the execution tier of the program. */
-	static EVexTier ClassifyTier(const FVexProgramAst& Program);
+	static EVexTier ClassifyTier(const FVexProgramAst& Program, const TArray<FVexSymbolDefinition>& SymbolDefinitions);
 
 private:
 	/** Single pass of algebraic rewrites. Returns true if anything changed. */
 	static bool RewriteStep(FVexProgramAst& Program);
-
-	/** Identify and fold constant expressions (1.0 + 2.0 -> 3.0). */
-	static TOptional<FVexExpressionAst> FoldConstants(const FVexExpressionAst& Node, const FVexProgramAst& Program);
-
-	/** Identify and simplify identity operations (x * 1.0 -> x). */
-	static TOptional<FVexExpressionAst> SimplifyIdentities(const FVexExpressionAst& Node, const FVexProgramAst& Program);
 };
 
 // ============================================================================

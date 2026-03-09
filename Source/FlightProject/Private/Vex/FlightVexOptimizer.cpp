@@ -2,7 +2,8 @@
 
 #include "Vex/FlightVexOptics.h"
 #include "Vex/FlightVexTypes.h"
-#include "Math/UnrealMathUtility.h"
+#include "Vex/FlightVexRewriteRegistry.h"
+#include "Vex/FlightVexTreeTraits.h"
 
 namespace Flight::Vex
 {
@@ -19,11 +20,16 @@ void FVexOptimizer::Optimize(FVexProgramAst& Program)
 	}
 }
 
-EVexTier FVexOptimizer::ClassifyTier(const FVexProgramAst& Program)
+EVexTier FVexOptimizer::ClassifyTier(const FVexProgramAst& Program, const TArray<FVexSymbolDefinition>& SymbolDefinitions)
 {
+	TMap<FString, const FVexSymbolDefinition*> SymbolMap;
+	for (const auto& D : SymbolDefinitions) SymbolMap.Add(D.SymbolName, &D);
+
 	bool bHasAsync = false;
 	bool bHasJobs = false;
 	bool bHasBranches = false;
+	bool bHasUnsupportedSimdSymbols = false;
+	bool bHasUnsupportedGpuSymbols = false;
 
 	for (const FVexStatementAst& S : Program.Statements)
 	{
@@ -33,112 +39,67 @@ EVexTier FVexOptimizer::ClassifyTier(const FVexProgramAst& Program)
 			if (S.SourceSpan == TEXT("@job") || S.SourceSpan == TEXT("@thread")) bHasJobs = true;
 		}
 		if (S.Kind == EVexStatementKind::IfHeader) bHasBranches = true;
+
+		// Check symbol capabilities for Tier 1 eligibility
+		if (S.Kind == EVexStatementKind::Assignment || S.Kind == EVexStatementKind::Expression || S.Kind == EVexStatementKind::IfHeader)
+		{
+			for (int32 i = S.StartTokenIndex; i <= S.EndTokenIndex; ++i)
+			{
+				if (Program.Tokens[i].Kind == EVexTokenKind::Symbol)
+				{
+					if (const auto* Def = SymbolMap.FindRef(Program.Tokens[i].Lexeme))
+					{
+						bool bIsBeingWritten = (S.Kind == EVexStatementKind::Assignment && i == S.StartTokenIndex);
+						if (bIsBeingWritten)
+						{
+							if (!Def->bSimdWriteAllowed) bHasUnsupportedSimdSymbols = true;
+						}
+						else
+						{
+							if (!Def->bSimdReadAllowed) bHasUnsupportedSimdSymbols = true;
+						}
+						
+						if (!Def->bGpuTier1Allowed) bHasUnsupportedGpuSymbols = true;
+					}
+				}
+			}
+		}
 	}
 
 	if (bHasAsync || bHasJobs) return EVexTier::Full;
-	if (bHasBranches) return EVexTier::DFA;
+	if (bHasBranches || bHasUnsupportedSimdSymbols || bHasUnsupportedGpuSymbols) return EVexTier::DFA;
 	
-	// Default to Literal if it's pure math
+	// Default to Literal if it's pure math and all symbols support it
 	return EVexTier::Literal;
 }
 
 bool FVexOptimizer::RewriteStep(FVexProgramAst& Program)
 {
+	static const FVexAstRewriteRegistry RewriteRegistry = FVexAstRewriteRegistry::MakeDefault();
 	bool bChanged = false;
 
-	Program.TransformIterative([&](FVexExpressionAst& Node, int32 NodeIdx)
+	const FVexAstTreeView AstTree(Program);
+	TraversePostOrder(AstTree, [&](const int32 NodeIndex)
 	{
-		// 1. Constant Folding
-		if (auto Folded = FoldConstants(Node, Program))
+		if (!Program.Expressions.IsValidIndex(NodeIndex))
 		{
-			Node = MoveTemp(*Folded);
-			bChanged = true;
+			return;
 		}
 
-		// 2. Identity Simplification
-		if (auto Simplified = SimplifyIdentities(Node, Program))
+		FVexExpressionAst Replacement;
+		if (RewriteRegistry.ApplyFirstMatch(
+			Program.Expressions[NodeIndex],
+			Program,
+			EVexRewriteDomain::Core,
+			Replacement,
+			nullptr))
 		{
-			Node = MoveTemp(*Simplified);
+			Program.Expressions[NodeIndex] = MoveTemp(Replacement);
 			bChanged = true;
 		}
 	});
 
 	return bChanged;
-}
-
-TOptional<FVexExpressionAst> FVexOptimizer::FoldConstants(const FVexExpressionAst& Node, const FVexProgramAst& Program)
-{
-	if (Node.Kind != EVexExprKind::BinaryOp) return TOptional<FVexExpressionAst>();
-
-	const FVexExpressionAst* Left = Program.Expressions.IsValidIndex(Node.LeftNodeIndex) ? &Program.Expressions[Node.LeftNodeIndex] : nullptr;
-	const FVexExpressionAst* Right = Program.Expressions.IsValidIndex(Node.RightNodeIndex) ? &Program.Expressions[Node.RightNodeIndex] : nullptr;
-
-	if (Left && Right && Left->Kind == EVexExprKind::NumberLiteral && Right->Kind == EVexExprKind::NumberLiteral)
-	{
-		float LVal = FCString::Atof(*Left->Lexeme);
-		float RVal = FCString::Atof(*Right->Lexeme);
-		float Result = 0.0f;
-		bool bValid = true;
-
-		if (Node.Lexeme == TEXT("+")) Result = LVal + RVal;
-		else if (Node.Lexeme == TEXT("-")) Result = LVal - RVal;
-		else if (Node.Lexeme == TEXT("*")) Result = LVal * RVal;
-		else if (Node.Lexeme == TEXT("/")) 
-		{
-			if (!FMath::IsNearlyZero(RVal)) Result = LVal / RVal;
-			else bValid = false;
-		}
-		else bValid = false;
-
-		if (bValid)
-		{
-			FVexExpressionAst NewNode;
-			NewNode.Kind = EVexExprKind::NumberLiteral;
-			NewNode.Lexeme = FString::SanitizeFloat(Result);
-			NewNode.InferredType = TEXT("float");
-			return NewNode;
-		}
-	}
-
-	return TOptional<FVexExpressionAst>();
-}
-
-TOptional<FVexExpressionAst> FVexOptimizer::SimplifyIdentities(const FVexExpressionAst& Node, const FVexProgramAst& Program)
-{
-	if (Node.Kind != EVexExprKind::BinaryOp) return TOptional<FVexExpressionAst>();
-
-	const FVexExpressionAst* Left = Program.Expressions.IsValidIndex(Node.LeftNodeIndex) ? &Program.Expressions[Node.LeftNodeIndex] : nullptr;
-	const FVexExpressionAst* Right = Program.Expressions.IsValidIndex(Node.RightNodeIndex) ? &Program.Expressions[Node.RightNodeIndex] : nullptr;
-
-	if (!Left || !Right) return TOptional<FVexExpressionAst>();
-
-	// x * 1.0 -> x
-	if (Node.Lexeme == TEXT("*"))
-	{
-		if (Right->Kind == EVexExprKind::NumberLiteral && FMath::IsNearlyEqual(FCString::Atof(*Right->Lexeme), 1.0f))
-		{
-			return *Left;
-		}
-		if (Left->Kind == EVexExprKind::NumberLiteral && FMath::IsNearlyEqual(FCString::Atof(*Left->Lexeme), 1.0f))
-		{
-			return *Right;
-		}
-	}
-
-	// x + 0.0 -> x
-	if (Node.Lexeme == TEXT("+"))
-	{
-		if (Right->Kind == EVexExprKind::NumberLiteral && FMath::IsNearlyZero(FCString::Atof(*Right->Lexeme)))
-		{
-			return *Left;
-		}
-		if (Left->Kind == EVexExprKind::NumberLiteral && FMath::IsNearlyZero(FCString::Atof(*Left->Lexeme)))
-		{
-			return *Right;
-		}
-	}
-
-	return TOptional<FVexExpressionAst>();
 }
 
 } // namespace Flight::Vex

@@ -3,6 +3,8 @@
 #include "Verse/UFlightVerseSubsystem.h"
 #include "Vex/FlightVexParser.h"
 #include "Vex/FlightVexTypes.h"
+#include "Vex/FlightVexSimdExecutor.h"
+#include "Vex/FlightVexIr.h"
 #include "Schema/FlightRequirementRegistry.h"
 #include "Swarm/SwarmSimulationTypes.h"
 
@@ -157,6 +159,11 @@ namespace
 			|| FunctionName == TEXT("dot")
 			|| FunctionName == TEXT("clamp")
 			|| FunctionName == TEXT("smoothstep")
+			|| FunctionName == TEXT("sin")
+			|| FunctionName == TEXT("cos")
+			|| FunctionName == TEXT("log")
+			|| FunctionName == TEXT("exp")
+			|| FunctionName == TEXT("pow")
 			|| FunctionName.StartsWith(TEXT("vec"));
 	}
 
@@ -238,6 +245,37 @@ namespace
 			const float Y = Arguments.Num() > 1 ? AsFloat(Arguments[1]) : 0.0f;
 			const float Z = Arguments.Num() > 2 ? AsFloat(Arguments[2]) : 0.0f;
 			return MakeVec3(FVector3f(X, Y, Z));
+		}
+
+		if (FunctionName == TEXT("sin"))
+		{
+			const float Value = Arguments.Num() > 0 ? AsFloat(Arguments[0]) : 0.0f;
+			return MakeFloat(FMath::Sin(Value));
+		}
+
+		if (FunctionName == TEXT("cos"))
+		{
+			const float Value = Arguments.Num() > 0 ? AsFloat(Arguments[0]) : 0.0f;
+			return MakeFloat(FMath::Cos(Value));
+		}
+
+		if (FunctionName == TEXT("log"))
+		{
+			const float Value = Arguments.Num() > 0 ? AsFloat(Arguments[0]) : 0.0f;
+			return MakeFloat(FMath::Loge(FMath::Max(UE_SMALL_NUMBER, Value)));
+		}
+
+		if (FunctionName == TEXT("exp"))
+		{
+			const float Value = Arguments.Num() > 0 ? AsFloat(Arguments[0]) : 0.0f;
+			return MakeFloat(FMath::Exp(Value));
+		}
+
+		if (FunctionName == TEXT("pow"))
+		{
+			const float Base = Arguments.Num() > 0 ? AsFloat(Arguments[0]) : 0.0f;
+			const float Exp = Arguments.Num() > 1 ? AsFloat(Arguments[1]) : 1.0f;
+			return MakeFloat(FMath::Pow(Base, Exp));
 		}
 
 		if (FunctionName == TEXT("normalize"))
@@ -556,6 +594,7 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 	Behavior.NativeProgram = Flight::Vex::FVexProgramAst();
 	Behavior.GeneratedVerseCode.Reset();
 	Behavior.LastCompileDiagnostics.Reset();
+	Behavior.SimdCompileDiagnostics.Reset();
 
 	const Flight::Vex::FVexParseResult Result = Flight::Vex::ParseAndValidate(VexSource, SymbolDefinitions, false);
 
@@ -602,6 +641,54 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 	// Store behavior metadata regardless of VM availability.
 	Behavior.ExecutionRateHz = Result.Program.ExecutionRateHz;
 	Behavior.FrameInterval = Result.Program.FrameInterval;
+	Behavior.Tier = Flight::Vex::FVexOptimizer::ClassifyTier(Result.Program, SymbolDefinitions);
+
+	if (Behavior.Tier == Flight::Vex::EVexTier::Literal)
+	{
+		FString SimdReason;
+		const bool bSimdEligible = Flight::Vex::FVexSimdExecutor::CanCompileProgram(Result.Program, SymbolDefinitions, &SimdReason);
+		if (bSimdEligible)
+		{
+			FString IrErrors;
+			TSharedPtr<Flight::Vex::FVexIrProgram> IrProgram = Flight::Vex::FVexIrCompiler::Compile(Result.Program, SymbolDefinitions, IrErrors);
+			if (IrProgram.IsValid())
+			{
+				Behavior.SimdPlan = Flight::Vex::FVexSimdExecutor::Compile(IrProgram);
+				Behavior.SimdCompileDiagnostics = Behavior.SimdPlan.IsValid()
+					? TEXT("SIMD Tier 1 plan compiled successfully via IR.")
+					: TEXT("SIMD Tier 1 IR generation passed, but plan generation failed.");
+			}
+			else
+			{
+				Behavior.SimdPlan.Reset();
+				Behavior.SimdCompileDiagnostics = FString::Printf(TEXT("SIMD IR generation failed: %s"), *IrErrors);
+			}
+		}
+		else
+		{
+			Behavior.SimdPlan.Reset();
+			Behavior.SimdCompileDiagnostics = SimdReason.IsEmpty()
+				? TEXT("SIMD unavailable: Tier 1 program is not compatible with current SIMD backend.")
+				: FString::Printf(TEXT("SIMD unavailable: %s"), *SimdReason);
+		}
+	}
+	else
+	{
+		Behavior.SimdPlan.Reset();
+		Behavior.SimdCompileDiagnostics = TEXT("SIMD skipped: script classified as Tier 2/3.");
+	}
+
+	auto AppendSimdCompileDiagnostics = [&Behavior](FString& Message)
+	{
+		if (!Behavior.SimdCompileDiagnostics.IsEmpty())
+		{
+			if (!Message.IsEmpty())
+			{
+				Message += TEXT("\n");
+			}
+			Message += Behavior.SimdCompileDiagnostics;
+		}
+	};
 	
 	// Check for @async
 	Behavior.bIsAsync = false;
@@ -642,6 +729,7 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 			Behavior.CompileState = EFlightVerseCompileState::VmCompiled;
 			Behavior.LastCompileDiagnostics =
 				TEXT("Compiled to Verse VM procedure; native fallback retained as safety path.");
+			AppendSimdCompileDiagnostics(Behavior.LastCompileDiagnostics);
 			if (!VmDiagnostics.IsEmpty())
 			{
 				Behavior.LastCompileDiagnostics += TEXT("\n") + VmDiagnostics;
@@ -664,6 +752,7 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 		Behavior.CompileState = EFlightVerseCompileState::VmCompiled;
 		Behavior.LastCompileDiagnostics =
 			TEXT("Compiled to native fallback executor; Verse VM execution path remains pending.");
+		AppendSimdCompileDiagnostics(Behavior.LastCompileDiagnostics);
 
 		OutErrors += FString::Printf(TEXT("Behavior %u: @rate(%.1fHz, %u frames) %s\n"),
 			BehaviorID, Behavior.ExecutionRateHz, Behavior.FrameInterval, Behavior.bIsAsync ? TEXT("[Async]") : TEXT(""));
@@ -678,6 +767,7 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 	Behavior.LastCompileDiagnostics = FString::Printf(
 		TEXT("Behavior is not executable: %sVerse VM compile path is not implemented yet; generated Verse is preview-only."),
 		*FallbackPrefix);
+	AppendSimdCompileDiagnostics(Behavior.LastCompileDiagnostics);
 	OutErrors += FString::Printf(TEXT("Behavior %u: @rate(%.1fHz, %u frames) %s\n"),
 		BehaviorID, Behavior.ExecutionRateHz, Behavior.FrameInterval, Behavior.bIsAsync ? TEXT("[Async]") : TEXT(""));
 	OutErrors += Behavior.LastCompileDiagnostics + TEXT("\n");
@@ -687,6 +777,7 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 	Behavior.LastCompileDiagnostics = FString::Printf(
 		TEXT("Behavior is not executable: %sVerse VM is unavailable in this build; generated Verse is preview-only."),
 		*FallbackPrefix);
+	AppendSimdCompileDiagnostics(Behavior.LastCompileDiagnostics);
 	OutErrors += FString::Printf(TEXT("Behavior %u: @rate(%.1fHz, %u frames) %s\n"),
 		BehaviorID, Behavior.ExecutionRateHz, Behavior.FrameInterval, Behavior.bIsAsync ? TEXT("[Async]") : TEXT(""));
 	OutErrors += Behavior.LastCompileDiagnostics + TEXT("\n");
@@ -758,6 +849,61 @@ void UFlightVerseSubsystem::ExecuteBehavior(uint32 BehaviorID, Flight::Swarm::FD
 #else
 	UE_LOG(LogFlightVerseSubsystem, Warning, TEXT("ExecuteBehavior called but Verse VM is unavailable in this build."));
 #endif
+}
+
+void UFlightVerseSubsystem::ExecuteBehaviorBulk(uint32 BehaviorID, TArrayView<Flight::Swarm::FDroidState> DroidStates)
+{
+	const FVerseBehavior* Behavior = Behaviors.Find(BehaviorID);
+	if (!Behavior || !Behavior->bHasExecutableProcedure)
+	{
+		return;
+	}
+
+	// TIER 1: Optimized SIMD-ready path (Literal math)
+	if (Behavior->Tier == Flight::Vex::EVexTier::Literal && Behavior->bUsesNativeFallback)
+	{
+		if (Behavior->SimdPlan.IsValid())
+		{
+			Behavior->SimdPlan->Execute(DroidStates);
+			return;
+		}
+
+		// Fallback to loop if plan compilation failed
+		for (Flight::Swarm::FDroidState& Droid : DroidStates)
+		{
+			ExecuteNativeProgram(Behavior->NativeProgram, Droid);
+		}
+		return;
+	}
+
+	// TIER 2/3: Standard dispatch
+	for (Flight::Swarm::FDroidState& Droid : DroidStates)
+	{
+		ExecuteBehavior(BehaviorID, Droid);
+	}
+}
+
+void UFlightVerseSubsystem::ExecuteBehaviorDirect(
+	uint32 BehaviorID,
+	TArrayView<FFlightTransformFragment> Transforms,
+	TArrayView<FFlightDroidStateFragment> DroidStates)
+{
+	const FVerseBehavior* Behavior = Behaviors.Find(BehaviorID);
+	if (!Behavior || !Behavior->bHasExecutableProcedure)
+	{
+		return;
+	}
+
+	// TIER 1: Direct SIMD path
+	if (Behavior->Tier == Flight::Vex::EVexTier::Literal && Behavior->SimdPlan.IsValid())
+	{
+		Behavior->SimdPlan->ExecuteDirect(Transforms, DroidStates);
+		return;
+	}
+
+	// Fallback: If not eligible for direct SIMD, we must gather/scatter (Existing path)
+	// For now, we don't have a direct-scalar-fallback, so we'll just not execute or log.
+	// In a real system, we'd gather to FDroidState and use ExecuteBehaviorBulk.
 }
 
 EFlightVerseCompileState UFlightVerseSubsystem::GetBehaviorCompileState(uint32 BehaviorID) const

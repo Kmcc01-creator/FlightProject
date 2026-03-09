@@ -216,6 +216,11 @@ struct FVexSymbolDefinition
 	EFlightVexSymbolAffinity Affinity = EFlightVexSymbolAffinity::Any;
 	bool bWritable = true;
 	bool bRequired = true;
+	bool bSimdReadAllowed = true;
+	bool bSimdWriteAllowed = true;
+	bool bGpuTier1Allowed = true;
+	EFlightVexAlignmentRequirement AlignmentRequirement = EFlightVexAlignmentRequirement::Any;
+	EFlightVexMathDeterminismProfile MathDeterminismProfile = EFlightVexMathDeterminismProfile::Fast;
 };
 
 struct FVexParseResult

@@ -154,7 +154,38 @@ TArray<FFlightVexSymbolRow> GenerateVexSymbolsFromStruct(FName Owner)
 				Row.Affinity = AffinityAttr::Value;
 			}
 
+			if constexpr (DescType::template HasAttrTemplate<Attr::SimdReadAllowed>)
+			{
+				using SimdReadAttr = typename DescType::template GetAttr<Attr::SimdReadAllowed>;
+				Row.bSimdReadAllowed = SimdReadAttr::Value;
+			}
+
+			if constexpr (DescType::template HasAttrTemplate<Attr::SimdWriteAllowed>)
+			{
+				using SimdWriteAttr = typename DescType::template GetAttr<Attr::SimdWriteAllowed>;
+				Row.bSimdWriteAllowed = SimdWriteAttr::Value;
+			}
+
+			if constexpr (DescType::template HasAttrTemplate<Attr::GpuTier1Allowed>)
+			{
+				using GpuTier1Attr = typename DescType::template GetAttr<Attr::GpuTier1Allowed>;
+				Row.bGpuTier1Allowed = GpuTier1Attr::Value;
+			}
+
+			if constexpr (DescType::template HasAttrTemplate<Attr::VexAlignment>)
+			{
+				using AlignmentAttr = typename DescType::template GetAttr<Attr::VexAlignment>;
+				Row.AlignmentRequirement = AlignmentAttr::Value;
+			}
+
+			if constexpr (DescType::template HasAttrTemplate<Attr::MathDeterminism>)
+			{
+				using DeterminismAttr = typename DescType::template GetAttr<Attr::MathDeterminism>;
+				Row.MathDeterminismProfile = DeterminismAttr::Value;
+			}
+
 			Row.bWritable = DescType::IsEditable;
+
 			Row.bRequired = true;
 
 			Rows.Add(MoveTemp(Row));

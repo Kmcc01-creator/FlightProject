@@ -3,8 +3,6 @@
 #include "Vex/FlightVexParser.h"
 #include "Vex/FlightVexTypes.h"
 #include "Vex/FlightVexOptics.h"
-#include "Schema/FlightRequirementSchema.h"
-#include "Schema/FlightRequirementRegistry.h"
 
 namespace Flight::Vex
 {
@@ -311,37 +309,6 @@ namespace
 		}
 	}
 
-	enum class EVexValueType : uint8 { Unknown, Float, Float2, Float3, Float4, Int, Bool };
-	EVexValueType ParseValueType(const FString& TypeName)
-	{
-		if (TypeName == TEXT("float")) return EVexValueType::Float;
-		if (TypeName == TEXT("float2")) return EVexValueType::Float2;
-		if (TypeName == TEXT("float3")) return EVexValueType::Float3;
-		if (TypeName == TEXT("float4")) return EVexValueType::Float4;
-		if (TypeName == TEXT("int")) return EVexValueType::Int;
-		if (TypeName == TEXT("bool")) return EVexValueType::Bool;
-		return EVexValueType::Unknown;
-	}
-
-	FString ToTypeString(const EVexValueType Type)
-	{
-		switch (Type)
-		{
-		case EVexValueType::Float: return TEXT("float");
-		case EVexValueType::Float2: return TEXT("float2");
-		case EVexValueType::Float3: return TEXT("float3");
-		case EVexValueType::Float4: return TEXT("float4");
-		case EVexValueType::Int: return TEXT("int");
-		case EVexValueType::Bool: return TEXT("bool");
-		default: return TEXT("unknown");
-		}
-	}
-
-	bool IsVectorType(const EVexValueType Type)
-	{
-		return Type == EVexValueType::Float2 || Type == EVexValueType::Float3 || Type == EVexValueType::Float4;
-	}
-
 	EVexValueType TypeFromVectorComponentSelector(const FString& Selector)
 	{
 		const int32 Width = Selector.Len();
@@ -350,12 +317,6 @@ namespace
 		if (Width == 3) return EVexValueType::Float3;
 		if (Width == 4) return EVexValueType::Float4;
 		return EVexValueType::Unknown;
-	}
-
-	bool IsDeclarationTypeToken(const FString& Lexeme)
-	{
-		return Lexeme == TEXT("float") || Lexeme == TEXT("float2") || Lexeme == TEXT("float3")
-			|| Lexeme == TEXT("float4") || Lexeme == TEXT("int") || Lexeme == TEXT("bool");
 	}
 
 	bool AreTypesCompatibleForAssignment(const EVexValueType LeftType, const EVexValueType RightType, const FString& Op)
@@ -1169,23 +1130,6 @@ EVexRequirement AnalyzeRequirements(const FVexProgramAst& Program)
 	return Req;
 }
 
-TArray<FVexSymbolDefinition> BuildSymbolDefinitionsFromManifest(const Flight::Schema::FManifestData& ManifestData)
-{
-	TArray<FVexSymbolDefinition> Defs;
-	{
-		FVexSymbolDefinition Dt; Dt.SymbolName = TEXT("@dt"); Dt.ValueType = TEXT("float"); Dt.Residency = EFlightVexSymbolResidency::Shared; Dt.bWritable = false; Dt.bRequired = false; Defs.Add(Dt);
-		FVexSymbolDefinition Frame; Frame.SymbolName = TEXT("@frame"); Frame.ValueType = TEXT("int"); Frame.Residency = EFlightVexSymbolResidency::Shared; Frame.bWritable = false; Frame.bRequired = false; Defs.Add(Frame);
-		FVexSymbolDefinition Time; Time.SymbolName = TEXT("@time"); Time.ValueType = TEXT("float"); Time.Residency = EFlightVexSymbolResidency::Shared; Time.bWritable = false; Time.bRequired = false; Defs.Add(Time);
-	}
-	for (const FFlightVexSymbolRow& R : ManifestData.VexSymbolRequirements)
-	{
-		FVexSymbolDefinition D; D.SymbolName = R.SymbolName;
-		switch (R.ValueType) { case EFlightVexSymbolValueType::Float: D.ValueType = TEXT("float"); break; case EFlightVexSymbolValueType::Float2: D.ValueType = TEXT("float2"); break; case EFlightVexSymbolValueType::Float3: D.ValueType = TEXT("float3"); break; case EFlightVexSymbolValueType::Float4: D.ValueType = TEXT("float4"); break; case EFlightVexSymbolValueType::Int: D.ValueType = TEXT("int"); break; case EFlightVexSymbolValueType::Bool: D.ValueType = TEXT("bool"); break; default: D.ValueType = TEXT("unknown"); break; }
-		D.Residency = R.Residency; D.Affinity = R.Affinity; D.bWritable = R.bWritable; D.bRequired = R.bRequired; Defs.Add(MoveTemp(D));
-	}
-	return Defs;
-}
-
 FVexParseResult ParseAndValidate(const FString& Source, const TArray<FVexSymbolDefinition>& SymbolDefinitions, bool bRequireAllRequiredSymbols)
 {
 	FVexParseResult Res;
@@ -1335,182 +1279,6 @@ FVexParseResult ParseAndValidate(const FString& Source, const TArray<FVexSymbolD
 		}
 	}
 	return Res;
-}
-
-FString FormatIssues(const TArray<FVexIssue>& Issues) { FString F; for (const FVexIssue& I : Issues) F += FString::Printf(TEXT("[%s L%d:C%d] %s\n"), I.Severity == EVexIssueSeverity::Error ? TEXT("error") : TEXT("warning"), I.Line, I.Column, *I.Message); return F; }
-
-	namespace Lower
-	{
-		FString Expression(int32 NodeIdx, const FVexProgramAst& Program, const TMap<FString, FString>& SymbolMap)
-		{
-			if (NodeIdx == INDEX_NONE) return TEXT("");
-			const auto& Node = Program.Expressions[NodeIdx];
-			switch (Node.Kind) {
-			case EVexExprKind::NumberLiteral:
-				return Node.Lexeme;
-			case EVexExprKind::Identifier:
-				return Node.Lexeme;
-			case EVexExprKind::SymbolRef:
-				return SymbolMap.Contains(Node.Lexeme) ? SymbolMap[Node.Lexeme] : Node.Lexeme;
-			case EVexExprKind::UnaryOp:
-				return Node.Lexeme + Expression(Node.LeftNodeIndex, Program, SymbolMap);
-			case EVexExprKind::BinaryOp:
-				if (Node.Lexeme == TEXT("."))
-				{
-					return FString::Printf(TEXT("%s.%s"),
-						*Expression(Node.LeftNodeIndex, Program, SymbolMap),
-						*Expression(Node.RightNodeIndex, Program, SymbolMap));
-				}
-				return FString::Printf(TEXT("(%s %s %s)"),
-					*Expression(Node.LeftNodeIndex, Program, SymbolMap),
-					*Node.Lexeme,
-					*Expression(Node.RightNodeIndex, Program, SymbolMap));
-			case EVexExprKind::FunctionCall:
-			{
-				TArray<FString> Args;
-				Args.Reserve(Node.ArgumentNodeIndices.Num());
-				for (const int32 ArgIdx : Node.ArgumentNodeIndices)
-				{
-					Args.Add(Expression(ArgIdx, Program, SymbolMap));
-				}
-
-				if (Node.Lexeme.StartsWith(TEXT("vec")))
-				{
-					return FString::Printf(TEXT("{%s}"), *FString::Join(Args, TEXT(", ")));
-				}
-
-				return FString::Printf(TEXT("%s(%s)"), *Node.Lexeme, *FString::Join(Args, TEXT(", ")));
-			}
-			case EVexExprKind::Pipe:
-			case EVexExprKind::PipeIn:
-			case EVexExprKind::PipeOut:
-			{
-				const FString Piped = Expression(Node.LeftNodeIndex, Program, SymbolMap);
-				if (Program.Expressions.IsValidIndex(Node.RightNodeIndex))
-				{
-					const FVexExpressionAst& RightNode = Program.Expressions[Node.RightNodeIndex];
-					if (RightNode.Kind == EVexExprKind::FunctionCall)
-					{
-						TArray<FString> Args;
-						Args.Reserve(RightNode.ArgumentNodeIndices.Num() + 1);
-						Args.Add(Piped);
-						for (const int32 ArgIdx : RightNode.ArgumentNodeIndices)
-						{
-							Args.Add(Expression(ArgIdx, Program, SymbolMap));
-						}
-						return FString::Printf(TEXT("%s(%s)"), *RightNode.Lexeme, *FString::Join(Args, TEXT(", ")));
-					}
-				}
-				return FString::Printf(TEXT("%s(%s)"),
-					*Expression(Node.RightNodeIndex, Program, SymbolMap),
-					*Piped);
-			}
-			default:
-				return TEXT("/* unknown */");
-			}
-		}
-
-	FString Program(const FVexProgramAst& ProgramAst, const TMap<FString, FString>& SymbolMap, const bool bVerseStyle)
-	{
-		FString Out; int32 Ind = 0; auto AddInd = [&](int32 L) { for (int32 i = 0; i < L; ++i) Out += TEXT("    "); };
-		for (const FVexStatementAst& S : ProgramAst.Statements)
-		{
-			switch (S.Kind) {
-			case EVexStatementKind::TargetDirective: break;
-			case EVexStatementKind::BlockOpen: if (bVerseStyle) Out += TEXT(":\n"); else Out += TEXT("{\n"); Ind++; break;
-			case EVexStatementKind::BlockClose: Ind--; if (!bVerseStyle) { AddInd(Ind); Out += TEXT("}\n"); } break;
-			case EVexStatementKind::IfHeader: AddInd(Ind); Out += FString::Printf(TEXT("if (%s)%s"), *Expression(S.ExpressionNodeIndex, ProgramAst, SymbolMap), bVerseStyle ? TEXT(":") : TEXT(" ")); if (!bVerseStyle) Out += TEXT("\n"); break;
-			case EVexStatementKind::Assignment:
-			{
-				AddInd(Ind); FString L; int32 Op = INDEX_NONE; for (int32 i = S.StartTokenIndex; i <= S.EndTokenIndex; ++i) { if (ProgramAst.Tokens[i].Kind == EVexTokenKind::Operator && IsAssignmentOperator(ProgramAst.Tokens[i].Lexeme)) { Op = i; break; } if (!L.IsEmpty()) L += TEXT(" "); L += ProgramAst.Tokens[i].Lexeme; }
-				for (const auto& E : SymbolMap) L.ReplaceInline(*E.Key, *E.Value);
-				if (bVerseStyle) Out += FString::Printf(TEXT("set %s %s %s\n"), *L, Op != INDEX_NONE ? *ProgramAst.Tokens[Op].Lexeme : TEXT("="), *Expression(S.ExpressionNodeIndex, ProgramAst, SymbolMap));
-				else Out += FString::Printf(TEXT("%s %s %s;\n"), *L, Op != INDEX_NONE ? *ProgramAst.Tokens[Op].Lexeme : TEXT("="), *Expression(S.ExpressionNodeIndex, ProgramAst, SymbolMap));
-				break;
-			}
-			case EVexStatementKind::Expression: AddInd(Ind); Out += Expression(S.ExpressionNodeIndex, ProgramAst, SymbolMap) + (bVerseStyle ? TEXT("\n") : TEXT(";\n")); break;
-			}
-		}
-		return Out;
-	}
-}
-
-FString LowerToHLSL(const FVexProgramAst& Program, const TMap<FString, FString>& HlslBySymbol)
-{
-	TMap<FString, FString> Symbols = HlslBySymbol;
-	Symbols.Add(TEXT("@dt"), TEXT("DeltaTime"));
-	Symbols.Add(TEXT("@frame"), TEXT("FrameIndex"));
-	Symbols.Add(TEXT("@time"), TEXT("(FrameIndex * DeltaTime)"));
-	return Lower::Program(Program, Symbols, false);
-}
-
-FString LowerToVerse(const FVexProgramAst& Program, const TMap<FString, FString>& VerseBySymbol)
-{
-	TMap<FString, FString> Symbols = VerseBySymbol;
-	Symbols.Add(TEXT("@dt"), TEXT("Sim.DeltaTime"));
-	Symbols.Add(TEXT("@frame"), TEXT("Sim.Frame"));
-	Symbols.Add(TEXT("@time"), TEXT("Sim.TotalTime"));
-	bool bIsAsync = false;
-	for (const auto& S : Program.Statements) { if (S.Kind == EVexStatementKind::TargetDirective && S.SourceSpan == TEXT("@async")) { bIsAsync = true; break; } }
-	FString Body = Lower::Program(Program, Symbols, true);
-	FString Effects = bIsAsync ? TEXT("<transacts><async>") : TEXT("<transacts>");
-	return FString::Printf(TEXT("ProcessDroid(Droid:droid_state, Sim:sim_context)%s:void =\n%s"), *Effects, *Body);
-}
-
-FString LowerMegaKernel(const TMap<uint32, FVexProgramAst>& Scripts, const TMap<FString, FString>& SymbolMap)
-{
-	auto MakeLocalAlias = [](const FString& SymbolName)
-	{
-		FString Alias = SymbolName;
-		Alias.RemoveFromStart(TEXT("@"));
-		return Alias + TEXT("_local");
-	};
-
-	TSet<FString> UsedSymbols;
-	for (const TPair<uint32, FVexProgramAst>& Pair : Scripts)
-	{
-		for (const FString& UsedSymbol : Pair.Value.UsedSymbols)
-		{
-			if (SymbolMap.Contains(UsedSymbol))
-			{
-				UsedSymbols.Add(UsedSymbol);
-			}
-		}
-	}
-
-	TArray<FString> UsedOrdered = UsedSymbols.Array();
-	UsedOrdered.Sort();
-
-	TMap<FString, FString> LocalMap = SymbolMap;
-	FString Hoist = TEXT("// --- Global Attribute Hoisting ---\n");
-	for (const FString& Symbol : UsedOrdered)
-	{
-		const FString Alias = MakeLocalAlias(Symbol);
-		Hoist += FString::Printf(TEXT("auto %s = %s;\n"), *Alias, *SymbolMap.FindChecked(Symbol));
-		LocalMap.Add(Symbol, Alias);
-	}
-
-	FString Dispatch = TEXT("// --- Behavior Dispatch ---\n");
-	Dispatch += TEXT("switch (BehaviorID)\n{\n");
-	for (const TPair<uint32, FVexProgramAst>& Pair : Scripts)
-	{
-		Dispatch += FString::Printf(TEXT("    case %u:\n    {\n"), Pair.Key);
-		const FString CaseBody = Lower::Program(Pair.Value, LocalMap, false);
-		TArray<FString> BodyLines;
-		CaseBody.ParseIntoArrayLines(BodyLines);
-		for (const FString& Line : BodyLines)
-		{
-			if (!Line.IsEmpty())
-			{
-				Dispatch += TEXT("        ") + Line + TEXT("\n");
-			}
-		}
-		Dispatch += TEXT("        break;\n");
-		Dispatch += TEXT("    }\n");
-	}
-	Dispatch += TEXT("}\n");
-
-	return TEXT("// SCSL Unified Mega-Kernel\n") + Hoist + Dispatch;
 }
 
 } // namespace Flight::Vex

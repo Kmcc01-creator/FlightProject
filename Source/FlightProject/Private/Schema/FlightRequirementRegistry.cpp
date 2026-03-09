@@ -106,6 +106,36 @@ FString VexAffinityToString(const EFlightVexSymbolAffinity Affinity)
 	}
 }
 
+FString VexAlignmentToString(const EFlightVexAlignmentRequirement Alignment)
+{
+	switch (Alignment)
+	{
+	case EFlightVexAlignmentRequirement::Any:
+		return TEXT("Any");
+	case EFlightVexAlignmentRequirement::Align16:
+		return TEXT("Align16");
+	case EFlightVexAlignmentRequirement::Align32:
+		return TEXT("Align32");
+	default:
+		return TEXT("Unknown");
+	}
+}
+
+FString VexMathDeterminismToString(const EFlightVexMathDeterminismProfile Profile)
+{
+	switch (Profile)
+	{
+	case EFlightVexMathDeterminismProfile::Fast:
+		return TEXT("Fast");
+	case EFlightVexMathDeterminismProfile::Precise:
+		return TEXT("Precise");
+	case EFlightVexMathDeterminismProfile::StrictParity:
+		return TEXT("StrictParity");
+	default:
+		return TEXT("Unknown");
+	}
+}
+
 void AddSwarmNiagaraRequirements(FManifestData& Data)
 {
 	{
@@ -304,6 +334,11 @@ TSharedPtr<FJsonObject> MakeVexSymbolRowObject(const FFlightVexSymbolRow& Row)
 	Object->SetStringField(TEXT("verseIdentifier"), Row.VerseIdentifier);
 	Object->SetBoolField(TEXT("writable"), Row.bWritable);
 	Object->SetBoolField(TEXT("required"), Row.bRequired);
+	Object->SetBoolField(TEXT("simdReadAllowed"), Row.bSimdReadAllowed);
+	Object->SetBoolField(TEXT("simdWriteAllowed"), Row.bSimdWriteAllowed);
+	Object->SetBoolField(TEXT("gpuTier1Allowed"), Row.bGpuTier1Allowed);
+	Object->SetStringField(TEXT("alignmentRequirement"), VexAlignmentToString(Row.AlignmentRequirement));
+	Object->SetStringField(TEXT("mathDeterminismProfile"), VexMathDeterminismToString(Row.MathDeterminismProfile));
 	return Object;
 }
 

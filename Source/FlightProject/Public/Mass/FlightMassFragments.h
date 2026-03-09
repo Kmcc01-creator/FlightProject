@@ -50,13 +50,21 @@ struct FLIGHTPROJECT_API FFlightTransformFragment : public FMassFragment
 };
 
 /**
- * Fragment tracking whether this entity was modified by VEX/Verse this frame.
- * Used for sparse blitting to the GPU.
+ * Fragment tracking simulation state modified by VEX/Verse.
  */
 USTRUCT()
-struct FLIGHTPROJECT_API FFlightVexDirtyFragment : public FMassFragment
+struct FLIGHTPROJECT_API FFlightDroidStateFragment : public FMassFragment
 {
 	GENERATED_BODY()
+
+	UPROPERTY()
+	float Shield = 1.0f;
+
+	UPROPERTY()
+	float Energy = 1.0f;
+
+	UPROPERTY()
+	int32 Status = 0;
 
 	/** Bitmask or simple bool indicating if CPU state needs sync to GPU */
 	UPROPERTY()

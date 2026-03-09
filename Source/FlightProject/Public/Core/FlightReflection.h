@@ -644,6 +644,22 @@ struct ThreadAffinity
 	static constexpr EFlightVexSymbolAffinity Value = Affinity;
 };
 
+// SIMD/GPU Capability Attributes
+template<bool bAllowed>
+struct SimdReadAllowed { static constexpr bool Value = bAllowed; };
+
+template<bool bAllowed>
+struct SimdWriteAllowed { static constexpr bool Value = bAllowed; };
+
+template<bool bAllowed>
+struct GpuTier1Allowed { static constexpr bool Value = bAllowed; };
+
+template<EFlightVexAlignmentRequirement Alignment>
+struct VexAlignment { static constexpr EFlightVexAlignmentRequirement Value = Alignment; };
+
+template<EFlightVexMathDeterminismProfile Profile>
+struct MathDeterminism { static constexpr EFlightVexMathDeterminismProfile Value = Profile; };
+
 // Meta specifiers
 struct AllowPrivateAccess {};
 struct ExposeOnSpawn {};
