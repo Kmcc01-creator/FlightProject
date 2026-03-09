@@ -23,10 +23,21 @@ TEST_FILTER="${TEST_FILTER:-FlightProject}"
 ENABLE_TIMESTAMPS=false
 
 # Parse extra args
+EXTRA_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --breaking)
             TEST_FILTER="FlightProject.Unit.Safety+FlightProject.Integration.SchemaDriven"
+            shift
+            ;;
+        --verse)
+            TEST_FILTER="FlightProject.Verse+FlightProject.Integration.Vex.VerticalSlice"
+            TEST_LOG_PROFILE="focused"
+            EXTRA_ARGS+=("-NoShaderCompile")
+            shift
+            ;;
+        --no-shaders)
+            EXTRA_ARGS+=("-NoShaderCompile")
             shift
             ;;
         --timestamps)
@@ -53,7 +64,7 @@ mkdir -p "$DDC_PATH"
 if [[ -z "$LOG_CMDS" ]]; then
     case "${TEST_LOG_PROFILE,,}" in
         focused|test|ci)
-            LOG_CMDS="global error,AutomationTestingLog display,LogAutomationCommandLine display,LogAutomationController display,LogAutomationWorker warning,LogUObjectGlobals error,LogFlightProject display,LogFlightSwarm display"
+            LOG_CMDS="global error,AutomationTestingLog display,LogAutomationCommandLine display,LogAutomationController display,LogAutomationWorker warning,LogUObjectGlobals error,LogFlightProject display,LogFlightSwarm display,LogFlightVerseSubsystem display"
             ;;
         verbose)
             LOG_CMDS="global warning,AutomationTestingLog display,LogAutomationCommandLine verbose,LogAutomationController verbose,LogAutomationWorker verbose,LogFlightProject verbose"
@@ -77,6 +88,7 @@ UE_CMD=(
     -NullRHI -NoPCH -NoBT -NoSound -NoDDCMaintenance
     -DDC=NoZenLocalFallback -LocalDataCachePath="$DDC_PATH"
     "${LOG_CMDS_ARGS[@]}"
+    "${EXTRA_ARGS[@]}"
 )
 
 # QoL Coloring

@@ -5,6 +5,11 @@
 #include "HAL/FileManager.h"
 #include "ShaderCore.h"
 
+#if WITH_VERSE_VM || defined(__INTELLISENSE__)
+#include "Verse/FlightVerseAssemblerPass.h"
+#include "uLang/Toolchain/ModularFeatureManager.h"
+#endif
+
 #if WITH_EDITOR
 #include "UI/FlightLogTab.h"
 #include "UI/SwarmOrchestratorTab.h"
@@ -12,6 +17,13 @@
 
 DEFINE_LOG_CATEGORY(LogFlightProject);
 IMPLEMENT_PRIMARY_GAME_MODULE(FFlightProjectModule, FlightProject, "FlightProject");
+
+#if WITH_VERSE_VM || defined(__INTELLISENSE__)
+namespace
+{
+	TUniquePtr<uLang::TModularFeatureRegHandle<Flight::Verse::FFlightVerseAssemblerPass>> GVerseAssemblerPassHandle;
+}
+#endif
 
 void FFlightProjectModule::StartupModule()
 {
@@ -42,6 +54,14 @@ void FFlightProjectModule::StartupModule()
     // Register Swarm Orchestrator tab
     Flight::Swarm::RegisterSwarmOrchestrator();
 #endif
+
+#if WITH_VERSE_VM || defined(__INTELLISENSE__)
+	if (!GVerseAssemblerPassHandle.IsValid())
+	{
+		GVerseAssemblerPassHandle = MakeUnique<uLang::TModularFeatureRegHandle<Flight::Verse::FFlightVerseAssemblerPass>>();
+		UE_LOG(LogFlightProject, Log, TEXT("Registered experimental Verse IAssemblerPass scaffold."));
+	}
+#endif
 }
 
 void FFlightProjectModule::ShutdownModule()
@@ -50,6 +70,14 @@ void FFlightProjectModule::ShutdownModule()
     // Unregister tabs
     Flight::Log::UnregisterLogViewerTab();
     Flight::Swarm::UnregisterSwarmOrchestrator();
+#endif
+
+#if WITH_VERSE_VM || defined(__INTELLISENSE__)
+	if (GVerseAssemblerPassHandle.IsValid())
+	{
+		GVerseAssemblerPassHandle.Reset();
+		UE_LOG(LogFlightProject, Log, TEXT("Unregistered experimental Verse IAssemblerPass scaffold."));
+	}
 #endif
 
     UE_LOG(LogFlightProject, Log, TEXT("FlightProject module shut down"));

@@ -357,3 +357,287 @@ bool FVexParserMegaKernelTest::RunTest(const FString&)
 
 	return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FVexParserDirectionalPipeTest,
+	"FlightProject.Schema.Vex.Parser.Ast.DirectionalPipes",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
+
+bool FVexParserDirectionalPipeTest::RunTest(const FString&)
+{
+	TArray<Flight::Vex::FVexSymbolDefinition> Defs;
+	{
+		Flight::Vex::FVexSymbolDefinition Velocity;
+		Velocity.SymbolName = TEXT("@velocity");
+		Velocity.ValueType = TEXT("float3");
+		Velocity.Residency = EFlightVexSymbolResidency::Shared;
+		Velocity.bRequired = false;
+		Defs.Add(Velocity);
+
+		Flight::Vex::FVexSymbolDefinition Position;
+		Position.SymbolName = TEXT("@position");
+		Position.ValueType = TEXT("float3");
+		Position.Residency = EFlightVexSymbolResidency::Shared;
+		Position.bRequired = false;
+		Defs.Add(Position);
+
+		Flight::Vex::FVexSymbolDefinition HitDist;
+		HitDist.SymbolName = TEXT("@hit_dist");
+		HitDist.ValueType = TEXT("float");
+		HitDist.Residency = EFlightVexSymbolResidency::Shared;
+		HitDist.bRequired = false;
+		Defs.Add(HitDist);
+	}
+
+	// Test Case 1: Control Pipe (Inject) Host <| Device
+	{
+		const FString Source = TEXT("@gpu { @velocity <| vec3(1,0,0); }\n");
+		const Flight::Vex::FVexParseResult Result = Flight::Vex::ParseAndValidate(Source, Defs, false);
+		if (!Result.bSuccess) { AddInfo(Flight::Vex::FormatIssues(Result.Issues)); }
+
+		TestTrue(TEXT("PipeIn source should parse successfully"), Result.bSuccess);
+		TestTrue(TEXT("Should contain a PipeIn node"), Result.Program.Expressions.ContainsByPredicate([](const auto& Expr)
+		{
+			return Expr.Kind == Flight::Vex::EVexExprKind::PipeIn;
+		}));
+	}
+
+	// Test Case 2: Perception Pipe (Extract) Device |> Host
+	{
+		const FString Source = TEXT("@cpu { int count = @hit_dist |> count_hits(); }\n");
+		const Flight::Vex::FVexParseResult Result = Flight::Vex::ParseAndValidate(Source, Defs, false);
+		if (!Result.bSuccess) { AddInfo(Flight::Vex::FormatIssues(Result.Issues)); }
+
+		TestTrue(TEXT("PipeOut source should parse successfully"), Result.bSuccess);
+		TestTrue(TEXT("Should contain a PipeOut node"), Result.Program.Expressions.ContainsByPredicate([](const auto& Expr)
+		{
+			return Expr.Kind == Flight::Vex::EVexExprKind::PipeOut;
+		}));
+	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FVexParserPipeDisambiguationTest,
+	"FlightProject.Schema.Vex.Parser.Ast.PipeDisambiguation",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
+
+bool FVexParserPipeDisambiguationTest::RunTest(const FString&)
+{
+	const TArray<Flight::Vex::FVexSymbolDefinition> NoDefs;
+	const FString Source = TEXT("@cpu { bool b = (1 | 2) || (3 |> 4); }\n");
+	const Flight::Vex::FVexParseResult Result = Flight::Vex::ParseAndValidate(Source, NoDefs, false);
+	if (!Result.bSuccess) { AddInfo(Flight::Vex::FormatIssues(Result.Issues)); }
+
+	TestTrue(TEXT("Disambiguation source should parse successfully"), Result.bSuccess);
+
+	bool bFoundPipe = false;
+	bool bFoundPipeOut = false;
+	bool bFoundLogicalOr = false;
+
+	for (const auto& Expr : Result.Program.Expressions)
+	{
+		if (Expr.Kind == Flight::Vex::EVexExprKind::Pipe) bFoundPipe = true;
+		if (Expr.Kind == Flight::Vex::EVexExprKind::PipeOut) bFoundPipeOut = true;
+		if (Expr.Kind == Flight::Vex::EVexExprKind::BinaryOp && Expr.Lexeme == TEXT("||")) bFoundLogicalOr = true;
+	}
+
+	TestTrue(TEXT("Detected standard Pipe '|'"), bFoundPipe);
+	TestTrue(TEXT("Detected PipeOut '|>'"), bFoundPipeOut);
+	TestTrue(TEXT("Detected Logical Or '||'"), bFoundLogicalOr);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FVexParserPipeResidencyErrorTest,
+	"FlightProject.Schema.Vex.Parser.Semantics.PipeResidency",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
+
+bool FVexParserPipeResidencyErrorTest::RunTest(const FString&)
+{
+	TArray<Flight::Vex::FVexSymbolDefinition> Defs;
+	{
+		Flight::Vex::FVexSymbolDefinition Velocity;
+		Velocity.SymbolName = TEXT("@velocity");
+		Velocity.ValueType = TEXT("float");
+		Velocity.Residency = EFlightVexSymbolResidency::Shared;
+		Velocity.bRequired = false;
+		Defs.Add(Velocity);
+
+		Flight::Vex::FVexSymbolDefinition HitDist;
+		HitDist.SymbolName = TEXT("@hit_dist");
+		HitDist.ValueType = TEXT("float");
+		HitDist.Residency = EFlightVexSymbolResidency::Shared;
+		HitDist.bRequired = false;
+		Defs.Add(HitDist);
+
+		Flight::Vex::FVexSymbolDefinition Status;
+		Status.SymbolName = TEXT("@status");
+		Status.ValueType = TEXT("int");
+		Status.Residency = EFlightVexSymbolResidency::Shared;
+		Status.bRequired = false;
+		Defs.Add(Status);
+	}
+
+	{
+		const FString Source = TEXT("@cpu { @velocity <| 1.0; }\n");
+		const Flight::Vex::FVexParseResult Result = Flight::Vex::ParseAndValidate(Source, Defs, false);
+		if (Result.bSuccess) { AddInfo(TEXT("Expected failure but parser returned success.")); }
+		TestFalse(TEXT("Inject pipe in @cpu context should fail"), Result.bSuccess);
+
+		bool bHasResidencyError = false;
+		for (const auto& Issue : Result.Issues)
+		{
+			if (Issue.Message.Contains(TEXT("Inject pipe `<|` can only be used within a `@gpu` context.")))
+			{
+				bHasResidencyError = true;
+				break;
+			}
+		}
+		TestTrue(TEXT("Should report Inject residency error"), bHasResidencyError);
+	}
+
+	{
+		const FString Source = TEXT("@gpu { @hit_dist |> @status; }\n");
+		const Flight::Vex::FVexParseResult Result = Flight::Vex::ParseAndValidate(Source, Defs, false);
+		if (Result.bSuccess) { AddInfo(TEXT("Expected failure but parser returned success.")); }
+		TestFalse(TEXT("Extract pipe in @gpu context should fail"), Result.bSuccess);
+
+		bool bHasResidencyError = false;
+		for (const auto& Issue : Result.Issues)
+		{
+			if (Issue.Message.Contains(TEXT("Extract pipe `|>` can only be used within a `@cpu` context.")))
+			{
+				bHasResidencyError = true;
+				break;
+			}
+		}
+		TestTrue(TEXT("Should report Extract residency error"), bHasResidencyError);
+	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FVexParserLogicalAndOperatorTest,
+	"FlightProject.Schema.Vex.Parser.Ast.LogicalAndOperator",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
+
+bool FVexParserLogicalAndOperatorTest::RunTest(const FString&)
+{
+	const TArray<Flight::Vex::FVexSymbolDefinition> NoDefs;
+	const FString Source = TEXT("bool ok = (1 < 2) && (3 < 4);\n");
+	const Flight::Vex::FVexParseResult Result = Flight::Vex::ParseAndValidate(Source, NoDefs, false);
+	if (!Result.bSuccess) { AddInfo(Flight::Vex::FormatIssues(Result.Issues)); }
+
+	TestTrue(TEXT("Logical-and source should parse successfully"), Result.bSuccess);
+	const bool bFoundLogicalAnd = Result.Program.Expressions.ContainsByPredicate([](const auto& Expr)
+	{
+		return Expr.Kind == Flight::Vex::EVexExprKind::BinaryOp && Expr.Lexeme == TEXT("&&");
+	});
+	TestTrue(TEXT("Parser should emit a BinaryOp '&&' node"), bFoundLogicalAnd);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FVexParserMaximalMunchPipeTokensTest,
+	"FlightProject.Schema.Vex.Parser.Ast.MaximalMunchPipeTokens",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
+
+bool FVexParserMaximalMunchPipeTokensTest::RunTest(const FString&)
+{
+	const TArray<Flight::Vex::FVexSymbolDefinition> NoDefs;
+	const FString Source = TEXT("@cpu { bool b = (1 | 2) || (3 |> 4); }\n");
+	const Flight::Vex::FVexParseResult Result = Flight::Vex::ParseAndValidate(Source, NoDefs, false);
+	if (!Result.bSuccess) { AddInfo(Flight::Vex::FormatIssues(Result.Issues)); }
+
+	TestTrue(TEXT("Maximal-munch source should parse successfully"), Result.bSuccess);
+
+	int32 PipeTokenCount = 0;
+	int32 PipeOutTokenCount = 0;
+	int32 LogicalOrTokenCount = 0;
+	for (const Flight::Vex::FVexToken& Token : Result.Program.Tokens)
+	{
+		if (Token.Kind != Flight::Vex::EVexTokenKind::Operator)
+		{
+			continue;
+		}
+		if (Token.Lexeme == TEXT("|")) { ++PipeTokenCount; }
+		else if (Token.Lexeme == TEXT("|>")) { ++PipeOutTokenCount; }
+		else if (Token.Lexeme == TEXT("||")) { ++LogicalOrTokenCount; }
+	}
+
+	TestEqual(TEXT("Expected one '|' token"), PipeTokenCount, 1);
+	TestEqual(TEXT("Expected one '|>' token"), PipeOutTokenCount, 1);
+	TestEqual(TEXT("Expected one '||' token"), LogicalOrTokenCount, 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FVexParserInvalidExtractOperatorTest,
+	"FlightProject.Schema.Vex.Parser.Diagnostics.InvalidExtractOperator",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
+
+bool FVexParserInvalidExtractOperatorTest::RunTest(const FString&)
+{
+	TArray<Flight::Vex::FVexSymbolDefinition> Defs;
+	{
+		Flight::Vex::FVexSymbolDefinition HitDist;
+		HitDist.SymbolName = TEXT("@hit_dist");
+		HitDist.ValueType = TEXT("float");
+		HitDist.Residency = EFlightVexSymbolResidency::Shared;
+		HitDist.bRequired = false;
+		Defs.Add(HitDist);
+	}
+
+	const FString Source = TEXT("@cpu { int count = @hit_dist >| count_hits(); }\n");
+	const Flight::Vex::FVexParseResult Result = Flight::Vex::ParseAndValidate(Source, Defs, false);
+	if (Result.bSuccess) { AddInfo(TEXT("Expected parser failure for invalid operator sequence `>|`.")); }
+
+	TestFalse(TEXT("Invalid extract operator `>|` should fail"), Result.bSuccess);
+
+	bool bHasMalformedIssue = false;
+	bool bHasLegacyToken = false;
+	for (const auto& Issue : Result.Issues)
+	{
+		if (Issue.Message.Contains(TEXT("Malformed expression")) || Issue.Message.Contains(TEXT("Unexpected token")))
+		{
+			bHasMalformedIssue = true;
+			break;
+		}
+	}
+	for (const auto& Token : Result.Program.Tokens)
+	{
+		if (Token.Kind == Flight::Vex::EVexTokenKind::Operator && Token.Lexeme == TEXT(">|"))
+		{
+			bHasLegacyToken = true;
+			break;
+		}
+	}
+
+	TestTrue(TEXT("Invalid syntax should produce a parse diagnostic"), bHasMalformedIssue);
+	TestFalse(TEXT("Lexer should not produce a `>|` operator token"), bHasLegacyToken);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FVexParserInvalidSingleAmpersandTest,
+	"FlightProject.Schema.Vex.Parser.Diagnostics.InvalidSingleAmpersand",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::SmokeFilter)
+
+bool FVexParserInvalidSingleAmpersandTest::RunTest(const FString&)
+{
+	const TArray<Flight::Vex::FVexSymbolDefinition> NoDefs;
+	const FString Source = TEXT("bool ok = (1 < 2) & (3 < 4);\n");
+	const Flight::Vex::FVexParseResult Result = Flight::Vex::ParseAndValidate(Source, NoDefs, false);
+	if (Result.bSuccess) { AddInfo(TEXT("Expected parser failure for single `&` in logical expression.")); }
+
+	TestFalse(TEXT("Single '&' should fail parse"), Result.bSuccess);
+	const bool bHasUnexpectedTokenIssue = Result.Issues.ContainsByPredicate([](const Flight::Vex::FVexIssue& Issue)
+	{
+		return Issue.Message.Contains(TEXT("Unexpected token"));
+	});
+	TestTrue(TEXT("Single '&' should emit unexpected-token diagnostic"), bHasUnexpectedTokenIssue);
+	return true;
+}

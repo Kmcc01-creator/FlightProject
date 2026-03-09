@@ -24,17 +24,15 @@ Current default contract entries include:
 ### C++ editor tool path
 - `SSwarmOrchestrator` now reads symbol mappings from schema manifest data.
 - `Flight::Vex` parser front-end now tokenizes source and builds a lightweight statement AST before shader injection.
-- Expression parsing uses precedence-aware AST construction for current supported nodes.
-- Function-call/dot/pipe node handling is currently an active parser workstream and not yet fully represented in all parser tests.
+- Expression parsing uses precedence-aware AST construction and supports function-call, dot-member, pipe, and vector-literal forms.
 - Diagnostics are line/column aware (unknown symbols, malformed `if (...)`, unmatched braces/parentheses, unsupported tokens).
 - Semantic validation now enforces:
   - read-only symbol assignment errors
   - assignment type mismatch errors
   - `if` condition bool-like checks
+- Parser API contract enforcement now supports required-symbol checks through `ParseAndValidate(..., bRequireAllRequiredSymbols=true)`.
 - AST nodes carry inferred type annotations used during semantic validation.
-- Unknown symbols are detected and surfaced as warnings in both:
-  - Output log (`LogSwarmOrchestrator`)
-  - Generated HLSL/Verse preview text.
+- Unknown symbols are detected and surfaced as warnings with real token source positions.
 
 ### Python scripting path
 - `Content/Python/FlightProject/SchemaTools.py` validates VEX symbol contract consistency as part of `ensure_manifest_requirements`.
@@ -69,7 +67,7 @@ Move from "shape validation" to "compliance validation" by adding automation tha
 
 Also track compile-contract behavior in Verse bridge:
 4. `CompileVex` fails when required schema symbols are missing.
-5. `CompileVex` reports non-executable status clearly when Verse VM compile path is unavailable/incomplete.
+5. `CompileVex` reports executable state truthfully: supported scripts compile to VM-procedure execution (with native fallback safety path), unsupported paths report non-executable diagnostics.
 
 Related draft for SCSL field/page schema:
 
@@ -84,3 +82,24 @@ Related draft for SCSL field/page schema:
 - `FlightProject.Schema.Vex.Parser.Semantics.IfConditionBoolLike`
 - `FlightProject.Schema.Vex.Parser.Ast.Precedence`
 - `FlightProject.Schema.Vex.Parser.Ast.FunctionCall`
+- `FlightProject.Schema.Vex.Parser.Ast.DirectionalPipes`
+- `FlightProject.Schema.Vex.Parser.Ast.PipeDisambiguation`
+- `FlightProject.Schema.Vex.Parser.Ast.LogicalAndOperator`
+- `FlightProject.Schema.Vex.Parser.Ast.MaximalMunchPipeTokens`
+- `FlightProject.Schema.Vex.Parser.DependencyDetection`
+- `FlightProject.Schema.Vex.Parser.NPRBuiltins`
+- `FlightProject.Schema.Vex.Parser.Optimization`
+- `FlightProject.Schema.Vex.Parser.MegaKernel`
+- `FlightProject.Schema.Vex.Parser.Semantics.PipeResidency`
+- `FlightProject.Schema.Vex.Parser.Diagnostics.InvalidExtractOperator`
+- `FlightProject.Schema.Vex.Parser.Diagnostics.InvalidSingleAmpersand`
+
+As of 2026-03-09, the parser bucket (`FlightProject.Schema.Vex.Parser`) is passing in headless focused runs (`17/17`), and the extended mixed schema/Verse/parser/vertical-slice bucket is passing (`32/32`).
+
+## Vertical Slice Integration Coverage
+
+- `FlightProject.Integration.Vex.VerticalSlice` now executes a manifest-driven complex test pass that:
+  - validates parse + lowering symbol mapping for each declared VEX symbol
+  - asserts invalid residency failures for non-shared symbols
+  - verifies compile metadata registration (`@rate`) through `UFlightScriptingLibrary::CompileVex`
+  - verifies executable compile state/diagnostics for runtime-supported scripts

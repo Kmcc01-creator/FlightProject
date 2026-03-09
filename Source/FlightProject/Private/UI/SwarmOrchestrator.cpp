@@ -7,12 +7,18 @@
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Input/SMultiLineEditableTextBox.h"
+#include "Dom/JsonObject.h"
+#include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonWriter.h"
+#include "FlightScriptingLibrary.h"
 #include "UI/FlightReflectedUI.h"
+#include "UI/FlightVexUI.h"
 #include "Vex/FlightVexParser.h"
 #include "Schema/FlightRequirementRegistry.h"
 #include "Schema/FlightRequirementSchema.h"
 #include "Core/FlightHlslReflection.h"
 #include "HAL/FileManager.h"
+#include "HAL/PlatformTime.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Engine/Engine.h"
@@ -39,9 +45,251 @@ static const FString DefaultScript = TEXT(
 
 static const FString OrchestratorInjectedRelativePath = TEXT("Shaders/Private/Generated/OrchestratorInjected.ush");
 static const FString OrchestratorReflectedTypesRelativePath = TEXT("Shaders/Private/Generated/OrchestratorReflectedTypes.ush");
+static const FString OrchestratorSchemaEditsRelativeDir = TEXT("Saved/Flight/Schema/ui_edits");
+static const FString OrchestratorSchemaEditsHistoryRelativeDir = TEXT("Saved/Flight/Schema/ui_edits/history");
+static const FString OrchestratorSchemaEditsJournalRelativePath = TEXT("Saved/Flight/Schema/ui_edits/schema_edits.jl");
+static const FString DefaultVexUiScript = TEXT(
+	"tab(\"Overview\")\n"
+	"text(\"VEX UI Bridge\")\n"
+	"section(\"Compile\") {\n"
+	"text(@status_text)\n"
+	"text(@issue_count)\n"
+	"}\n"
+	"tab(\"Controls\")\n"
+	"section(\"Simulation\") {\n"
+	"slider(@spawn_rate, 0, 5000)\n"
+	"}\n"
+	"section(\"Diagnostics\") {\n"
+	"table(@issues, \"line,severity,message\")\n"
+	"}\n"
+	"tab(\"Schema\")\n"
+	"section(\"Manifest\") {\n"
+	"schema_table(\"vexSymbolRequirements\")\n"
+	"}\n"
+	"section(\"Edit\") {\n"
+	"schema_form(\"vexSymbolRequirements\", \"0\")\n"
+	"}\n"
+);
+
+namespace
+{
+	FString BuildTimestampStamp(const FDateTime& UtcNow)
+	{
+		return FString::Printf(
+			TEXT("%04d%02d%02dT%02d%02d%02d_%03dZ"),
+			UtcNow.GetYear(),
+			UtcNow.GetMonth(),
+			UtcNow.GetDay(),
+			UtcNow.GetHour(),
+			UtcNow.GetMinute(),
+			UtcNow.GetSecond(),
+			UtcNow.GetMillisecond());
+	}
+
+	FString MakeAbsoluteProjectPath(const FString& RelativePath)
+	{
+		return FPaths::ConvertRelativePathToFull(FPaths::ProjectDir(), RelativePath);
+	}
+
+	bool EnsureParentDirectory(const FString& AbsolutePath)
+	{
+		const FString DirectoryPath = FPaths::GetPath(AbsolutePath);
+		if (DirectoryPath.IsEmpty())
+		{
+			return true;
+		}
+		return IFileManager::Get().MakeDirectory(*DirectoryPath, true);
+	}
+
+	bool SaveUtf8Text(const FString& AbsolutePath, const FString& Text, FString& OutError, uint32 WriteFlags = 0)
+	{
+		if (!EnsureParentDirectory(AbsolutePath))
+		{
+			OutError = FString::Printf(TEXT("failed creating directory for '%s'"), *AbsolutePath);
+			return false;
+		}
+
+		if (!FFileHelper::SaveStringToFile(
+			Text,
+			*AbsolutePath,
+			FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM,
+			&IFileManager::Get(),
+			WriteFlags))
+		{
+			OutError = FString::Printf(TEXT("failed writing file '%s'"), *AbsolutePath);
+			return false;
+		}
+		return true;
+	}
+
+	bool SerializeJsonObject(const TSharedRef<FJsonObject>& Object, FString& OutJson, FString& OutError)
+	{
+		OutJson.Reset();
+		const TSharedRef<TJsonWriter<>> JsonWriter = TJsonWriterFactory<>::Create(&OutJson);
+		if (!FJsonSerializer::Serialize(Object, JsonWriter))
+		{
+			OutError = TEXT("failed to serialize json payload");
+			return false;
+		}
+		return true;
+	}
+
+	TSharedPtr<FJsonObject> MakeSchemaRowObject(const Flight::VexUI::FVexUiTableRow& Row)
+	{
+		TSharedPtr<FJsonObject> Object = MakeShared<FJsonObject>();
+
+		TSharedPtr<FJsonObject> FieldsObject = MakeShared<FJsonObject>();
+		for (const TPair<FString, FString>& Field : Row.Fields)
+		{
+			FieldsObject->SetStringField(Field.Key, Field.Value);
+		}
+		Object->SetObjectField(TEXT("fields"), FieldsObject);
+
+		TArray<TSharedPtr<FJsonValue>> Issues;
+		Issues.Reserve(Row.ValidationIssues.Num());
+		for (const FString& Issue : Row.ValidationIssues)
+		{
+			Issues.Add(MakeShared<FJsonValueString>(Issue));
+		}
+		Object->SetArrayField(TEXT("validationIssues"), Issues);
+		return Object;
+	}
+
+	TSharedRef<FJsonObject> BuildSchemaSnapshotObject(
+		const Flight::VexUI::FVexUiEditableCell& Edit,
+		const Flight::VexUI::FVexUiSchemaTableView& NextTable,
+		const FString& GeneratedAtUtcIso)
+	{
+		TSharedRef<FJsonObject> RootObject = MakeShared<FJsonObject>();
+		RootObject->SetStringField(TEXT("table"), NextTable.Name);
+		RootObject->SetStringField(TEXT("keyColumn"), NextTable.KeyColumn);
+		RootObject->SetStringField(TEXT("generatedAtUtc"), GeneratedAtUtcIso);
+
+		TSharedPtr<FJsonObject> EditObject = MakeShared<FJsonObject>();
+		EditObject->SetStringField(TEXT("tableName"), Edit.TableName);
+		EditObject->SetNumberField(TEXT("rowIndex"), Edit.RowIndex);
+		EditObject->SetStringField(TEXT("columnName"), Edit.ColumnName);
+		EditObject->SetStringField(TEXT("newValue"), Edit.NewValue);
+		RootObject->SetObjectField(TEXT("lastEdit"), EditObject);
+
+		TArray<TSharedPtr<FJsonValue>> ColumnArray;
+		ColumnArray.Reserve(NextTable.Columns.Num());
+		for (const Flight::VexUI::FVexUiSchemaColumn& Column : NextTable.Columns)
+		{
+			TSharedPtr<FJsonObject> ColumnObject = MakeShared<FJsonObject>();
+			ColumnObject->SetStringField(TEXT("name"), Column.Name);
+			ColumnObject->SetStringField(TEXT("type"), Column.Type);
+			ColumnObject->SetBoolField(TEXT("required"), Column.bRequired);
+			ColumnArray.Add(MakeShared<FJsonValueObject>(ColumnObject));
+		}
+		RootObject->SetArrayField(TEXT("columns"), ColumnArray);
+
+		TArray<TSharedPtr<FJsonValue>> RowArray;
+		RowArray.Reserve(NextTable.Rows.Num());
+		for (const Flight::VexUI::FVexUiTableRow& Row : NextTable.Rows)
+		{
+			RowArray.Add(MakeShared<FJsonValueObject>(MakeSchemaRowObject(Row)));
+		}
+		RootObject->SetArrayField(TEXT("rows"), RowArray);
+		return RootObject;
+	}
+
+	bool PersistSchemaEditSnapshot(
+		const Flight::VexUI::FVexUiEditableCell& Edit,
+		const Flight::VexUI::FVexUiSchemaTableView& NextTable,
+		FString& OutError)
+	{
+		const FDateTime UtcNow = FDateTime::UtcNow();
+		const FString TimestampStamp = BuildTimestampStamp(UtcNow);
+		const FString GeneratedAtUtcIso = UtcNow.ToIso8601();
+		const FString SafeTableName = FPaths::MakeValidFileName(Edit.TableName, TCHAR('_'));
+		const FString LatestRelativePath = FString::Printf(TEXT("%s/%s.json"), *OrchestratorSchemaEditsRelativeDir, *SafeTableName);
+		const FString LatestAbsolutePath = MakeAbsoluteProjectPath(LatestRelativePath);
+		const FString HistoryRelativePath = FString::Printf(
+			TEXT("%s/%s_%s_%llu.json"),
+			*OrchestratorSchemaEditsHistoryRelativeDir,
+			*SafeTableName,
+			*TimestampStamp,
+			static_cast<unsigned long long>(FPlatformTime::Cycles64()));
+		const FString HistoryAbsolutePath = MakeAbsoluteProjectPath(HistoryRelativePath);
+		const FString JournalAbsolutePath = MakeAbsoluteProjectPath(OrchestratorSchemaEditsJournalRelativePath);
+
+		const TSharedRef<FJsonObject> SnapshotObject = BuildSchemaSnapshotObject(Edit, NextTable, GeneratedAtUtcIso);
+
+		FString SnapshotJson;
+		if (!SerializeJsonObject(SnapshotObject, SnapshotJson, OutError))
+		{
+			return false;
+		}
+
+		if (!SaveUtf8Text(LatestAbsolutePath, SnapshotJson, OutError))
+		{
+			return false;
+		}
+		if (!SaveUtf8Text(HistoryAbsolutePath, SnapshotJson, OutError))
+		{
+			return false;
+		}
+
+		TSharedRef<FJsonObject> JournalEntry = MakeShared<FJsonObject>();
+		JournalEntry->SetStringField(TEXT("generatedAtUtc"), GeneratedAtUtcIso);
+		JournalEntry->SetStringField(TEXT("table"), Edit.TableName);
+		JournalEntry->SetNumberField(TEXT("rowIndex"), Edit.RowIndex);
+		JournalEntry->SetStringField(TEXT("column"), Edit.ColumnName);
+		JournalEntry->SetStringField(TEXT("newValue"), Edit.NewValue);
+		JournalEntry->SetStringField(TEXT("latestPath"), LatestRelativePath);
+		JournalEntry->SetStringField(TEXT("historyPath"), HistoryRelativePath);
+		JournalEntry->SetNumberField(TEXT("rowCount"), NextTable.Rows.Num());
+
+		FString JournalLine;
+		if (!SerializeJsonObject(JournalEntry, JournalLine, OutError))
+		{
+			return false;
+		}
+		JournalLine += LINE_TERMINATOR;
+		if (!SaveUtf8Text(JournalAbsolutePath, JournalLine, OutError, FILEWRITE_Append))
+		{
+			return false;
+		}
+
+		const FString ExportedManifest = UFlightScriptingLibrary::ExportRequirementManifest();
+		if (ExportedManifest.IsEmpty())
+		{
+			UE_LOG(
+				LogSwarmOrchestrator,
+				Warning,
+				TEXT("Schema snapshot persisted (latest='%s', history='%s'), but manifest export failed."),
+				*LatestAbsolutePath,
+				*HistoryAbsolutePath);
+		}
+
+		UE_LOG(
+			LogSwarmOrchestrator,
+			Log,
+			TEXT("Persisted schema edit snapshots latest='%s' history='%s' journal='%s' (table=%s row=%d column=%s)."),
+			*LatestAbsolutePath,
+			*HistoryAbsolutePath,
+			*JournalAbsolutePath,
+			*Edit.TableName,
+			Edit.RowIndex,
+			*Edit.ColumnName);
+		return true;
+	}
+}
 
 void SSwarmOrchestrator::Construct(const FArguments& InArgs)
 {
+	VexUiStore = MakeShared<Flight::VexUI::FVexUiStore>();
+	VexUiStore->Text(TEXT("@status_text"), TEXT("Status: Idle"));
+	VexUiStore->Text(TEXT("@issue_count"), TEXT("Issues: 0"));
+	VexUiStore->Number(TEXT("@spawn_rate"), SimParams.AvoidanceStrength);
+	VexUiStore->Table(TEXT("@issues"));
+	VexUiStore->SetSchemaCommitHook(
+		[](const Flight::VexUI::FVexUiEditableCell& Edit, const Flight::VexUI::FVexUiSchemaTableView& NextTable, FString& OutError)
+		{
+			return PersistSchemaEditSnapshot(Edit, NextTable, OutError);
+		});
+
 	ChildSlot
 	[
 		SNew(SSplitter)
@@ -140,6 +388,17 @@ void SSwarmOrchestrator::Construct(const FArguments& InArgs)
 				[
 					SAssignNew(CloudParamsPanel, SReflectedStatePanel, CloudParams)
 				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(5)
+				[
+					SNew(STextBlock).Text(LOCTEXT("VexUiTitle", "VEX UI (Reactive Scaffold)"))
+					.Font(FCoreStyle::GetDefaultFontStyle("Bold", 10))
+				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(5)
+				[
+					SAssignNew(VexUiPanel, Flight::VexUI::SVexPanel)
+					.Script(DefaultVexUiScript)
+					.Store(VexUiStore)
+				]
 			]
 		]
 	];
@@ -177,6 +436,7 @@ FReply SSwarmOrchestrator::OnCompileClicked()
 		BuildVexReplacementMaps(HlslBySymbol, VerseBySymbol, SymbolDefinitions);
 
 		const Flight::Vex::FVexParseResult ParseResult = Flight::Vex::ParseAndValidate(Source, SymbolDefinitions, false);
+		RefreshVexUiStore(ParseResult);
 		
 		FString GeneratedHLSL;
 		FString GeneratedVerse;
@@ -333,6 +593,47 @@ FString SSwarmOrchestrator::ParseVexToVerse(const FString& InVexCode)
 		return Flight::Vex::LowerToVerse(ParseResult.Program, VerseBySymbol);
 	}
 	return InVexCode;
+}
+
+void SSwarmOrchestrator::RefreshVexUiStore(const Flight::Vex::FVexParseResult& ParseResult)
+{
+	if (!VexUiStore.IsValid())
+	{
+		return;
+	}
+
+	const FString StatusLine = ParseResult.bSuccess
+		? TEXT("Status: Compile OK")
+		: TEXT("Status: Compile Failed");
+	VexUiStore->Text(TEXT("@status_text"), TEXT("Status: Idle")).Set(StatusLine);
+
+	const int32 TotalIssues = ParseResult.Issues.Num() + ParseResult.UnknownSymbols.Num();
+	VexUiStore->Text(TEXT("@issue_count"), TEXT("Issues: 0"))
+		.Set(FString::Printf(TEXT("Issues: %d"), TotalIssues));
+
+	VexUiStore->Number(TEXT("@spawn_rate"), SimParams.AvoidanceStrength).Set(SimParams.AvoidanceStrength);
+
+	TArray<Flight::VexUI::FVexUiTableRow> IssueRows;
+	IssueRows.Reserve(ParseResult.Issues.Num() + ParseResult.UnknownSymbols.Num());
+	for (const Flight::Vex::FVexIssue& Issue : ParseResult.Issues)
+	{
+		Flight::VexUI::FVexUiTableRow Row;
+		Row.Fields.Add(TEXT("line"), FString::FromInt(Issue.Line));
+		Row.Fields.Add(TEXT("severity"), Issue.Severity == Flight::Vex::EVexIssueSeverity::Error ? TEXT("error") : TEXT("warning"));
+		Row.Fields.Add(TEXT("message"), Issue.Message);
+		IssueRows.Add(MoveTemp(Row));
+	}
+
+	for (const FString& UnknownSymbol : ParseResult.UnknownSymbols)
+	{
+		Flight::VexUI::FVexUiTableRow Row;
+		Row.Fields.Add(TEXT("line"), TEXT("-"));
+		Row.Fields.Add(TEXT("severity"), TEXT("warning"));
+		Row.Fields.Add(TEXT("message"), FString::Printf(TEXT("Unknown symbol %s"), *UnknownSymbol));
+		IssueRows.Add(MoveTemp(Row));
+	}
+
+	VexUiStore->Table(TEXT("@issues")).Set(IssueRows);
 }
 
 #undef LOCTEXT_NAMESPACE

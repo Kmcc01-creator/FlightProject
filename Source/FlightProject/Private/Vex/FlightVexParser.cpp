@@ -79,8 +79,22 @@ namespace
 			else if (Ch == TEXT(',')) AddSingle(EVexTokenKind::Comma);
 			else if (Ch == TEXT('.')) AddSingle(EVexTokenKind::Dot);
 			else if (Ch == TEXT(';')) AddSingle(EVexTokenKind::Semicolon);
-			else if (FString(TEXT("+-*/%=<>!|")).Contains(FString(1, &Ch))) {
-				int32 End = Index + 1; if (End < Source.Len() && FString(TEXT("=<>!|")).Contains(FString(1, &Source[End]))) ++End;
+			else if (FString(TEXT("+-*/%=<>!|&")).Contains(FString(1, &Ch))) {
+				int32 End = Index + 1;
+				// Maximal Munch: Sort multi-char operators by descending length
+				static const TCHAR* MultiOps[] = { TEXT("||"), TEXT("&&"), TEXT("<|"), TEXT("|>"), TEXT("+="), TEXT("-="), TEXT("*="), TEXT("/="), TEXT("=="), TEXT("!="), TEXT("<="), TEXT(">=") };
+				if (Index + 1 < Source.Len())
+				{
+					const FString Sub = Source.Mid(Index, 2);
+					for (const TCHAR* MultiOp : MultiOps)
+					{
+						if (Sub == MultiOp)
+						{
+							End = Index + 2;
+							break;
+						}
+					}
+				}
 				FVexToken T; T.Kind = EVexTokenKind::Operator; T.Lexeme = Source.Mid(Index, End - Index); T.Line = TLine; T.Column = TCol;
 				Tokens.Add(MoveTemp(T)); Col += End - Index; Index = End;
 			}
@@ -450,6 +464,8 @@ namespace
 			return EVexValueType::Unknown;
 		}
 		case EVexExprKind::Pipe:
+		case EVexExprKind::PipeIn:
+		case EVexExprKind::PipeOut:
 		{
 			const EVexValueType PipedType = InferExpressionTypeFromAst(Node.LeftNodeIndex, Expressions, SymbolByName, Locals);
 			if (Expressions.IsValidIndex(Node.RightNodeIndex))
@@ -460,6 +476,7 @@ namespace
 					if (RightNode.Lexeme == TEXT("sample_sdf")) return EVexValueType::Float;
 					if (RightNode.Lexeme == TEXT("gradient")) return EVexValueType::Float3;
 					if (RightNode.Lexeme == TEXT("smoothstep")) return EVexValueType::Float;
+					if (RightNode.Lexeme == TEXT("count_hits")) return EVexValueType::Int;
 					if (RightNode.Lexeme == TEXT("clamp") || RightNode.Lexeme == TEXT("normalize")) return PipedType;
 				}
 				return InferExpressionTypeFromAst(Node.RightNodeIndex, Expressions, SymbolByName, Locals);
@@ -551,6 +568,50 @@ namespace
 				}
 			}
 
+			if (S.ExpressionNodeIndex != INDEX_NONE)
+			{
+				TArray<int32> NodeStack;
+				NodeStack.Add(S.ExpressionNodeIndex);
+				while (NodeStack.Num() > 0)
+				{
+					const int32 NodeIndex = NodeStack.Pop(EAllowShrinking::No);
+					if (!Program.Expressions.IsValidIndex(NodeIndex))
+					{
+						continue;
+					}
+
+					const FVexExpressionAst& Node = Program.Expressions[NodeIndex];
+					if (Node.Kind == EVexExprKind::PipeIn)
+					{
+						if (CurrentContext != EFlightVexSymbolResidency::GpuOnly)
+						{
+							const int32 TLine = Program.Tokens.IsValidIndex(Node.TokenIndex) ? Program.Tokens[Node.TokenIndex].Line : 1;
+							const int32 TCol = Program.Tokens.IsValidIndex(Node.TokenIndex) ? Program.Tokens[Node.TokenIndex].Column : 1;
+							AddIssue(OutIssues, EVexIssueSeverity::Error, TEXT("Inject pipe `<|` can only be used within a `@gpu` context."), TLine, TCol);
+						}
+					}
+					else if (Node.Kind == EVexExprKind::PipeOut)
+					{
+						if (CurrentContext != EFlightVexSymbolResidency::CpuOnly)
+						{
+							const int32 TLine = Program.Tokens.IsValidIndex(Node.TokenIndex) ? Program.Tokens[Node.TokenIndex].Line : 1;
+							const int32 TCol = Program.Tokens.IsValidIndex(Node.TokenIndex) ? Program.Tokens[Node.TokenIndex].Column : 1;
+							AddIssue(OutIssues, EVexIssueSeverity::Error, TEXT("Extract pipe `|>` can only be used within a `@cpu` context."), TLine, TCol);
+						}
+					}
+
+					if (Node.LeftNodeIndex != INDEX_NONE) NodeStack.Add(Node.LeftNodeIndex);
+					if (Node.RightNodeIndex != INDEX_NONE) NodeStack.Add(Node.RightNodeIndex);
+					for (const int32 ArgIndex : Node.ArgumentNodeIndices)
+					{
+						if (ArgIndex != INDEX_NONE)
+						{
+							NodeStack.Add(ArgIndex);
+						}
+					}
+				}
+			}
+
 			if (S.StartTokenIndex == INDEX_NONE || S.EndTokenIndex == INDEX_NONE) continue;
 
 			for (int32 i = S.StartTokenIndex; i <= S.EndTokenIndex; ++i)
@@ -631,6 +692,11 @@ namespace
 			return ParsePipe();
 		}
 
+		int32 GetCursor() const
+		{
+			return Cursor;
+		}
+
 	private:
 		const TArray<FVexToken>& Tokens;
 		int32 Cursor;
@@ -659,7 +725,7 @@ namespace
 			return true;
 		}
 
-		bool MatchOperator(const TCHAR* OpLexeme)
+		bool MatchOperator(const FString& OpLexeme)
 		{
 			const FVexToken* Token = Peek();
 			if (!Token || Token->Kind != EVexTokenKind::Operator || Token->Lexeme != OpLexeme)
@@ -678,25 +744,36 @@ namespace
 		int32 ParsePipe()
 		{
 			int32 Left = ParseLogicalOr();
-			while (MatchOperator(TEXT("|")))
+			for (;;)
 			{
-				const int32 OpTokenIndex = Cursor - 1;
-				const int32 Right = ParseLogicalOr();
-
-				FVexExpressionAst PipeNode;
-				PipeNode.Kind = EVexExprKind::Pipe;
-				PipeNode.TokenIndex = OpTokenIndex;
-				PipeNode.Lexeme = TEXT("|");
-				PipeNode.LeftNodeIndex = Left;
-				PipeNode.RightNodeIndex = Right;
-
-				if (OutNodes.IsValidIndex(Right) &&
-					(OutNodes[Right].Kind == EVexExprKind::FunctionCall || OutNodes[Right].Kind == EVexExprKind::Identifier))
+				const FVexToken* Token = Peek();
+				if (Token && Token->Kind == EVexTokenKind::Operator && (Token->Lexeme == TEXT("|") || Token->Lexeme == TEXT("<|") || Token->Lexeme == TEXT("|>")))
 				{
-					PipeNode.Lexeme = OutNodes[Right].Lexeme;
-				}
+					const FString OpLex = Token->Lexeme;
+					const int32 OpTokenIndex = Cursor;
+					++Cursor;
+					const int32 Right = ParseLogicalOr();
 
-				Left = AddNode(MoveTemp(PipeNode));
+					FVexExpressionAst PipeNode;
+					if (OpLex == TEXT("<|")) PipeNode.Kind = EVexExprKind::PipeIn;
+					else if (OpLex == TEXT("|>")) PipeNode.Kind = EVexExprKind::PipeOut;
+					else PipeNode.Kind = EVexExprKind::Pipe;
+
+					PipeNode.TokenIndex = OpTokenIndex;
+					PipeNode.Lexeme = OpLex;
+					PipeNode.LeftNodeIndex = Left;
+					PipeNode.RightNodeIndex = Right;
+
+					if (OutNodes.IsValidIndex(Right) &&
+						(OutNodes[Right].Kind == EVexExprKind::FunctionCall || OutNodes[Right].Kind == EVexExprKind::Identifier))
+					{
+						PipeNode.Lexeme = OutNodes[Right].Lexeme;
+					}
+
+					Left = AddNode(MoveTemp(PipeNode));
+					continue;
+				}
+				break;
 			}
 			return Left;
 		}
@@ -704,17 +781,24 @@ namespace
 		int32 ParseLogicalOr()
 		{
 			int32 Left = ParseLogicalAnd();
-			while (MatchOperator(TEXT("||")))
+			for (;;)
 			{
-				const int32 OpTokenIndex = Cursor - 1;
-				const int32 Right = ParseLogicalAnd();
-				FVexExpressionAst Node;
-				Node.Kind = EVexExprKind::BinaryOp;
-				Node.TokenIndex = OpTokenIndex;
-				Node.Lexeme = TEXT("||");
-				Node.LeftNodeIndex = Left;
-				Node.RightNodeIndex = Right;
-				Left = AddNode(MoveTemp(Node));
+				const FVexToken* Token = Peek();
+				if (Token && Token->Kind == EVexTokenKind::Operator && Token->Lexeme == TEXT("||"))
+				{
+					const int32 OpTokenIndex = Cursor;
+					++Cursor;
+					const int32 Right = ParseLogicalAnd();
+					FVexExpressionAst Node;
+					Node.Kind = EVexExprKind::BinaryOp;
+					Node.TokenIndex = OpTokenIndex;
+					Node.Lexeme = TEXT("||");
+					Node.LeftNodeIndex = Left;
+					Node.RightNodeIndex = Right;
+					Left = AddNode(MoveTemp(Node));
+					continue;
+				}
+				break;
 			}
 			return Left;
 		}
@@ -722,17 +806,24 @@ namespace
 		int32 ParseLogicalAnd()
 		{
 			int32 Left = ParseEquality();
-			while (MatchOperator(TEXT("&&")))
+			for (;;)
 			{
-				const int32 OpTokenIndex = Cursor - 1;
-				const int32 Right = ParseEquality();
-				FVexExpressionAst Node;
-				Node.Kind = EVexExprKind::BinaryOp;
-				Node.TokenIndex = OpTokenIndex;
-				Node.Lexeme = TEXT("&&");
-				Node.LeftNodeIndex = Left;
-				Node.RightNodeIndex = Right;
-				Left = AddNode(MoveTemp(Node));
+				const FVexToken* Token = Peek();
+				if (Token && Token->Kind == EVexTokenKind::Operator && Token->Lexeme == TEXT("&&"))
+				{
+					const int32 OpTokenIndex = Cursor;
+					++Cursor;
+					const int32 Right = ParseEquality();
+					FVexExpressionAst Node;
+					Node.Kind = EVexExprKind::BinaryOp;
+					Node.TokenIndex = OpTokenIndex;
+					Node.Lexeme = TEXT("&&");
+					Node.LeftNodeIndex = Left;
+					Node.RightNodeIndex = Right;
+					Left = AddNode(MoveTemp(Node));
+					continue;
+				}
+				break;
 			}
 			return Left;
 		}
@@ -976,15 +1067,83 @@ namespace
 		}
 	};
 
-	int32 BuildExpressionAst(const TArray<FVexToken>& Tokens, const int32 Start, const int32 End, TArray<FVexExpressionAst>& OutNodes)
+	int32 BuildExpressionAst(const TArray<FVexToken>& Tokens, const int32 Start, const int32 End, TArray<FVexExpressionAst>& OutNodes, int32* OutCursor = nullptr)
 	{
 		if (Start > End || !Tokens.IsValidIndex(Start) || !Tokens.IsValidIndex(End))
 		{
+			if (OutCursor)
+			{
+				*OutCursor = Start;
+			}
 			return INDEX_NONE;
 		}
 
 		FExpressionParser Parser(Tokens, Start, End, OutNodes);
-		return Parser.ParseExpression();
+		const int32 RootIndex = Parser.ParseExpression();
+		if (OutCursor)
+		{
+			*OutCursor = Parser.GetCursor();
+		}
+		return RootIndex;
+	}
+
+	void ValidateExpressionShapes(const TArray<FVexToken>& Tokens, const FVexProgramAst& Program, TArray<FVexIssue>& OutIssues)
+	{
+		for (const FVexStatementAst& Statement : Program.Statements)
+		{
+			if (Statement.Kind != EVexStatementKind::Expression
+				&& Statement.Kind != EVexStatementKind::Assignment
+				&& Statement.Kind != EVexStatementKind::IfHeader)
+			{
+				continue;
+			}
+
+			if (Statement.ExpressionNodeIndex == INDEX_NONE)
+			{
+				const int32 Line = Tokens.IsValidIndex(Statement.StartTokenIndex) ? Tokens[Statement.StartTokenIndex].Line : 1;
+				const int32 Column = Tokens.IsValidIndex(Statement.StartTokenIndex) ? Tokens[Statement.StartTokenIndex].Column : 1;
+				AddIssue(OutIssues, EVexIssueSeverity::Error, TEXT("Malformed expression."), Line, Column);
+				continue;
+			}
+
+			TSet<int32> VisitedNodes;
+			TArray<int32> NodeStack;
+			NodeStack.Add(Statement.ExpressionNodeIndex);
+			while (NodeStack.Num() > 0)
+			{
+				const int32 NodeIndex = NodeStack.Pop(EAllowShrinking::No);
+				if (!Program.Expressions.IsValidIndex(NodeIndex) || VisitedNodes.Contains(NodeIndex))
+				{
+					continue;
+				}
+				VisitedNodes.Add(NodeIndex);
+
+				const FVexExpressionAst& Node = Program.Expressions[NodeIndex];
+				const int32 Line = Tokens.IsValidIndex(Node.TokenIndex) ? Tokens[Node.TokenIndex].Line : 1;
+				const int32 Column = Tokens.IsValidIndex(Node.TokenIndex) ? Tokens[Node.TokenIndex].Column : 1;
+
+				if (Node.Kind == EVexExprKind::UnaryOp && Node.LeftNodeIndex == INDEX_NONE)
+				{
+					AddIssue(OutIssues, EVexIssueSeverity::Error, TEXT("Malformed unary expression."), Line, Column);
+				}
+
+				if ((Node.Kind == EVexExprKind::BinaryOp || Node.Kind == EVexExprKind::Pipe || Node.Kind == EVexExprKind::PipeIn || Node.Kind == EVexExprKind::PipeOut)
+					&& (Node.LeftNodeIndex == INDEX_NONE || Node.RightNodeIndex == INDEX_NONE))
+				{
+					AddIssue(OutIssues, EVexIssueSeverity::Error, FString::Printf(TEXT("Malformed expression near operator '%s'."), *Node.Lexeme), Line, Column);
+				}
+
+				if (Node.LeftNodeIndex != INDEX_NONE) NodeStack.Add(Node.LeftNodeIndex);
+				if (Node.RightNodeIndex != INDEX_NONE) NodeStack.Add(Node.RightNodeIndex);
+				for (const int32 ArgIndex : Node.ArgumentNodeIndices)
+				{
+					if (ArgIndex != INDEX_NONE)
+					{
+						NodeStack.Add(ArgIndex);
+					}
+				}
+			}
+		}
 	}
 }
 
@@ -1092,8 +1251,16 @@ FVexParseResult ParseAndValidate(const FString& Source, const TArray<FVexSymbolD
 			}
 		}
 
-		Statement.ExpressionNodeIndex = BuildExpressionAst(Res.Program.Tokens, ExprStart, ExprEnd, Res.Program.Expressions);
+		int32 ParsedCursor = ExprStart;
+		Statement.ExpressionNodeIndex = BuildExpressionAst(Res.Program.Tokens, ExprStart, ExprEnd, Res.Program.Expressions, &ParsedCursor);
+		if (ParsedCursor <= ExprEnd && Res.Program.Tokens.IsValidIndex(ParsedCursor))
+		{
+			const FVexToken& Unexpected = Res.Program.Tokens[ParsedCursor];
+			AddIssue(Res.Issues, EVexIssueSeverity::Error, FString::Printf(TEXT("Unexpected token '%s' in expression."), *Unexpected.Lexeme), Unexpected.Line, Unexpected.Column);
+		}
 	}
+
+	ValidateExpressionShapes(Res.Program.Tokens, Res.Program, Res.Issues);
 
 	TSet<FString> UsedSymbolsSet;
 	for (const FVexToken& Token : Res.Program.Tokens)
@@ -1215,6 +1382,8 @@ FString FormatIssues(const TArray<FVexIssue>& Issues) { FString F; for (const FV
 				return FString::Printf(TEXT("%s(%s)"), *Node.Lexeme, *FString::Join(Args, TEXT(", ")));
 			}
 			case EVexExprKind::Pipe:
+			case EVexExprKind::PipeIn:
+			case EVexExprKind::PipeOut:
 			{
 				const FString Piped = Expression(Node.LeftNodeIndex, Program, SymbolMap);
 				if (Program.Expressions.IsValidIndex(Node.RightNodeIndex))

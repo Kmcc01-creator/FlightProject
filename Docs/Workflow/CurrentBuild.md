@@ -5,7 +5,7 @@ This document outlines the build system configuration, test execution patterns, 
 ## 1. Test Execution & Discovery
 This section captures the most recent observed build/test outcomes and commands used for repeatable triage.
 
-### Latest Build Snapshot (2026-03-08)
+### Latest Build Snapshot (2026-03-09)
 - `./Scripts/build_targets.sh Development` succeeded for `FlightProjectEditor` on Linux.
 - Recent non-parser hardening compiled cleanly:
   - schema-driven command handling fix (`INVALID_AFFINITY` + fail-fast unknown types)
@@ -13,11 +13,16 @@ This section captures the most recent observed build/test outcomes and commands 
   - required-symbol enforcement in `UFlightVerseSubsystem::CompileVex`
   - explicit Verse compile-state metadata (`GeneratedOnly`/`VmCompiled`/`VmCompileFailed`)
   - scripting accessors for compile state/executability/diagnostics
-  - truthful non-executable Verse compile reporting and behavior metadata storage
+  - executable native fallback Verse runtime path (compile + behavior execution) with truthful diagnostics
+  - VM procedure wrapper execution path (`VProcedure` + `VFunction::Invoke`) with native fallback retained as safety net
+  - experimental `IAssemblerPass` scaffold registration in `FlightProject` module (codegen/link hook only)
   - hardened concurrency spec world acquisition + async compile-state assertions
+- Parser stabilization also compiled cleanly:
+  - precedence-aware expression parser (`function call`, `dot`, `pipe`, vector literals)
+  - parser-side required-symbol enforcement path (`bRequireAllRequiredSymbols`)
+  - mega-kernel hoisting/local alias generation aligned with parser tests
 
-### Latest Headless Automation Snapshot (2026-03-08)
-- `Automation RunTests FlightProject` discovered **49** tests in headless/`NullRHI`.
+### Latest Headless Automation Snapshot (2026-03-09)
 - Focused hardening bucket now passes:
   - `FlightProject.Integration.SchemaDriven`
   - `FlightProject.Schema.Vex.ManifestValidation`
@@ -27,10 +32,25 @@ This section captures the most recent observed build/test outcomes and commands 
   - `FlightProject.Integration.Concurrency`
   - `FlightProject.Verse.CompileContract`
   - `FlightProject.Verse.Subsystem`
-- Current known parser failures in broader focused runs (parser track in progress):
-  - `FlightProject.Schema.Vex.Parser.Semantics.IfConditionBoolLike`
-  - `FlightProject.Schema.Vex.Parser.Semantics.TypeMismatch`
-  - `FlightProject.Schema.Vex.Parser.Diagnostics`
+- Parser bucket now passes:
+  - `FlightProject.Schema.Vex.Parser` (`17/17`)
+- Mixed schema/Verse/parser bucket now passes:
+  - `FlightProject.Integration.SchemaDriven`
+  - `FlightProject.Schema.Vex.ManifestValidation`
+  - `FlightProject.Verse.CompileContract`
+  - `FlightProject.Verse.Subsystem`
+  - `FlightProject.Schema.Vex.Parser` (parser-inclusive focused bucket remains green after operator suite expansion)
+- Extended mixed bucket with vertical-slice now passes:
+  - `FlightProject.Integration.Vex.VerticalSlice`
+  - combined focused result: `32/32`
+- Parser/operator diagnostics now covered in headless runs:
+  - `FlightProject.Schema.Vex.Parser.Diagnostics.InvalidExtractOperator`
+  - `FlightProject.Schema.Vex.Parser.Diagnostics.InvalidSingleAmpersand`
+- Verse online focused bucket passes (`10/10`):
+  - `FlightProject.Verse.CompileContract`
+  - `FlightProject.Verse.Subsystem`
+  - `FlightProject.Integration.Vex.VerticalSlice`
+  - `FlightProject.Integration.Concurrency`
 - GPU-oriented tests still expected to skip in `NullRHI` contexts.
 
 ### Key Learning: Discovery Context
@@ -96,6 +116,38 @@ stdbuf -oL -eL "$UE_ROOT/Engine/Binaries/Linux/UnrealEditor-Cmd" \
 ```bash
 export UE_ROOT=/home/kelly/Unreal/UnrealEngine
 TEST_FILTER="FlightProject.Integration.SchemaDriven+FlightProject.Schema.Vex.ManifestValidation+FlightProject.Verse.CompileContract+FlightProject.Verse.Subsystem" \
+TEST_LOG_PROFILE=focused TEST_STREAM_FILTER=errors \
+./Scripts/run_tests_headless.sh
+```
+
+**Assembler Scaffold Smoke Test:**
+```bash
+export UE_ROOT=/home/kelly/Unreal/UnrealEngine
+TEST_FILTER="FlightProject.Verse.AssemblerScaffold" \
+TEST_LOG_PROFILE=focused TEST_STREAM_FILTER=errors \
+./Scripts/run_tests_headless.sh
+```
+
+**Parser Bucket (Focused):**
+```bash
+export UE_ROOT=/home/kelly/Unreal/UnrealEngine
+TEST_FILTER="FlightProject.Schema.Vex.Parser" \
+TEST_LOG_PROFILE=focused TEST_STREAM_FILTER=errors \
+./Scripts/run_tests_headless.sh
+```
+
+**Mixed Bucket (Schema + Verse + Parser):**
+```bash
+export UE_ROOT=/home/kelly/Unreal/UnrealEngine
+TEST_FILTER="FlightProject.Integration.SchemaDriven+FlightProject.Schema.Vex.ManifestValidation+FlightProject.Verse.CompileContract+FlightProject.Verse.Subsystem+FlightProject.Schema.Vex.Parser" \
+TEST_LOG_PROFILE=focused TEST_STREAM_FILTER=errors \
+./Scripts/run_tests_headless.sh
+```
+
+**Extended Mixed Bucket (Schema + Verse + Parser + Vertical Slice):**
+```bash
+export UE_ROOT=/home/kelly/Unreal/UnrealEngine
+TEST_FILTER="FlightProject.Integration.SchemaDriven+FlightProject.Schema.Vex.ManifestValidation+FlightProject.Verse.CompileContract+FlightProject.Verse.Subsystem+FlightProject.Schema.Vex.Parser+FlightProject.Integration.Vex.VerticalSlice" \
 TEST_LOG_PROFILE=focused TEST_STREAM_FILTER=errors \
 ./Scripts/run_tests_headless.sh
 ```

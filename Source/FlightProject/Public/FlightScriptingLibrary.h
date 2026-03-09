@@ -189,7 +189,7 @@ public:
 
     /**
      * Compiles VEX source code using the Verse subsystem for a specific behavior ID.
-     * Returns true only when an executable Verse VM procedure is produced.
+     * Returns true only when an executable behavior is produced.
      * OutErrors always includes parse/contract diagnostics and generated Verse preview.
      */
     UFUNCTION(BlueprintCallable, Category = "Flight|Scripting|Vex", meta = (WorldContext = "WorldContextObject"))
@@ -211,7 +211,7 @@ public:
     UFUNCTION(BlueprintPure, Category = "Flight|Scripting|Vex", meta = (WorldContext = "WorldContextObject"))
     static EFlightVerseCompileState GetBehaviorCompileState(const UObject* WorldContextObject, int32 BehaviorID);
 
-    /** Returns true when the behavior has an executable Verse VM procedure. */
+    /** Returns true when the behavior has an executable runtime path. */
     UFUNCTION(BlueprintPure, Category = "Flight|Scripting|Vex", meta = (WorldContext = "WorldContextObject"))
     static bool IsBehaviorExecutable(const UObject* WorldContextObject, int32 BehaviorID);
 

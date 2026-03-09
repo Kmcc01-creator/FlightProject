@@ -70,7 +70,9 @@ enum class EVexExprKind : uint8
 	UnaryOp,
 	BinaryOp,
 	FunctionCall,
-	Pipe
+	Pipe,
+	PipeIn,  // Host <| Device (Control/Inject)
+	PipeOut  // Device |> Host (Perception/Extract)
 };
 
 /** Descriptor for a concurrent task block capture group. */

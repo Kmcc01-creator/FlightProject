@@ -26,6 +26,9 @@ As a solo developer building a simulation-focused project, the goal is to **spen
 | [EditorAutomation.md](EditorAutomation.md) | Python tools, Editor Utility Widgets, bulk operations |
 | [DataDrivenDesign.md](DataDrivenDesign.md) | CSV workflows, Data Assets, runtime tuning |
 | [PythonAPI.md](PythonAPI.md) | Exposing C++ to Python (reflection patterns) |
+| [VexSchemaValidation.md](VexSchemaValidation.md) | Schema-driven VEX symbol contracts, validation gates, and diagnostics |
+| [VerseAssemblerScaffold.md](VerseAssemblerScaffold.md) | Verse/Solaris `IAssemblerPass` scaffold and phased bytecode plan |
+| [VexUiScaffold.md](VexUiScaffold.md) | VEX-authored Slate composition and reactive data binding scaffold |
 
 ## Directory Structure
 

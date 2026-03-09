@@ -8,6 +8,12 @@
 #include "Swarm/FlightSwarmSubsystem.h"
 #include "Vex/FlightVexParser.h"
 
+namespace Flight::VexUI
+{
+class FVexUiStore;
+class SVexPanel;
+}
+
 class FLIGHTPROJECT_API SSwarmOrchestrator : public SCompoundWidget
 {
 public:
@@ -33,6 +39,8 @@ private:
 	TSharedPtr<class SReflectedStatePanel> SimParamsPanel;
 	TSharedPtr<class SReflectedStatePanel> LatticeParamsPanel;
 	TSharedPtr<class SReflectedStatePanel> CloudParamsPanel;
+	TSharedPtr<Flight::VexUI::FVexUiStore> VexUiStore;
+	TSharedPtr<Flight::VexUI::SVexPanel> VexUiPanel;
 
 	// Helper to build replacement maps from schema
 	void BuildVexReplacementMaps(
@@ -49,4 +57,5 @@ private:
 	// Parsing logic
 	FString ParseVexToHLSL(const FString& InVexCode);
 	FString ParseVexToVerse(const FString& InVexCode);
+	void RefreshVexUiStore(const Flight::Vex::FVexParseResult& ParseResult);
 };

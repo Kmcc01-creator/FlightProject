@@ -9,6 +9,27 @@
 #include "Swarm/SwarmSimulationTypes.h"
 #include "Engine/Engine.h"
 
+namespace
+{
+	UWorld* FindAutomationWorld()
+	{
+		if (!GEngine)
+		{
+			return nullptr;
+		}
+
+		for (const FWorldContext& Context : GEngine->GetWorldContexts())
+		{
+			if (Context.WorldType == EWorldType::Editor || Context.WorldType == EWorldType::PIE)
+			{
+				return Context.World();
+			}
+		}
+
+		return nullptr;
+	}
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVexParsingTest, "FlightProject.Vex.Parsing", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FFlightVexParsingTest::RunTest(const FString& Parameters)
@@ -157,13 +178,13 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVerseCompileContractTest, "FlightProject
 
 bool FFlightVerseCompileContractTest::RunTest(const FString& Parameters)
 {
-	if (!GEngine || GEngine->GetWorldContexts().Num() == 0 || !GEngine->GetWorldContexts()[0].World())
+	UWorld* World = FindAutomationWorld();
+	if (!World)
 	{
 		AddError(TEXT("No valid world context available for Verse compile contract test"));
 		return false;
 	}
 
-	UWorld* World = GEngine->GetWorldContexts()[0].World();
 	UFlightVerseSubsystem* VerseSubsystem = World ? World->GetSubsystem<UFlightVerseSubsystem>() : nullptr;
 	if (!VerseSubsystem)
 	{
@@ -182,27 +203,50 @@ bool FFlightVerseCompileContractTest::RunTest(const FString& Parameters)
 		const FString FullContractSource = TEXT("@gpu { @velocity = @position; @shield = @shield; @status = @status; }");
 		FString OutErrors;
 		const bool bCompiled = VerseSubsystem->CompileVex(9002, FullContractSource, OutErrors);
-		TestFalse(TEXT("Compile should report non-executable status while VM bridge is incomplete"), bCompiled);
+		TestTrue(TEXT("Compile should succeed when native fallback executor can run the behavior"), bCompiled);
 		TestTrue(TEXT("Compile output should include generated Verse text"), OutErrors.Contains(TEXT("Generated Verse:")));
-		TestTrue(TEXT("Compile output should report non-executable VM status"), OutErrors.Contains(TEXT("not executable")));
+		TestTrue(TEXT("Compile output should report executable runtime path"),
+			OutErrors.Contains(TEXT("Verse VM procedure")) || OutErrors.Contains(TEXT("native fallback executor")));
 
 		const UFlightVerseSubsystem::FVerseBehavior* Behavior = VerseSubsystem->Behaviors.Find(9002);
-		TestNotNull(TEXT("Behavior metadata should be registered even when VM compile is unavailable"), Behavior);
+		TestNotNull(TEXT("Behavior metadata should be registered"), Behavior);
 		if (Behavior)
 		{
-			TestFalse(TEXT("Behavior should not be executable yet"), Behavior->bHasExecutableProcedure);
+			TestTrue(TEXT("Behavior should be executable"), Behavior->bHasExecutableProcedure);
+			TestTrue(TEXT("Behavior should use native fallback path"), Behavior->bUsesNativeFallback);
 			TestTrue(TEXT("Behavior should store generated Verse source"), !Behavior->GeneratedVerseCode.IsEmpty());
-			TestEqual(TEXT("Behavior compile state should be GeneratedOnly"), Behavior->CompileState, EFlightVerseCompileState::GeneratedOnly);
-			TestTrue(TEXT("Behavior should retain compile diagnostics"), Behavior->LastCompileDiagnostics.Contains(TEXT("not executable")));
+			TestEqual(TEXT("Behavior compile state should be VmCompiled"), Behavior->CompileState, EFlightVerseCompileState::VmCompiled);
+			TestTrue(TEXT("Behavior should retain compile diagnostics"), !Behavior->LastCompileDiagnostics.IsEmpty());
+#if WITH_VERSE_VM || defined(__INTELLISENSE__)
+			if (Behavior->bUsesVmEntryPoint)
+			{
+				TestNotNull(TEXT("VM procedure should be created when VM path is active"), Behavior->Procedure.Get());
+				TestNotNull(TEXT("VM entrypoint should be created when VM path is active"), Behavior->VmEntryPoint.Get());
+				TestTrue(TEXT("Diagnostics should mention VM procedure path"), Behavior->LastCompileDiagnostics.Contains(TEXT("Verse VM procedure")));
+			}
+			else
+			{
+				TestTrue(TEXT("Diagnostics should mention fallback path when VM procedure is unavailable"),
+					Behavior->LastCompileDiagnostics.Contains(TEXT("native fallback executor")));
+			}
+#else
+			TestTrue(TEXT("Behavior should retain fallback diagnostics"), Behavior->LastCompileDiagnostics.Contains(TEXT("native fallback executor")));
+#endif
 		}
 
-		TestEqual(TEXT("Scripting accessor should report GeneratedOnly state"),
+		TestEqual(TEXT("Scripting accessor should report VmCompiled state"),
 			UFlightScriptingLibrary::GetBehaviorCompileState(World, 9002),
-			EFlightVerseCompileState::GeneratedOnly);
-		TestFalse(TEXT("Scripting accessor should report non-executable behavior"),
+			EFlightVerseCompileState::VmCompiled);
+		TestTrue(TEXT("Scripting accessor should report executable behavior"),
 			UFlightScriptingLibrary::IsBehaviorExecutable(World, 9002));
 		TestTrue(TEXT("Scripting accessor should return compile diagnostics"),
-			UFlightScriptingLibrary::GetBehaviorCompileDiagnostics(World, 9002).Contains(TEXT("not executable")));
+			!UFlightScriptingLibrary::GetBehaviorCompileDiagnostics(World, 9002).IsEmpty());
+
+		Flight::Swarm::FDroidState DroidState;
+		DroidState.Position = FVector3f(9.0f, -2.0f, 5.0f);
+		DroidState.Velocity = FVector3f::ZeroVector;
+		VerseSubsystem->ExecuteBehavior(9002, DroidState);
+		TestEqual(TEXT("Native fallback execution should apply assignment"), DroidState.Velocity, DroidState.Position);
 	}
 
 	return true;

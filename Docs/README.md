@@ -61,6 +61,8 @@ Python, Blueprint, and data-driven development workflows.
 | [DataDrivenDesign.md](Scripting/DataDrivenDesign.md) | CSV workflows, Data Assets, runtime tuning |
 | [PythonAPI.md](Scripting/PythonAPI.md) | Exposing C++ to Python (reflection) |
 | [VexSchemaValidation.md](Scripting/VexSchemaValidation.md) | Schema-driven VEX symbol contracts and tooling |
+| [VerseAssemblerScaffold.md](Scripting/VerseAssemblerScaffold.md) | `IAssemblerPass` scaffold, capability matrix, and Verse/Solaris viability plan |
+| [VexUiScaffold.md](Scripting/VexUiScaffold.md) | VEX-authored Slate composition, reactive signals, and schema snapshot workflow |
 
 ### [Future/](Future/) - Roadmap & Proposals
 

@@ -8,6 +8,8 @@ FlightProject is an Unreal Engine 5 workspace rooted at `FlightProject.uproject`
 - `./Scripts/build_targets.sh Development` compiles C++ targets; pass `Shipping` or `Test` as needed.
 - `./Scripts/run_editor.sh -Log --wayland` starts UnrealEditor with helpers from `env_common.sh`.
 - `./Scripts/run_game.sh --no-build -- -windowed` stages/cooks via `RunUAT BuildCookRun` and launches the staged Linux binary; omit `--no-build` for a clean rebuild.
+- `./Scripts/run_tests_headless.sh` runs headless automation (`NullRHI`) and is the default local/CI test path.
+- `./Scripts/run_tests_full.sh` runs Vulkan/offscreen GPU validation (`TEST_SCOPE=benchmark|gpu_smoke|all`).
 - The generated `Makefile` exposes direct targets like `make FlightProjectEditor-Linux-Development` or `make FlightProject-Linux-Test` for CI parity.
 
 ## Coding Style & Naming Conventions
@@ -17,13 +19,22 @@ FlightProject is an Unreal Engine 5 workspace rooted at `FlightProject.uproject`
 - Register logging categories with `DEFINE_LOG_CATEGORY_STATIC` and emit actionable `UE_LOG` messages.
 
 ## Testing Guidelines
-- The project has two primary types of tests: in-world visualizers (`AFlightSpatialTestEntity`) and standalone C++ unit tests.
-- To run all project automation tests:
-  `./Scripts/run_editor.sh -ExecCmds="Automation RunTests FlightProject.*; Quit" -unattended -nop4`
-- To run only the core functional C++ unit tests:
-  `./Scripts/run_editor.sh -ExecCmds="Automation RunTests FlightProject.Functional; Quit" -unattended -nop4`
+- Use `./Scripts/run_tests_headless.sh` as the primary automation entrypoint.
+- Baseline full-tree headless run:
+  `./Scripts/run_tests_headless.sh`
+- Focused parser bucket:
+  `TEST_FILTER="FlightProject.Schema.Vex.Parser" TEST_LOG_PROFILE=focused TEST_STREAM_FILTER=errors ./Scripts/run_tests_headless.sh`
+- Extended mixed bucket (schema + Verse + parser + vertical slice):
+  `TEST_FILTER="FlightProject.Integration.SchemaDriven+FlightProject.Schema.Vex.ManifestValidation+FlightProject.Verse.CompileContract+FlightProject.Verse.Subsystem+FlightProject.Schema.Vex.Parser+FlightProject.Integration.Vex.VerticalSlice" TEST_LOG_PROFILE=focused TEST_STREAM_FILTER=errors ./Scripts/run_tests_headless.sh`
+- Verse-focused shortcut:
+  `./Scripts/run_tests_headless.sh --verse`
+- GPU/offscreen path:
+  `TEST_SCOPE=gpu_smoke ./Scripts/run_tests_full.sh`
+- Discovery rule: tests intended for `UnrealEditor-Cmd`/CI must use `EAutomationTestFlags::EditorContext`; `ClientContext` tests are not discovered in this path.
+- After adding new test source files, run a full build once (`./Scripts/build_targets.sh Development`) to force discovery/index refresh before triage.
 - For cooked validation, run `make FlightProject-Linux-Test` or append `--test` to `run_game.sh` to drive `RunUAT`’s Test configuration.
-- Document manual verification and open issues in `Docs/Troubleshooting.md` so staged builds stay reproducible.
+- Keep current bucket status snapshots in `Docs/Workflow/CurrentBuild.md` and parser-specific coverage details in `Docs/Scripting/VexSchemaValidation.md`.
+- Document manual verification and open issues in `Docs/Environment/Troubleshooting.md` so staged builds stay reproducible.
 
 ## Commit & Pull Request Guidelines
 - Git history favors short, imperative summaries ("Add testing section to README", "testing flight"); keep the subject <72 characters and mention the subsystem up front.
@@ -87,7 +98,7 @@ This section tracks near-term priorities after functional/reactive/reflection st
 - [ ] Implement **Task Completion Callback Thunks**: Allowing VEX logic to react to the completion of specific jobs.
 
 ## Linux Wayland Workflow
-- Follow `Docs/LinuxWayland.md` when launching on CachyOS/Hyprland. Install `sdl2`, `lib32-sdl2`, `gamescope`, and `mangohud` so the wrapper flags work.
+- Follow `Docs/Environment/LinuxSetup.md` when launching on CachyOS/Hyprland. Install `sdl2`, `lib32-sdl2`, `gamescope`, and `mangohud` so the wrapper flags work.
 - Use `./Scripts/run_editor.sh --wayland --gamescope --gamescope-arg --fullscreen` for a native Wayland launch; append `--x11` to compare against the fallback path.
 - Export `FP_SDL_DYNAMIC_API=/usr/lib/libSDL2-2.0.so.0` (or the path from `pacman -Ql sdl2`) when SDL cannot resolve the dynamic loader.
 - Tweak display behavior with `--gamescope-arg`/`--gamescope-args` (e.g., `--gamescope-args=--prefer-vk,--hdr-enabled`) and keep compositor changes under `~/.config/hypr/config/*.conf`.

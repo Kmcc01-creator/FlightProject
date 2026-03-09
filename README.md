@@ -22,6 +22,11 @@ Behaviors and visuals are authored via a bespoke, Houdini-inspired **VEX DSL**.
 *   **Functional Piping**: Advanced stream transforms using the `|` operator.
 *   **Compile-Time Optimization**: Iterative AST folding, constant propagation, and identity simplification.
 *   **Safety**: A **Phantom Capability Algebra** ensures scripts never outrun their GPU resource dependencies.
+*   **Reactive UI Scaffold**: VEX-authored Slate panels for live diagnostics and list-driven tooling.
+*   **Verse/Solaris Bridge**: Experimental `IAssemblerPass` scaffolding for eventual source-to-`VProcedure` emission.
+
+[Read the Verse Assembler Scaffold Plan](./Docs/Scripting/VerseAssemblerScaffold.md)
+[Read the VEX UI Scaffold Plan](./Docs/Scripting/VexUiScaffold.md)
 
 ## 🛰️ Massive Multi-Agent Orchestration
 Scaling beyond singletons, the engine supports distributed execution and dynamic events.
@@ -39,6 +44,33 @@ Scaling beyond singletons, the engine supports distributed execution and dynamic
 *   **Code Standards Baseline**: Initial findings, policy, and vertical-slice validation plan.
 
 [Read the Code Standards Baseline](./CodeStandards.md)
+
+## ✅ Testing Quickstart
+Use the headless runner as the default validation path:
+
+```bash
+export UE_ROOT=/home/kelly/Unreal/UnrealEngine
+
+# 1) Full headless baseline
+./Scripts/run_tests_headless.sh
+
+# 2) Parser bucket
+TEST_FILTER="FlightProject.Schema.Vex.Parser" \
+TEST_LOG_PROFILE=focused TEST_STREAM_FILTER=errors \
+./Scripts/run_tests_headless.sh
+
+# 3) Extended mixed bucket (schema + Verse + parser + vertical slice)
+TEST_FILTER="FlightProject.Integration.SchemaDriven+FlightProject.Schema.Vex.ManifestValidation+FlightProject.Verse.CompileContract+FlightProject.Verse.Subsystem+FlightProject.Schema.Vex.Parser+FlightProject.Integration.Vex.VerticalSlice" \
+TEST_LOG_PROFILE=focused TEST_STREAM_FILTER=errors \
+./Scripts/run_tests_headless.sh
+
+# 4) GPU smoke/offscreen path
+TEST_SCOPE=gpu_smoke ./Scripts/run_tests_full.sh
+```
+
+Current test snapshot and filters:
+- [Current Build & Test Baseline](./Docs/Workflow/CurrentBuild.md)
+- [VEX Schema/Parser Validation](./Docs/Scripting/VexSchemaValidation.md)
 
 ---
 *Built with passion for data-oriented design and artistic opinion.*
