@@ -59,6 +59,9 @@ struct alignas(64) FSqe
 	/** Prepare WRITE operation */
 	void PrepWrite(int32 InFd, const void* Buf, uint32 Size, uint64 Offset, uint64 InUserData);
 
+	/** Prepare WRITE_FIXED operation (using registered buffers) */
+	void PrepWriteFixed(int32 InFd, const void* Buf, uint32 Size, uint64 Offset, uint16 BufIndex, uint64 InUserData);
+
 	/** Prepare CLOSE operation */
 	void PrepClose(int32 InFd, uint64 InUserData);
 

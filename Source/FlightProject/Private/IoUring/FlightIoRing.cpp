@@ -236,6 +236,34 @@ bool FRing::SetupMmaps(const FParams& Params)
 	return true;
 }
 
+bool FRing::RegisterBuffers(const void* Iovecs, uint32 Count)
+{
+	if (!IsValid()) return false;
+	
+	// IORING_REGISTER_BUFFERS = 0
+	int32 Ret = SysIoUringRegister(RingFd, 0, const_cast<void*>(Iovecs), Count);
+	if (Ret < 0)
+	{
+		LastError = -Ret;
+		return false;
+	}
+	return true;
+}
+
+bool FRing::UnregisterBuffers()
+{
+	if (!IsValid()) return false;
+	
+	// IORING_UNREGISTER_BUFFERS = 1
+	int32 Ret = SysIoUringRegister(RingFd, 1, nullptr, 0);
+	if (Ret < 0)
+	{
+		LastError = -Ret;
+		return false;
+	}
+	return true;
+}
+
 void FRing::Cleanup()
 {
 	if (SqesMmap)
@@ -364,6 +392,19 @@ const FCqe* FRing::WaitCqe()
 		return nullptr;
 	}
 
+	return PeekCqe();
+}
+
+const FCqe* FRing::WaitCqe(uint64 TimeoutUs)
+{
+	if (const FCqe* Cqe = PeekCqe())
+	{
+		return Cqe;
+	}
+
+	// For simple prototype, we use a small wait
+	SysIoUringEnter(RingFd, 0, 1, EnterFlags::GetEvents);
+	
 	return PeekCqe();
 }
 

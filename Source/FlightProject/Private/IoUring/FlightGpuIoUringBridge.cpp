@@ -3,7 +3,6 @@
 
 #include "IoUring/FlightGpuIoUringBridge.h"
 #include "IoUring/FlightIoUringSubsystem.h"
-#include "IoUring/FlightExportableSemaphore.h"
 #include "Core/FlightFunctional.h"
 #include "Core/FlightAsyncExecutor.h"
 #include "Engine/World.h"
@@ -12,7 +11,6 @@
 #include "IVulkanDynamicRHI.h"
 #include <sys/eventfd.h>
 #include <unistd.h>
-#include <poll.h>
 #endif
 
 using namespace Flight::Functional;
@@ -26,7 +24,6 @@ UFlightGpuIoUringBridge::UFlightGpuIoUringBridge()
 
 UFlightGpuIoUringBridge::~UFlightGpuIoUringBridge()
 {
-	// Destructor defined here for TUniquePtr<FExportableSemaphore> in FPendingSyncState
 }
 
 bool UFlightGpuIoUringBridge::ShouldCreateSubsystem(UObject* Outer) const
@@ -43,10 +40,16 @@ void UFlightGpuIoUringBridge::Initialize(FSubsystemCollectionBase& Collection)
 	Super::Initialize(Collection);
 
 #if PLATFORM_LINUX
-	UE_LOG(LogFlightGpuBridge, Log, TEXT("Initializing GPU-io_uring bridge..."));
+	UE_LOG(LogFlightGpuBridge, Log, TEXT("Initializing GPU-io_uring bridge with Managed Reactor..."));
 
 	// Get io_uring subsystem first
 	IoUringSubsystem = Collection.InitializeDependency<UFlightIoUringSubsystem>();
+
+	// Initialize centralized reactor
+	if (!Reactor.Initialize(128))
+	{
+		UE_LOG(LogFlightGpuBridge, Error, TEXT("Failed to initialize Vulkan io_uring reactor"));
+	}
 
 	// Check if exportable semaphores are available
 	bExportableSemaphoresAvailable = Flight::IoUring::FExportableSemaphore::IsExtensionAvailable();
@@ -54,34 +57,18 @@ void UFlightGpuIoUringBridge::Initialize(FSubsystemCollectionBase& Collection)
 	if (bExportableSemaphoresAvailable)
 	{
 		UE_LOG(LogFlightGpuBridge, Log,
-			TEXT("VK_KHR_external_semaphore_fd available - zero-syscall path enabled"));
+			TEXT("VK_KHR_external_semaphore_fd available - Zero-syscall Managed Reactor path enabled"));
 	}
 	else
 	{
 		UE_LOG(LogFlightGpuBridge, Log,
 			TEXT("VK_KHR_external_semaphore_fd not available - using eventfd fallback"));
 
-		// Fallback: Create eventfd for GPU completion signaling
 		EventFd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC | EFD_SEMAPHORE);
-		if (EventFd < 0)
-		{
-			UE_LOG(LogFlightGpuBridge, Error,
-				TEXT("Failed to create eventfd: %d"), errno);
-			return;
-		}
-
-		if (IoUringSubsystem && IoUringSubsystem->IsAvailable())
+		if (EventFd >= 0)
 		{
 			SetupIoUringIntegration();
 		}
-		else
-		{
-			UE_LOG(LogFlightGpuBridge, Warning,
-				TEXT("io_uring subsystem not available - using polling fallback"));
-		}
-
-		UE_LOG(LogFlightGpuBridge, Log,
-			TEXT("GPU-io_uring bridge initialized with EVENTFD fallback (eventfd=%d)"), EventFd);
 	}
 #endif
 }
@@ -90,23 +77,10 @@ void UFlightGpuIoUringBridge::Deinitialize()
 {
 #if PLATFORM_LINUX
 	UE_LOG(LogFlightGpuBridge, Log,
-		TEXT("GPU bridge stats: %lld submissions, %lld completions, %d pending (mode=%s)"),
-		TotalSubmissions.load(), TotalCompletions.load(), GetPendingCount(),
-		bExportableSemaphoresAvailable ? TEXT("ExportableSemaphore") : TEXT("EventFd"));
+		TEXT("GPU bridge stats: %lld submissions, %lld completions (mode=ManagedReactor)"),
+		TotalSubmissions.load(), TotalCompletions.load());
 
-	// Clean up all pending sync states
-	{
-		FScopeLock Lock(&PendingSyncStatesMutex);
-		for (auto& Pair : PendingSyncStates)
-		{
-			if (Pair.Value)
-			{
-				CloseSyncFdIfValid(Pair.Value->SyncFd);
-				// Semaphore destroyed by TUniquePtr
-			}
-		}
-		PendingSyncStates.Empty();
-	}
+	Reactor.Shutdown();
 
 	if (EventFd >= 0)
 	{
@@ -123,8 +97,7 @@ void UFlightGpuIoUringBridge::Deinitialize()
 bool UFlightGpuIoUringBridge::IsAvailable() const
 {
 #if PLATFORM_LINUX
-	// The GPU completion path currently requires exportable semaphore support.
-	return bExportableSemaphoresAvailable;
+	return bExportableSemaphoresAvailable && Reactor.IsAvailable();
 #else
 	return false;
 #endif
@@ -132,37 +105,14 @@ bool UFlightGpuIoUringBridge::IsAvailable() const
 
 int32 UFlightGpuIoUringBridge::GetPendingCount() const
 {
-#if PLATFORM_LINUX
-	FScopeLock Lock(&const_cast<UFlightGpuIoUringBridge*>(this)->PendingSyncStatesMutex);
-	return PendingSyncStates.Num();
-#else
-	return 0;
-#endif
+	// Pending count is now managed by the Reactor
+	return 0; 
 }
 
 #if PLATFORM_LINUX
-void UFlightGpuIoUringBridge::CloseSyncFdIfValid(int32& Fd)
-{
-	if (Fd >= 0)
-	{
-		close(Fd);
-		Fd = -1;
-	}
-}
-
-void UFlightGpuIoUringBridge::CleanupPendingState_Locked(int64 TrackingId)
-{
-	TSharedPtr<FPendingSyncState>* StatePtr = PendingSyncStates.Find(TrackingId);
-	if (StatePtr && *StatePtr)
-	{
-		CloseSyncFdIfValid((*StatePtr)->SyncFd);
-	}
-	PendingSyncStates.Remove(TrackingId);
-}
-
 void UFlightGpuIoUringBridge::SetupIoUringIntegration()
 {
-	if (!IoUringSubsystem || !IoUringSubsystem->IsAvailable())
+	if (!IoUringSubsystem || !IoUringSubsystem->IsAvailable() || EventFd < 0)
 	{
 		return;
 	}
@@ -170,103 +120,25 @@ void UFlightGpuIoUringBridge::SetupIoUringIntegration()
 	IFlightAsyncExecutor* Executor = IoUringSubsystem->GetExecutor();
 	if (!Executor) return;
 
-	// Register multishot poll on our eventfd (for fallback path)
-	FAsyncHandle Handle = FAsyncHandle::FromLinuxFd(EventFd);
-
-	// Note: Generic executor currently doesn't support multishot poll directly in the interface yet,
-	// but we can use SubmitEventWait for now.
-	bool bSubmitted = Executor->SubmitEventWait(Handle, [this](const FAsyncResult& Result) {
+	Executor->SubmitEventWait(FAsyncHandle::FromLinuxFd(EventFd), [this](const FAsyncResult& Result) {
 		OnEventFdReadable(Result.ErrorCode, Result.Flags);
 	});
-
-	if (bSubmitted)
-	{
-		UE_LOG(LogFlightGpuBridge, Log,
-			TEXT("Registered executor wait on eventfd"));
-	}
-	else
-	{
-		UE_LOG(LogFlightGpuBridge, Warning,
-			TEXT("Failed to register executor wait - using polling fallback"));
-	}
 }
 
 void UFlightGpuIoUringBridge::OnEventFdReadable(int32 Result, uint32 Flags)
 {
 	if (Result >= 0)
 	{
-		// Drain the eventfd
 		uint64 Value = 0;
-		while (read(EventFd, &Value, sizeof(Value)) > 0)
-		{
-			// Each read corresponds to a GPU completion
-		}
+		while (read(EventFd, &Value, sizeof(Value)) > 0) {}
 
-		UE_LOG(LogFlightGpuBridge, Verbose,
-			TEXT("Executor notified of GPU completion (eventfd path)"));
-			
-		// Re-register if needed (SubmitEventWait is currently single-shot in our refactor)
+		// Re-register
 		if (IoUringSubsystem && IoUringSubsystem->GetExecutor())
 		{
 			IoUringSubsystem->GetExecutor()->SubmitEventWait(FAsyncHandle::FromLinuxFd(EventFd), [this](const FAsyncResult& Res) {
 				OnEventFdReadable(Res.ErrorCode, Res.Flags);
 			});
 		}
-	}
-}
-
-void UFlightGpuIoUringBridge::OnSyncFdReadable(int64 TrackingId, int32 Result, uint32 Flags)
-{
-	// NOTE: This method is called from io_uring worker thread, NOT game thread!
-	// Must marshal callback invocation to game thread.
-
-	TFunction<void()> CompletionCallback;
-	TFunction<void()> FailureCallback;
-	double ElapsedMs = 0.0;
-
-	{
-		FScopeLock Lock(&PendingSyncStatesMutex);
-
-		TSharedPtr<FPendingSyncState>* StatePtr = PendingSyncStates.Find(TrackingId);
-		if (!StatePtr || !*StatePtr)
-		{
-			UE_LOG(LogFlightGpuBridge, Warning,
-				TEXT("OnSyncFdReadable: No pending state for TrackingId %lld"), TrackingId);
-			return;
-		}
-
-		FPendingSyncState& State = **StatePtr;
-
-		if (Result >= 0)
-		{
-			ElapsedMs = (FPlatformTime::Seconds() - State.SubmitTime) * 1000.0;
-
-			UE_LOG(LogFlightGpuBridge, Log,
-				TEXT("GPU work %lld completed via SYNC_FD in %.2f ms (zero-syscall path!)"),
-				TrackingId, ElapsedMs);
-
-			TotalCompletions.fetch_add(1, std::memory_order_relaxed);
-			CompletionCallback = MoveTemp(State.CompletionCallback);
-		}
-		else
-		{
-			UE_LOG(LogFlightGpuBridge, Warning,
-				TEXT("OnSyncFdReadable: Error for TrackingId %lld, Result=%d"), TrackingId, Result);
-			FailureCallback = MoveTemp(State.FailureCallback);
-		}
-
-		// Clean up (closes sync_fd, removes from map)
-		CleanupPendingState_Locked(TrackingId);
-	}
-
-	// Marshal callback to game thread - callbacks expect game thread context
-	if (CompletionCallback)
-	{
-		AsyncTask(ENamedThreads::GameThread, MoveTemp(CompletionCallback));
-	}
-	else if (FailureCallback)
-	{
-		AsyncTask(ENamedThreads::GameThread, MoveTemp(FailureCallback));
 	}
 }
 
@@ -277,231 +149,74 @@ struct FTimelineInfo
 	uint64 Value;
 };
 
-void UFlightGpuIoUringBridge::HandleSyncFailure(int64 TrackingId, const TCHAR* Reason)
-{
-	TFunction<void()> FailureCallback;
-	{
-		FScopeLock Lock(&PendingSyncStatesMutex);
-
-		TSharedPtr<FPendingSyncState>* StatePtr = PendingSyncStates.Find(TrackingId);
-		if (!StatePtr || !*StatePtr)
-		{
-			UE_LOG(LogFlightGpuBridge, Warning,
-				TEXT("HandleSyncFailure: missing pending state for TrackingId %lld (%s)"),
-				TrackingId, Reason ? Reason : TEXT("unknown"));
-			return;
-		}
-
-		FailureCallback = MoveTemp((*StatePtr)->FailureCallback);
-		CleanupPendingState_Locked(TrackingId);
-	}
-
-	UE_LOG(LogFlightGpuBridge, Warning,
-		TEXT("GPU completion setup failed for TrackingId %lld (%s)"),
-		TrackingId, Reason ? Reason : TEXT("unknown"));
-
-	if (FailureCallback)
-	{
-		FailureCallback();
-	}
-}
-
 bool UFlightGpuIoUringBridge::SignalGpuCompletion(
 	int64 TrackingId,
 	TFunction<void()> OnComplete,
 	TFunction<void()> OnFailure)
 {
-	// Use heterogeneous validation chain - each step produces its own type!
-	auto ValidationResult = Validate<FString>()
-		.Then([this]() -> TResult<bool, FString>
-		{
-			if (!bExportableSemaphoresAvailable)
-			{
-				return Err<bool>(FString(TEXT("Exportable semaphores not available")));
-			}
-			return Ok(true);
-		})
-		.Then([](bool) -> TResult<IVulkanDynamicRHI*, FString>
-		{
-			IVulkanDynamicRHI* VulkanRHI = GetIVulkanDynamicRHI();
-			if (!VulkanRHI)
-			{
-				return Err<IVulkanDynamicRHI*>(FString(TEXT("Vulkan RHI not available")));
-			}
-			return Ok(VulkanRHI);
-		})
-		.Then([](bool, IVulkanDynamicRHI* VulkanRHI) -> TResult<FTimelineInfo, FString>
-		{
-			FTimelineInfo Info{};
-			bool bHasTimeline = VulkanRHI->RHIGetGraphicsQueueTimelineSemaphoreInfo(
-				&Info.Semaphore, &Info.Value);
-			if (!bHasTimeline)
-			{
-				return Err<FTimelineInfo>(FString(TEXT("Timeline semaphores not available")));
-			}
-			return Ok(Info);
-		})
-		.Then([TrackingId](bool, IVulkanDynamicRHI*, FTimelineInfo)
-			-> TResult<TUniquePtr<Flight::IoUring::FExportableSemaphore>, FString>
-		{
-			auto Semaphore = Flight::IoUring::FExportableSemaphore::Create();
-			if (!Semaphore)
-			{
-				return Err<TUniquePtr<Flight::IoUring::FExportableSemaphore>>(FString::Printf(
-					TEXT("Failed to create exportable semaphore for TrackingId %lld"), TrackingId));
-			}
-			return Ok(MoveTemp(Semaphore));
-		})
-		.Finish();
-
-	// Handle validation failure
-	if (ValidationResult.IsErr())
+	if (!IsAvailable())
 	{
-		UE_LOG(LogFlightGpuBridge, Warning, TEXT("SignalGpuCompletion: %s"), *ValidationResult.GetError());
-		if (OnFailure)
-		{
-			OnFailure();
-		}
+		if (OnFailure) OnFailure();
 		return false;
 	}
 
-	// Structured binding! Each step's result is now a separate variable.
-	auto [_, VulkanRHI, TimelineInfo, Semaphore] = MoveTemp(ValidationResult).Unwrap();
-
-	// Create pending state and add to map
-	TSharedPtr<FPendingSyncState> State = MakeShared<FPendingSyncState>();
-	State->TrackingId = TrackingId;
-	State->Semaphore = MoveTemp(Semaphore);
-	State->CompletionCallback = MoveTemp(OnComplete);
-	State->FailureCallback = MoveTemp(OnFailure);
-	State->SubmitTime = FPlatformTime::Seconds();
-	State->IoUringUserData = NextUserDataId.fetch_add(1, std::memory_order_relaxed);
-
+	IVulkanDynamicRHI* VulkanRHI = GetIVulkanDynamicRHI();
+	if (!VulkanRHI)
 	{
-		FScopeLock Lock(&PendingSyncStatesMutex);
+		if (OnFailure) OnFailure();
+		return false;
+	}
 
-		// Check for duplicate TrackingId - clean up old entry to prevent leaks
-		if (PendingSyncStates.Contains(TrackingId))
-		{
-			UE_LOG(LogFlightGpuBridge, Warning,
-				TEXT("SignalGpuCompletion: Duplicate TrackingId %lld - cleaning up old entry"),
-				TrackingId);
-			CleanupPendingState_Locked(TrackingId);
-		}
-
-		PendingSyncStates.Add(TrackingId, State);
+	FTimelineInfo Info{};
+	if (!VulkanRHI->RHIGetGraphicsQueueTimelineSemaphoreInfo(&Info.Semaphore, &Info.Value))
+	{
+		if (OnFailure) OnFailure();
+		return false;
 	}
 
 	TotalSubmissions.fetch_add(1, std::memory_order_relaxed);
 
-	// Use TWeakObjectPtr to guard against subsystem destruction
 	TWeakObjectPtr<UFlightGpuIoUringBridge> WeakThis(this);
 
-	// Capture shared state pointer (not raw) for thread safety
-	TSharedPtr<FPendingSyncState> SharedState = State;
-
-	// Capture timeline info for the async lambda
-	VkSemaphore UeTimelineSemaphore = TimelineInfo.Semaphore;
-	uint64 UeTimelineValue = TimelineInfo.Value;
-
 	VulkanRHI->RHIRunOnQueue(EVulkanRHIRunOnQueueType::Graphics,
-		[WeakThis, SharedState, UeTimelineSemaphore, UeTimelineValue](VkQueue Queue)
+		[WeakThis, Info, TrackingId, OnComplete = MoveTemp(OnComplete), OnFailure = MoveTemp(OnFailure)](VkQueue Queue) mutable
 		{
-			UE_LOG(LogFlightGpuBridge, Log, TEXT("SignalGpuCompletion[Queue]: Waiting for TimelineValue %llu on Semaphore %p for TrackingId %lld"), 
-				UeTimelineValue, (void*)UeTimelineSemaphore, SharedState->TrackingId);
+			UFlightGpuIoUringBridge* Bridge = WeakThis.Get();
+			if (!Bridge) return;
 
-			// Signal our binary semaphore after waiting on UE's timeline value
-			bool bSignaled = SharedState->Semaphore->SignalAfterTimelineValue(
-				Queue, UeTimelineSemaphore, UeTimelineValue);
-
-				if (!bSignaled)
+			bool bArmed = Bridge->Reactor.ArmSyncPoint(
+				Queue,
+				Info.Semaphore,
+				Info.Value,
+				TrackingId,
+				[WeakThis, OnComplete = MoveTemp(OnComplete), OnFailure = MoveTemp(OnFailure)](Flight::IoUring::ESyncResult Result, int32 ErrorCode) mutable
 				{
-						UE_LOG(LogFlightGpuBridge, Error, TEXT("SignalGpuCompletion[Queue]: SignalAfterTimelineValue FAILED for TrackingId %lld"),
-						SharedState->TrackingId);
-					AsyncTask(ENamedThreads::GameThread, [WeakThis, TrackingId = SharedState->TrackingId]()
+					AsyncTask(ENamedThreads::GameThread, [WeakThis, Result, OnComplete = MoveTemp(OnComplete), OnFailure = MoveTemp(OnFailure)]() mutable
 					{
-						if (UFlightGpuIoUringBridge* Bridge = WeakThis.Get())
+						UFlightGpuIoUringBridge* B = WeakThis.Get();
+						if (!B) return;
+
+						if (Result == Flight::IoUring::ESyncResult::Success)
 						{
-							Bridge->HandleSyncFailure(TrackingId, TEXT("SignalAfterTimelineValue failed"));
+							B->TotalCompletions.fetch_add(1, std::memory_order_relaxed);
+							if (OnComplete) OnComplete();
+						}
+						else
+						{
+							if (OnFailure) OnFailure();
 						}
 					});
-					return;
 				}
+			);
 
-			// Export sync_fd
-			int32 SyncFd = SharedState->Semaphore->ExportSyncFd();
-				if (SyncFd < 0)
-				{
-						UE_LOG(LogFlightGpuBridge, Error, TEXT("SignalGpuCompletion[Queue]: ExportSyncFd FAILED for TrackingId %lld"),
-						SharedState->TrackingId);
-					AsyncTask(ENamedThreads::GameThread, [WeakThis, TrackingId = SharedState->TrackingId]()
-					{
-						if (UFlightGpuIoUringBridge* Bridge = WeakThis.Get())
-						{
-							Bridge->HandleSyncFailure(TrackingId, TEXT("ExportSyncFd failed"));
-						}
-					});
-					return;
-				}
-
-			// Register with executor on game thread
-			UE_LOG(LogFlightGpuBridge, Log, TEXT("SignalGpuCompletion[Queue]: Exported SyncFd %d for TrackingId %lld. Registering with executor."), 
-				SyncFd, SharedState->TrackingId);
-			AsyncTask(ENamedThreads::GameThread,
-				[WeakThis, SharedState, SyncFd]()
-				{
-					UFlightGpuIoUringBridge* Bridge = WeakThis.Get();
-					if (!Bridge)
-					{
-						close(SyncFd);
-						return;
-					}
-
-					int64 TrackingId = SharedState->TrackingId;
-
-					// Store sync_fd in state
-					{
-						FScopeLock Lock(&Bridge->PendingSyncStatesMutex);
-						TSharedPtr<FPendingSyncState>* StatePtr = Bridge->PendingSyncStates.Find(TrackingId);
-						if (!StatePtr || !*StatePtr)
-						{
-							close(SyncFd);
-							return;
-						}
-						(*StatePtr)->SyncFd = SyncFd;
-					}
-
-						if (!Bridge->IoUringSubsystem || !Bridge->IoUringSubsystem->IsAvailable())
-						{
-							Bridge->HandleSyncFailure(TrackingId, TEXT("IoUring subsystem unavailable"));
-							return;
-						}
-
-						IFlightAsyncExecutor* Executor = Bridge->IoUringSubsystem->GetExecutor();
-						if (!Executor)
-						{
-							Bridge->HandleSyncFailure(TrackingId, TEXT("Async executor unavailable"));
-							return;
-						}
-
-						// Submit wait to executor
-							const bool bSubmitted = Executor->SubmitEventWait(FAsyncHandle::FromLinuxFd(SyncFd),
-							[WeakThis, TrackingId](const FAsyncResult& Res)
-							{
-								if (UFlightGpuIoUringBridge* B = WeakThis.Get())
-								{
-									B->OnSyncFdReadable(TrackingId, Res.ErrorCode, Res.Flags);
-								}
-							});
-
-						if (!bSubmitted)
-						{
-							Bridge->HandleSyncFailure(TrackingId, TEXT("SubmitEventWait failed"));
-							return;
-						}
-					});
-			},
-			false /* don't wait for submission */);
+			if (!bArmed)
+			{
+				AsyncTask(ENamedThreads::GameThread, [OnFailure = MoveTemp(OnFailure)]() {
+					if (OnFailure) OnFailure();
+				});
+			}
+		},
+		false /* don't wait */);
 
 	return true;
 }
@@ -510,12 +225,15 @@ bool UFlightGpuIoUringBridge::SignalGpuCompletion(
 int32 UFlightGpuIoUringBridge::PollCompletions()
 {
 #if PLATFORM_LINUX
+	int32 Processed = 0;
+	Processed += Reactor.Tick();
+	
 	if (IoUringSubsystem)
 	{
-		IoUringSubsystem->ProcessCompletions();
+		Processed += IoUringSubsystem->ProcessCompletions();
 	}
+	return Processed;
 #endif
-
 	return 0;
 }
 
@@ -523,18 +241,14 @@ void UFlightGpuIoUringBridge::RunIntegrationTest()
 {
 	if (!IsAvailable()) return;
 
-	static int64 TestIdCounter = 1000000;
+	static int64 TestIdCounter = 2000000;
 	int64 TestId = TestIdCounter++;
 
-	const bool bSubmitted = SignalGpuCompletion(TestId, [TestId]()
+	UE_LOG(LogFlightGpuBridge, Log, TEXT("Running Managed Reactor Test ID: %lld"), TestId);
+
+	SignalGpuCompletion(TestId, [TestId]()
 	{
 		UE_LOG(LogFlightGpuBridge, Log,
-			TEXT("Integration test PASSED: Received completion callback for TrackingId=%lld"), TestId);
+			TEXT("Managed Reactor test PASSED: Received completion for TrackingId=%lld"), TestId);
 	});
-
-	if (!bSubmitted)
-	{
-		UE_LOG(LogFlightGpuBridge, Warning,
-			TEXT("Integration test did not submit completion signal for TrackingId=%lld"), TestId);
-	}
 }

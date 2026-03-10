@@ -197,26 +197,26 @@ bool FExportableSemaphore::SignalAfterTimelineValue(VkQueue Queue, VkSemaphore W
 	return true;
 }
 
-int32 FExportableSemaphore::ExportSyncFd()
+FExportResult FExportableSemaphore::ExportSyncFd()
 {
 	if (!Semaphore || !FnGetSemaphoreFd)
 	{
 		UE_LOG(LogFlightExportableSemaphore, Warning, TEXT("Cannot export: semaphore not initialized"));
-		return -1;
+		return { EExportStatus::Error, -1, -1 };
 	}
 
 	if (!bHasSignaled)
 	{
 		UE_LOG(LogFlightExportableSemaphore, Warning,
 			TEXT("Cannot export: semaphore not yet signaled - call SignalAfterTimelineValue first"));
-		return -1;
+		return { EExportStatus::Error, -1, -1 };
 	}
 
 	if (bHasExported)
 	{
 		UE_LOG(LogFlightExportableSemaphore, Warning,
 			TEXT("Cannot export: sync_fd already exported - each instance is single-use"));
-		return -1;
+		return { EExportStatus::Error, -1, -1 };
 	}
 
 	auto vkGetSemaphoreFdKHR = reinterpret_cast<PFN_vkGetSemaphoreFdKHR>(FnGetSemaphoreFd);
@@ -231,9 +231,22 @@ int32 FExportableSemaphore::ExportSyncFd()
 	VkResult Result = vkGetSemaphoreFdKHR(Device, &FdInfo, &Fd);
 	if (Result != VK_SUCCESS)
 	{
+		// Check for already-signaled cases if the driver returns specific errors
+		// For most drivers, SYNC_FD export will just succeed with a signaled fd if it's already done.
+		// If it's -1 because it was already signaled and the driver doesn't support exporting a terminal state:
+		// We treat it as AlreadySignaled.
+		
 		UE_LOG(LogFlightExportableSemaphore, Error,
 			TEXT("vkGetSemaphoreFdKHR failed: VkResult=%d"), static_cast<int32>(Result));
-		return -1;
+		return { EExportStatus::Error, -1, static_cast<int32>(Result) };
+	}
+
+	if (Fd == -1)
+	{
+		// Driver returned success but no FD - this usually means the semaphore is already in a terminal/signaled state
+		// where no fence object is needed.
+		bHasExported = true;
+		return { EExportStatus::AlreadySignaled, -1, 0 };
 	}
 
 	bHasExported = true;
@@ -241,7 +254,7 @@ int32 FExportableSemaphore::ExportSyncFd()
 	UE_LOG(LogFlightExportableSemaphore, Verbose,
 		TEXT("Exported sync_fd=%d"), Fd);
 
-	return Fd;
+	return { EExportStatus::Success, Fd, 0 };
 }
 
 } // namespace Flight::IoUring

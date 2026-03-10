@@ -34,6 +34,18 @@ void FSqe::PrepWrite(int32 InFd, const void* Buf, uint32 Size, uint64 Offset, ui
 	UserData = InUserData;
 }
 
+void FSqe::PrepWriteFixed(int32 InFd, const void* Buf, uint32 Size, uint64 Offset, uint16 BufIndex, uint64 InUserData)
+{
+	Zero();
+	Opcode = static_cast<uint8>(EOpcode::WriteFixed);
+	Fd = InFd;
+	AddrOrSpliceOff = reinterpret_cast<uint64>(Buf);
+	Len = Size;
+	OffOrAddr2 = Offset;
+	UserData = InUserData;
+	BufIndexOrGroup = BufIndex;
+}
+
 void FSqe::PrepClose(int32 InFd, uint64 InUserData)
 {
 	Zero();

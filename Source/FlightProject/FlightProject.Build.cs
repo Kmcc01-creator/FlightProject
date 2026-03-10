@@ -55,6 +55,7 @@ public class FlightProject : ModuleRules
             "Projects",
             "Json",
             "JsonUtilities",
+            "TraceLog",
             "FlightGpuCompute"  // Compute shaders with PostConfigInit registration
         });
 

@@ -16,22 +16,30 @@ namespace Flight::IoUring
 {
 
 /**
+ * Status of a sync_fd export operation
+ */
+enum class EExportStatus : uint8
+{
+	Success,
+	AlreadySignaled,
+	Error
+};
+
+/**
+ * Result of a sync_fd export operation
+ */
+struct FExportResult
+{
+	EExportStatus Status;
+	int32 Fd = -1;
+	int32 ErrorCode = 0;
+};
+
+/**
  * Wraps a Vulkan BINARY semaphore created with VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT
  * for export to io_uring.
- *
- * NOTE: Per Vulkan spec, SYNC_FD handles can ONLY be exported from binary semaphores,
- * not timeline semaphores. This class creates a binary semaphore that waits on UE's
- * timeline semaphore and signals itself, then exports the sync_fd.
- *
- * Each instance is single-use:
- *   1. Create instance after RHI init
- *   2. Call SignalAfterTimelineValue() on queue submission thread
- *   3. Call ExportSyncFd() to get fd for io_uring POLL_ADD
- *   4. When CQE fires, destroy the instance (closes semaphore)
- *
- * For multiple pending GPU jobs, create multiple FExportableSemaphore instances.
  */
-class FExportableSemaphore
+class FLIGHTPROJECT_API FExportableSemaphore
 {
 public:
 	FExportableSemaphore();
@@ -73,9 +81,9 @@ public:
 	 * "consumed" - the sync_fd now owns the signal state. The semaphore handle
 	 * remains valid until destruction, but should not be used for further signaling.
 	 *
-	 * @return File descriptor (>=0) or -1 on error. Caller must close() when done.
+	 * @return FExportResult containing the FD and status.
 	 */
-	int32 ExportSyncFd();
+	FExportResult ExportSyncFd();
 
 	/** Check if sync_fd has already been exported */
 	bool HasExported() const { return bHasExported; }

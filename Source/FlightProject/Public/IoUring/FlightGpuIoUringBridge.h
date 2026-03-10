@@ -12,11 +12,7 @@ class UFlightIoUringSubsystem;
 class FRHIGPUBufferReadback;
 
 #if PLATFORM_LINUX
-#include "IoUring/FlightExportableSemaphore.h"
-namespace Flight::IoUring
-{
-	class FRing;
-}
+#include "IoUring/VulkanLinuxIoUringReactor.h"
 #endif
 
 /**
@@ -25,19 +21,11 @@ namespace Flight::IoUring
  * Bridges GPU compute work completion to io_uring notifications.
  * Enables game thread to be woken by io_uring when GPU work completes.
  *
- * Architecture (when VK_KHR_external_semaphore_fd is available):
+ * Architecture:
  * 1. Game thread submits compute work via RDG
- * 2. After GraphBuilder.Execute(), call SignalExportableSemaphoreForWork()
- * 3. RHIRunOnQueue creates binary semaphore, waits on UE's timeline, signals binary
- * 4. Export sync_fd from binary semaphore
- * 5. io_uring POLL_ADD on sync_fd
- * 6. CQE arrives when GPU work completes - zero syscalls in steady state
- *
- * Each pending GPU job gets its own binary semaphore and sync_fd (per Vulkan spec,
- * SYNC_FD can only be exported from binary semaphores, not timeline).
- *
- * Fallback (when extension unavailable):
- * - Uses eventfd + polling as placeholder
+ * 2. SignalGpuCompletion() is called with a unique tracking ID
+ * 3. FVulkanIoUringReactor manages the "Signal Binary -> Export FD -> Poll io_uring" pipeline
+ * 4. Completion is handled asynchronously and marshaled back to the game thread
  */
 UCLASS()
 class FLIGHTPROJECT_API UFlightGpuIoUringBridge : public UWorldSubsystem
@@ -64,12 +52,12 @@ public:
 	/**
 	 * Signal GPU completion for a tracking ID.
 	 * Call this after GraphBuilder.Execute() returns.
-	 * Creates a binary semaphore that waits on UE's timeline and exports sync_fd.
+	 * Uses the centralized reactor for safe synchronization.
 	 *
 	 * @param TrackingId Unique ID for this GPU work
 	 * @param OnComplete Called on game thread when GPU work completes
 	 * @param OnFailure Called on game thread when signaling setup fails
-	 * @return True if completion signaling was registered, false on immediate setup failure
+	 * @return True if completion signaling was registered, false on setup failure
 	 */
 	bool SignalGpuCompletion(
 		int64 TrackingId,
@@ -98,51 +86,18 @@ public:
 	int64 GetTotalCompletions() const { return TotalCompletions.load(std::memory_order_relaxed); }
 
 private:
-	// Atomic counters - incremented from io_uring worker thread, read from game thread
+	// Atomic counters
 	std::atomic<int64> TotalSubmissions{0};
 	std::atomic<int64> TotalCompletions{0};
 
 #if PLATFORM_LINUX
-	/**
-	 * Per-job synchronization state.
-	 * Each pending GPU job gets its own binary semaphore and sync_fd.
-	 */
-	struct FPendingSyncState
-	{
-		int64 TrackingId = 0;
-		TUniquePtr<Flight::IoUring::FExportableSemaphore> Semaphore;
-		int32 SyncFd = -1;
-		uint64 IoUringUserData = 0;
-		TFunction<void()> CompletionCallback;
-		TFunction<void()> FailureCallback;
-		double SubmitTime = 0.0;
-	};
-
-	// Map of TrackingId -> pending sync state
-	TMap<int64, TSharedPtr<FPendingSyncState>> PendingSyncStates;
-	FCriticalSection PendingSyncStatesMutex;
-
-	int32 EventFd = -1;
+	Flight::IoUring::FVulkanIoUringReactor Reactor;
+	
 	UFlightIoUringSubsystem* IoUringSubsystem = nullptr;
 	bool bExportableSemaphoresAvailable = false;
-
-	// Counter for generating unique io_uring user data
-	std::atomic<uint64> NextUserDataId{1};
+	int32 EventFd = -1;
 
 	void SetupIoUringIntegration();
 	void OnEventFdReadable(int32 Result, uint32 Flags);
-	void OnSyncFdReadable(int64 TrackingId, int32 Result, uint32 Flags);
-	void HandleSyncFailure(int64 TrackingId, const TCHAR* Reason);
-
-	/**
-	 * Clean up a pending sync state (close fd, remove from map).
-	 * Must be called with PendingSyncStatesMutex held.
-	 */
-	void CleanupPendingState_Locked(int64 TrackingId);
-
-	/**
-	 * Close sync_fd if valid and reset to -1.
-	 */
-	static void CloseSyncFdIfValid(int32& Fd);
 #endif
 };

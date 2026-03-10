@@ -1,7 +1,7 @@
 // Copyright Kelly Rey Wilson. All Rights Reserved.
 
-#include "Common.ush"
-#include "ScreenPass.ush"
+#include "/Engine/Private/Common.ush"
+#include "/Engine/Private/ScreenPass.ush"
 
 SCREEN_PASS_TEXTURE_VIEWPORT(Input)
 SCREEN_PASS_TEXTURE_VIEWPORT(Output)
@@ -23,7 +23,7 @@ float3 PosterizeColor(float3 Color, float Steps)
 	return floor(saturate(Color) * Quantization) / Quantization;
 }
 
-void Main(
+void MainPS(
 	noperspective float4 UVAndScreenPos : TEXCOORD0,
 	FStereoVSOutput StereoOutput,
 	float4 SvPosition : SV_POSITION,

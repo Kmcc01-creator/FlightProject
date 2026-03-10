@@ -26,10 +26,12 @@ mkdir -p "$DDC_PATH"
 if [[ -z "$LOG_CMDS" ]]; then
     case "${TEST_LOG_PROFILE,,}" in
         focused|test|ci)
-            LOG_CMDS="global error,AutomationTestingLog display,LogAutomationCommandLine display,LogAutomationController display,LogAutomationWorker warning,LogUObjectGlobals error,LogFlightProject display"
+            # Targeted logging: avoid 'global' to prevent ensures in low-limit engine categories
+            LOG_CMDS="AutomationTestingLog display,LogAutomationCommandLine display,LogAutomationController display,LogAutomationWorker warning,LogUObjectGlobals error,LogFlightProject display,LogVulkanRHI warning,LogTrace warning"
             ;;
         verbose)
-            LOG_CMDS="global warning,AutomationTestingLog display,LogAutomationCommandLine verbose,LogAutomationController verbose,LogAutomationWorker verbose,LogFlightProject verbose"
+            # High-signal categories set to verbose, others remain at default
+            LOG_CMDS="AutomationTestingLog display,LogAutomationCommandLine verbose,LogAutomationController verbose,LogAutomationWorker verbose,LogFlightProject verbose,LogVulkanRHI verbose,LogTrace verbose,LogHAL verbose"
             ;;
         full|*)
             LOG_CMDS=""

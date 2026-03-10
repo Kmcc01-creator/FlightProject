@@ -59,8 +59,23 @@ public:
 	/** Get ring file descriptor (for MSG_RING targeting) */
 	int32 GetFd() const { return RingFd; }
 
+	/**
+	 * Register buffers for fixed I/O operations
+	 *
+	 * @param Iovecs Array of iovec structures
+	 * @param Count Number of iovecs
+	 * @return true on success
+	 */
+	bool RegisterBuffers(const void* Iovecs, uint32 Count);
+
+	/** Unregister previously registered buffers */
+	bool UnregisterBuffers();
+
 	/** Get last error code */
 	int32 GetLastError() const { return LastError; }
+
+	/** Cleanup and unmap the ring */
+	void Cleanup();
 
 	// ========== SQE Operations ==========
 
@@ -101,6 +116,14 @@ public:
 	 * @return Pointer to CQE, or nullptr on error
 	 */
 	const FCqe* WaitCqe();
+
+	/**
+	 * Wait for at least one CQE with a microsecond timeout
+	 *
+	 * @param TimeoutUs Timeout in microseconds
+	 * @return Pointer to CQE, or nullptr on timeout/error
+	 */
+	const FCqe* WaitCqe(uint64 TimeoutUs);
 
 	/**
 	 * Advance CQ head (mark CQEs as consumed)
@@ -165,7 +188,6 @@ private:
 	int32 LastError = 0;
 
 	// Internal helpers
-	void Cleanup();
 	bool SetupMmaps(const FParams& Params);
 };
 
