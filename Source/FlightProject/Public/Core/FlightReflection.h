@@ -817,6 +817,9 @@ struct TAttributedFieldDescriptor
 	using Attributes = TAttrs;
 	static constexpr auto Pointer = MemberPtr;
 
+	/** Byte offset of this field from the start of the owner struct. */
+	static int32 GetOffset() { return (int32)(intptr_t)&(((TOwner*)0)->*MemberPtr); }
+
 	// Static constexpr name - no instance data!
 	static constexpr std::string_view Name{FieldName};
 	static constexpr const char* NameCStr = FieldName.CStr();

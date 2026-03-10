@@ -11,14 +11,23 @@ FVexSymbolRegistry& FVexSymbolRegistry::Get()
 	return Instance;
 }
 
-void FVexSymbolRegistry::RegisterSymbol(const FVexSymbolAccessor& Accessor)
+FVexTypeSchema& FVexSymbolRegistry::FindOrAddSchema(const void* TypeKey)
 {
-	SymbolMap.Add(Accessor.SymbolName, Accessor);
+	return Schemas.FindOrAdd(TypeKey);
 }
 
-const FVexSymbolAccessor* FVexSymbolRegistry::FindSymbol(const FString& Name) const
+const FVexTypeSchema* FVexSymbolRegistry::GetSchema(const void* TypeKey) const
 {
-	return SymbolMap.Find(Name);
+	return Schemas.Find(TypeKey);
+}
+
+const FVexSymbolAccessor* FVexSymbolRegistry::FindSymbol(const void* TypeKey, const FString& Name) const
+{
+	if (const FVexTypeSchema* Schema = GetSchema(TypeKey))
+	{
+		return Schema->Symbols.Find(Name);
+	}
+	return nullptr;
 }
 
 } // namespace Flight::Vex

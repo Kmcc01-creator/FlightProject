@@ -132,6 +132,16 @@ public:
         const TArray<FString>& RequiredDataInterfaceClassPaths);
 
     /**
+     * Ensure that a Niagara system satisfies required user params and data interface classes by adding them if missing.
+     * Returns a list of contract issues (empty if successful).
+     */
+    UFUNCTION(BlueprintCallable, Category = "Flight|Scripting|Schema")
+    static TArray<FString> EnsureNiagaraSystemContract(
+        const FString& SystemObjectPath,
+        const TArray<FString>& RequiredUserParameters,
+        const TArray<FString>& RequiredDataInterfaceClassPaths);
+
+    /**
      * Validate a single CVar contract.
      * Returns a list of contract issues (empty if valid).
      */

@@ -32,6 +32,7 @@
 #include "Serialization/JsonWriter.h"
 #include "Misc/PackageName.h"
 #include "UObject/UObjectGlobals.h"
+#include "UObject/SavePackage.h"
 
 #if WITH_EDITOR
 #include "MassEntityConfigAsset.h"
@@ -1113,9 +1114,142 @@ TArray<FString> UFlightScriptingLibrary::ValidateNiagaraSystemContract(
         }
     }
 
-	return Issues;
+    return Issues;
 }
 
+TArray<FString> UFlightScriptingLibrary::EnsureNiagaraSystemContract(
+    const FString& SystemObjectPath,
+    const TArray<FString>& RequiredUserParameters,
+    const TArray<FString>& RequiredDataInterfaceClassPaths)
+{
+    TArray<FString> Issues;
+
+    if (SystemObjectPath.IsEmpty())
+    {
+        Issues.Add(TEXT("Niagara contract: system path is empty"));
+        return Issues;
+    }
+
+    UNiagaraSystem* NiagaraSystem = Cast<UNiagaraSystem>(
+        StaticLoadObject(UNiagaraSystem::StaticClass(), nullptr, *SystemObjectPath, nullptr, LOAD_NoWarn));
+    if (!NiagaraSystem)
+    {
+        Issues.Add(FString::Printf(TEXT("Niagara contract: failed to load system '%s'"), *SystemObjectPath));
+        return Issues;
+    }
+
+    auto NormalizeUserName = [](const FString& InName) -> FString
+    {
+        FString Name = InName.TrimStartAndEnd();
+        if (Name.IsEmpty())
+        {
+            return Name;
+        }
+
+        if (!Name.StartsWith(TEXT("User."), ESearchCase::IgnoreCase))
+        {
+            Name = FString::Printf(TEXT("User.%s"), *Name);
+        }
+
+        return Name;
+    };
+
+    bool bModified = false;
+    FNiagaraUserRedirectionParameterStore& ExposedParams = NiagaraSystem->GetExposedParameters();
+
+    TSet<FString> ExistingParams;
+    TArray<FNiagaraVariable> UserParams;
+    ExposedParams.GetUserParameters(UserParams);
+    for (const FNiagaraVariable& Param : UserParams)
+    {
+        FString ParamName = Param.GetName().ToString();
+        ParamName.ToLowerInline();
+        ExistingParams.Add(ParamName);
+    }
+
+    for (const FString& ReqParam : RequiredUserParameters)
+    {
+        FString NormName = NormalizeUserName(ReqParam);
+        if (NormName.IsEmpty())
+        {
+            continue;
+        }
+
+        FString LowerName = NormName;
+        LowerName.ToLowerInline();
+
+        if (!ExistingParams.Contains(LowerName))
+        {
+            FNiagaraTypeDefinition TypeDef = FNiagaraTypeDefinition::GetIntDef();
+            if (LowerName.Contains(TEXT("subsystem")))
+            {
+                TypeDef = FNiagaraTypeDefinition(UObject::StaticClass());
+            }
+
+            FNiagaraVariable NewVar(TypeDef, FName(*NormName));
+            ExposedParams.AddParameter(NewVar, true, true);
+            bModified = true;
+            UE_LOG(LogFlightProject, Log, TEXT("FlightScriptingLibrary: Added user parameter '%s' to Niagara system '%s'"), *NormName, *SystemObjectPath);
+        }
+    }
+
+    TSet<FString> ExistingDIs;
+    for (UNiagaraDataInterface* DI : ExposedParams.GetDataInterfaces())
+    {
+        if (DI && DI->GetClass())
+        {
+            FString ClassPath = DI->GetClass()->GetPathName();
+            ClassPath.ToLowerInline();
+            ExistingDIs.Add(ClassPath);
+        }
+    }
+
+    for (const FString& ReqDI : RequiredDataInterfaceClassPaths)
+    {
+        FString PathLower = ReqDI.TrimStartAndEnd();
+        PathLower.ToLowerInline();
+
+        if (!ExistingDIs.Contains(PathLower))
+        {
+            UClass* DIClass = Cast<UClass>(StaticLoadObject(UClass::StaticClass(), nullptr, *ReqDI, nullptr, LOAD_NoWarn));
+            if (DIClass)
+            {
+                FString ClassName = DIClass->GetName();
+                FString VarName = FString::Printf(TEXT("User.%s"), *ClassName);
+                FNiagaraTypeDefinition TypeDef(DIClass);
+                FNiagaraVariable NewVar(TypeDef, FName(*VarName));
+                ExposedParams.AddParameter(NewVar, true, true);
+                bModified = true;
+                UE_LOG(LogFlightProject, Log, TEXT("FlightScriptingLibrary: Added Data Interface '%s' to Niagara system '%s'"), *ReqDI, *SystemObjectPath);
+            }
+            else
+            {
+                Issues.Add(FString::Printf(TEXT("Niagara contract: failed to load Data Interface class '%s'"), *ReqDI));
+            }
+        }
+    }
+
+    if (bModified)
+    {
+        NiagaraSystem->MarkPackageDirty();
+        // Force the package to save so changes persist across editor sessions
+        UPackage* Package = NiagaraSystem->GetOutermost();
+        if (Package)
+        {
+            FString PackageFileName = FPackageName::LongPackageNameToFilename(Package->GetName(), FPackageName::GetAssetPackageExtension());
+#if WITH_EDITOR
+            FSavePackageArgs SaveArgs;
+            SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
+            SaveArgs.SaveFlags = SAVE_NoError;
+            SaveArgs.Error = GError;
+            UPackage::SavePackage(Package, NiagaraSystem, *PackageFileName, SaveArgs);
+            UE_LOG(LogFlightProject, Log, TEXT("FlightScriptingLibrary: Saved package '%s'"), *PackageFileName);
+#endif
+        }
+    }
+
+    return Issues;
+}
 TArray<FString> UFlightScriptingLibrary::ValidateCVarContract(
 	const FString& CVarName,
 	const FString& ExpectedValue,

@@ -60,11 +60,10 @@ Verse::VProcedure* FVexVvmAssembler::Assemble(
 		VUniqueString& VName = VUniqueString::New(AllocContext, TCHAR_TO_UTF8(*NativeFn->GetName()));
 		
 		// Map the static thunk address in UFlightVerseSubsystem to the native function
-		// For the schema-driven ones, we use Get/SetDroidStateValue thunks.
-		// Future expansion: registry-specific thunks.
+		// For the schema-driven ones, we use Get/SetStateValue thunks.
 		Verse::TNativeFunctionPtr ThunkPtr = nullptr;
-		if (NativeFn->GetName() == TEXT("GetDroidStateValue")) ThunkPtr = &UFlightVerseSubsystem::GetDroidStateValue;
-		else if (NativeFn->GetName() == TEXT("SetDroidStateValue")) ThunkPtr = &UFlightVerseSubsystem::SetDroidStateValue;
+		if (NativeFn->GetName() == TEXT("GetStateValue")) ThunkPtr = &UFlightVerseSubsystem::GetStateValue;
+		else if (NativeFn->GetName() == TEXT("SetStateValue")) ThunkPtr = &UFlightVerseSubsystem::SetStateValue;
 		else ThunkPtr = &UFlightVerseSubsystem::RegistryThunk;
 
 		VNativeFunction& VFn = VNativeFunction::New(AllocContext, NativeFn->GetNumArgs(), ThunkPtr, VName, GlobalFalse());
@@ -72,8 +71,8 @@ Verse::VProcedure* FVexVvmAssembler::Assemble(
 	}
 
 	// Helpers for Load/Store Symbol (mandatory core thunks)
-	FConstantIndex GetFnConst = NativeFnConstants.FindChecked(TEXT("GetDroidStateValue"));
-	FConstantIndex SetFnConst = NativeFnConstants.FindChecked(TEXT("SetDroidStateValue"));
+	FConstantIndex GetFnConst = NativeFnConstants.FindChecked(TEXT("GetStateValue"));
+	FConstantIndex SetFnConst = NativeFnConstants.FindChecked(TEXT("SetStateValue"));
 
 	// 5. Label Management for Control Flow
 	TMap<int32, FOpEmitter::FLabel> Labels;

@@ -363,6 +363,7 @@ namespace
         PassParameters->DeltaTime = Ctx.Command.DeltaTime;
         PassParameters->CommandType = Ctx.Command.CommandType;
         PassParameters->NumEntities = Ctx.NumEntities;
+        PassParameters->NumEvents = Ctx.Command.NumEvents;
 
         auto ComputeShader = Ctx.ShaderMap->GetShader<FFlightSwarmForceCS>();
         FComputeShaderUtils::AddPass(*Ctx.GraphBuilder, RDG_EVENT_NAME("Swarm.Force"), ComputeShader, PassParameters, FIntVector(Ctx.ThreadGroups, 1, 1));
@@ -389,7 +390,10 @@ namespace
         PassParameters->FrameIndex = Ctx.Command.FrameIndex;
         PassParameters->PredictionHorizon = Ctx.Command.PredictionHorizon;
         PassParameters->NumEntities = Ctx.NumEntities;
+        PassParameters->NumEvents = Ctx.Command.NumEvents;
+
         auto ComputeShader = Ctx.ShaderMap->GetShader<FFlightSwarmPredictiveCS>();
+
         FComputeShaderUtils::AddPass(*Ctx.GraphBuilder, RDG_EVENT_NAME("Swarm.Predictive"), ComputeShader, PassParameters, FIntVector(Ctx.ThreadGroups, 1, 1));
         return Ok(true);
     }

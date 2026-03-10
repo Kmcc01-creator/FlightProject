@@ -5,6 +5,7 @@
 #include "Vex/FlightVexParser.h"
 #include "Vex/FlightVexTypes.h"
 #include "Vex/FlightVexSimdExecutor.h"
+#include "Vex/FlightVexSymbolRegistry.h"
 #include "Vex/FlightVexIr.h"
 #include "Schema/FlightRequirementRegistry.h"
 #include "Swarm/SwarmSimulationTypes.h"
@@ -157,6 +158,12 @@ namespace
 		}
 		return Value;
 	}
+
+	const void* GetDroidStateTypeKey()
+	{
+		return Flight::Vex::TTypeVexRegistry<Flight::Swarm::FDroidState>::GetTypeKey();
+	}
+}
 
 	bool IsSupportedNativeFunction(const FString& FunctionName)
 	{
@@ -589,7 +596,6 @@ namespace
 			}
 		}
 	}
-}
 
 void UFlightVerseSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
@@ -612,7 +618,7 @@ void UFlightVerseSubsystem::Deinitialize()
 	Super::Deinitialize();
 }
 
-bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSource, FString& OutErrors)
+bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSource, FString& OutErrors, UScriptStruct* TargetStruct)
 {
 	// Initialize behavior state pessimistically; flip to executable only when a runnable path is available.
 	FVerseBehavior& Behavior = Behaviors.FindOrAdd(BehaviorID);
@@ -678,8 +684,33 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 		Behavior.bHasCompileArtifactReport = true;
 	};
 
+	// 1. Resolve Symbol Definitions for this compilation
+	TArray<Flight::Vex::FVexSymbolDefinition> LocalDefinitions = SymbolDefinitions;
+	if (TargetStruct)
+	{
+		if (const Flight::Vex::FVexTypeSchema* Schema = Flight::Vex::FVexSymbolRegistry::Get().GetSchema(TargetStruct))
+		{
+			for (auto& It : Schema->Symbols)
+			{
+				const auto& Accessor = It.Value;
+				if (LocalDefinitions.ContainsByPredicate([SymbolName = Accessor.SymbolName](const Flight::Vex::FVexSymbolDefinition& D) { return D.SymbolName == SymbolName; }))
+				{
+					continue;
+				}
+
+				Flight::Vex::FVexSymbolDefinition Def;
+				Def.SymbolName = Accessor.SymbolName;
+				Def.ValueType = TEXT("float");
+				Def.Residency = Accessor.Residency;
+				Def.bWritable = Accessor.Setter != nullptr;
+				Def.bRequired = false;
+				LocalDefinitions.Add(Def);
+			}
+		}
+	}
+
 	const double ParseStartTime = FPlatformTime::Seconds();
-	const Flight::Vex::FVexParseResult Result = Flight::Vex::ParseAndValidate(VexSource, SymbolDefinitions, false);
+	const Flight::Vex::FVexParseResult Result = Flight::Vex::ParseAndValidate(VexSource, LocalDefinitions, false);
 	ParseTimeMs = (FPlatformTime::Seconds() - ParseStartTime) * 1000.0;
 
 	if (Result.Issues.Num() > 0)
@@ -698,42 +729,45 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 		}
 	}
 
-	// Enforce required-symbol contract in compile pipeline until parser-side strict mode lands.
-	TSet<FString> UsedSymbols;
-	for (const FString& Symbol : Result.Program.UsedSymbols)
+	// Enforce required-symbol contract only if we're using the default swarm definitions
+	if (!TargetStruct)
 	{
-		UsedSymbols.Add(Symbol);
-	}
-
-	TArray<FString> MissingRequiredSymbols;
-	for (const Flight::Vex::FVexSymbolDefinition& Def : SymbolDefinitions)
-	{
-		if (Def.bRequired && !UsedSymbols.Contains(Def.SymbolName))
+		TSet<FString> UsedSymbols;
+		for (const FString& Symbol : Result.Program.UsedSymbols)
 		{
-			MissingRequiredSymbols.Add(Def.SymbolName);
+			UsedSymbols.Add(Symbol);
 		}
-	}
-	MissingRequiredSymbols.Sort();
 
-	if (MissingRequiredSymbols.Num() > 0)
-	{
-		OutErrors += FString::Printf(
-			TEXT("VEX Contract Error: missing required symbols: %s\n"),
-			*FString::Join(MissingRequiredSymbols, TEXT(", ")));
-		Behavior.LastCompileDiagnostics = OutErrors;
-		BackendPath = TEXT("ContractValidationOnly");
-		FinalizeArtifactReport();
-		return false;
+		TArray<FString> MissingRequiredSymbols;
+		for (const Flight::Vex::FVexSymbolDefinition& Def : LocalDefinitions)
+		{
+			if (Def.bRequired && !UsedSymbols.Contains(Def.SymbolName))
+			{
+				MissingRequiredSymbols.Add(Def.SymbolName);
+			}
+		}
+		MissingRequiredSymbols.Sort();
+
+		if (MissingRequiredSymbols.Num() > 0)
+		{
+			OutErrors += FString::Printf(
+				TEXT("VEX Contract Error: missing required symbols: %s\n"),
+				*FString::Join(MissingRequiredSymbols, TEXT(", ")));
+			Behavior.LastCompileDiagnostics = OutErrors;
+			BackendPath = TEXT("ContractValidationOnly");
+			FinalizeArtifactReport();
+			return false;
+		}
 	}
 
 	// Store behavior metadata regardless of VM availability.
 	Behavior.ExecutionRateHz = Result.Program.ExecutionRateHz;
 	Behavior.FrameInterval = Result.Program.FrameInterval;
-	Behavior.Tier = Flight::Vex::FVexOptimizer::ClassifyTier(Result.Program, SymbolDefinitions);
+	Behavior.Tier = Flight::Vex::FVexOptimizer::ClassifyTier(Result.Program, LocalDefinitions);
 
 	// Always generate IR for VVM assembly if possible
 	const double IrCompileStartTime = FPlatformTime::Seconds();
-	IrProgram = Flight::Vex::FVexIrCompiler::Compile(Result.Program, SymbolDefinitions, IrErrors);
+	IrProgram = Flight::Vex::FVexIrCompiler::Compile(Result.Program, LocalDefinitions, IrErrors);
 	IrCompileTimeMs = (FPlatformTime::Seconds() - IrCompileStartTime) * 1000.0;
 
 	if (Behavior.Tier == Flight::Vex::EVexTier::Literal)
@@ -913,6 +947,11 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 
 void UFlightVerseSubsystem::ExecuteBehavior(uint32 BehaviorID, Flight::Swarm::FDroidState& DroidState)
 {
+	ExecuteBehaviorOnStruct(BehaviorID, &DroidState, GetDroidStateTypeKey());
+}
+
+void UFlightVerseSubsystem::ExecuteBehaviorOnStruct(uint32 BehaviorID, void* StructPtr, const void* TypeKey)
+{
 	const FVerseBehavior* Behavior = Behaviors.Find(BehaviorID);
 	if (!Behavior || !Behavior->bHasExecutableProcedure)
 	{
@@ -920,12 +959,23 @@ void UFlightVerseSubsystem::ExecuteBehavior(uint32 BehaviorID, Flight::Swarm::FD
 	}
 
 #if WITH_VERSE_VM || defined(__INTELLISENSE__)
+	// Zero-cost Tier 1 path (Literal scripts)
+	if (Behavior->Tier == Flight::Vex::EVexTier::Literal)
+	{
+		if (const Flight::Vex::FVexTypeSchema* Schema = Flight::Vex::FVexSymbolRegistry::Get().GetSchema(TypeKey))
+		{
+			ExecuteOnSchema(Behavior->NativeProgram, StructPtr, *Schema);
+			return;
+		}
+	}
+
+	// Dynamic Tier 2/3 path (Verse VM)
 	if (Behavior->bUsesVmEntryPoint && Behavior->Procedure.Get())
 	{
 		VerseContext.EnterVM([&]()
 		{
 			Verse::FAllocationContext AllocContext(VerseContext);
-			ExecuteBehaviorInContext(BehaviorID, *Behavior, DroidState, AllocContext);
+			ExecuteBehaviorInContext(BehaviorID, *Behavior, StructPtr, TypeKey, AllocContext);
 		});
 		return;
 	}
@@ -933,8 +983,129 @@ void UFlightVerseSubsystem::ExecuteBehavior(uint32 BehaviorID, Flight::Swarm::FD
 
 	if (Behavior->bUsesNativeFallback)
 	{
-		ExecuteNativeProgram(Behavior->NativeProgram, DroidState);
+		// First try schema-based execution if not already handled
+		if (const Flight::Vex::FVexTypeSchema* Schema = Flight::Vex::FVexSymbolRegistry::Get().GetSchema(TypeKey))
+		{
+			ExecuteOnSchema(Behavior->NativeProgram, StructPtr, *Schema);
+			return;
+		}
+
+		// Fallback to legacy hardcoded path for FDroidState
+		if (TypeKey == GetDroidStateTypeKey())
+		{
+			ExecuteNativeProgram(Behavior->NativeProgram, *static_cast<Flight::Swarm::FDroidState*>(StructPtr));
+		}
 		return;
+	}
+}
+
+void UFlightVerseSubsystem::ExecuteOnSchema(const Flight::Vex::FVexProgramAst& Program, void* StructPtr, const Flight::Vex::FVexTypeSchema& Schema)
+{
+	using namespace Flight::Vex;
+
+	UE_LOG(LogFlightVerseSubsystem, Verbose, TEXT("ExecuteOnSchema: Program has %d statements, %d expressions"), Program.Statements.Num(), Program.Expressions.Num());
+
+	TMap<FString, FNativeValue> Locals;
+
+	TFunction<FNativeValue(int32)> EvaluateExpression = [&](int32 NodeIndex) -> FNativeValue
+	{
+		if (!Program.Expressions.IsValidIndex(NodeIndex)) return FNativeValue();
+		const FVexExpressionAst& Expr = Program.Expressions[NodeIndex];
+
+		FNativeValue Result;
+		switch (Expr.Kind)
+		{
+		case EVexExprKind::NumberLiteral:
+			Result = MakeFloat(FCString::Atof(*Expr.Lexeme));
+			break;
+
+		case EVexExprKind::Identifier:
+			Result = Locals.FindRef(Expr.Lexeme);
+			break;
+
+		case EVexExprKind::SymbolRef:
+			if (const FVexSymbolAccessor* Accessor = Schema.Symbols.Find(Expr.Lexeme))
+			{
+				if (Accessor->MemberOffset != INDEX_NONE)
+				{
+					Result = MakeFloat(*(float*)((uint8*)StructPtr + Accessor->MemberOffset));
+				}
+				else if (Accessor->Getter)
+				{
+					Result = MakeFloat(Accessor->Getter(StructPtr));
+				}
+			}
+			break;
+
+		case EVexExprKind::BinaryOp:
+		{
+			FNativeValue L = EvaluateExpression(Expr.LeftNodeIndex);
+			FNativeValue R = EvaluateExpression(Expr.RightNodeIndex);
+			Result = ApplyArithmetic(Expr.Lexeme, L, R);
+			break;
+		}
+		
+		default:
+			break;
+		}
+
+		UE_LOG(LogFlightVerseSubsystem, Log, TEXT("  EvalExpr [%d]: Kind=%d, Lexeme='%s', Value=%f"), NodeIndex, static_cast<int32>(Expr.Kind), *Expr.Lexeme, AsFloat(Result));
+		return Result;
+	};
+
+	for (const FVexStatementAst& Stmt : Program.Statements)
+	{
+		if (Stmt.Kind == EVexStatementKind::Assignment)
+		{
+			if (!Program.Expressions.IsValidIndex(Stmt.ExpressionNodeIndex)) continue;
+			const FVexExpressionAst& AssignExpr = Program.Expressions[Stmt.ExpressionNodeIndex];
+			
+			if (AssignExpr.Lexeme.EndsWith(TEXT("=")))
+			{
+				const FVexExpressionAst& LhsExpr = Program.Expressions[AssignExpr.LeftNodeIndex];
+				FNativeValue RhsValue = EvaluateExpression(AssignExpr.RightNodeIndex);
+
+				UE_LOG(LogFlightVerseSubsystem, Log, TEXT("  Assign: LHS='%s', Op='%s', RHS=%f"), *LhsExpr.Lexeme, *AssignExpr.Lexeme, AsFloat(RhsValue));
+
+				if (LhsExpr.Kind == EVexExprKind::SymbolRef)
+				{
+					if (const FVexSymbolAccessor* Accessor = Schema.Symbols.Find(LhsExpr.Lexeme))
+					{
+						FNativeValue FinalValue = RhsValue;
+						if (AssignExpr.Lexeme != TEXT("="))
+						{
+							const FString ArithmeticOp = AssignExpr.Lexeme.LeftChop(1);
+							FNativeValue Current;
+							if (Accessor->MemberOffset != INDEX_NONE) Current = MakeFloat(*(float*)((uint8*)StructPtr + Accessor->MemberOffset));
+							else if (Accessor->Getter) Current = MakeFloat(Accessor->Getter(StructPtr));
+							FinalValue = ApplyArithmetic(ArithmeticOp, Current, RhsValue);
+						}
+
+						UE_LOG(LogFlightVerseSubsystem, Log, TEXT("    Store Symbol: '%s' (offset %d) = %f"), *LhsExpr.Lexeme, Accessor->MemberOffset, AsFloat(FinalValue));
+
+						if (Accessor->MemberOffset != INDEX_NONE)
+						{
+							*(float*)((uint8*)StructPtr + Accessor->MemberOffset) = AsFloat(FinalValue);
+						}
+						else if (Accessor->Setter)
+						{
+							Accessor->Setter(StructPtr, AsFloat(FinalValue));
+						}
+					}
+				}
+				else if (LhsExpr.Kind == EVexExprKind::Identifier)
+				{
+					FNativeValue LhsValue = Locals.FindRef(LhsExpr.Lexeme);
+					FNativeValue FinalValue = RhsValue;
+					if (AssignExpr.Lexeme != TEXT("="))
+					{
+						const FString ArithmeticOp = AssignExpr.Lexeme.LeftChop(1);
+						FinalValue = ApplyArithmetic(ArithmeticOp, LhsValue, RhsValue);
+					}
+					Locals.Add(LhsExpr.Lexeme, FinalValue);
+				}
+			}
+		}
 	}
 }
 
@@ -987,13 +1158,14 @@ void UFlightVerseSubsystem::ExecuteBehaviorBulk(uint32 BehaviorID, TArrayView<Fl
 }
 
 #if WITH_VERSE_VM || defined(__INTELLISENSE__)
-void UFlightVerseSubsystem::ExecuteBehaviorInContext(uint32 BehaviorID, const FVerseBehavior& Behavior, Flight::Swarm::FDroidState& DroidState, Verse::FAllocationContext& AllocContext)
+void UFlightVerseSubsystem::ExecuteBehaviorInContext(uint32 BehaviorID, const FVerseBehavior& Behavior, void* StructPtr, const void* TypeKey, Verse::FAllocationContext& AllocContext)
 {
 	using namespace Verse;
 
 	// Guard against recursion or re-entry if needed, but for bulk execution we assume safe context.
 	ActiveVmBehaviorID = BehaviorID;
-	ActiveVmDroidState = &DroidState;
+	ActiveVmStatePtr = StructPtr;
+	ActiveVmTypeKey = TypeKey;
 
 	VProcedure* Procedure = Behavior.Procedure.Get();
 	if (Procedure)
@@ -1007,14 +1179,15 @@ void UFlightVerseSubsystem::ExecuteBehaviorInContext(uint32 BehaviorID, const FV
 		}
 	}
 
-	ActiveVmDroidState = nullptr;
+	ActiveVmStatePtr = nullptr;
+	ActiveVmTypeKey = nullptr;
 	ActiveVmBehaviorID = 0;
 }
 #endif
 
-void UFlightVerseSubsystem::DeferBehavior(uint32 BehaviorID, Flight::Swarm::FDroidState& DroidState)
+void UFlightVerseSubsystem::DeferBehavior(uint32 BehaviorID, void* StructPtr, const void* TypeKey)
 {
-	DeferredBehaviors.Add({ BehaviorID, &DroidState });
+	DeferredBehaviors.Add({ BehaviorID, StructPtr, TypeKey });
 }
 
 void UFlightVerseSubsystem::FlushDeferredBehaviors()
@@ -1030,18 +1203,21 @@ void UFlightVerseSubsystem::FlushDeferredBehaviors()
 			const FVerseBehavior* Behavior = Behaviors.Find(Deferred.BehaviorID);
 			if (Behavior && Behavior->bHasExecutableProcedure && Behavior->bUsesVmEntryPoint)
 			{
-				ExecuteBehaviorInContext(Deferred.BehaviorID, *Behavior, *Deferred.DroidState, AllocContext);
+				ExecuteBehaviorInContext(Deferred.BehaviorID, *Behavior, Deferred.StatePtr, Deferred.TypeKey, AllocContext);
 			}
 			else if (Behavior && Behavior->bUsesNativeFallback)
 			{
-				ExecuteNativeProgram(Behavior->NativeProgram, *Deferred.DroidState);
+				if (Deferred.TypeKey == GetDroidStateTypeKey())
+				{
+					ExecuteNativeProgram(Behavior->NativeProgram, *static_cast<Flight::Swarm::FDroidState*>(Deferred.StatePtr));
+				}
 			}
 		}
 	});
 #else
 	for (const auto& Deferred : DeferredBehaviors)
 	{
-		ExecuteBehavior(Deferred.BehaviorID, *Deferred.DroidState);
+		ExecuteBehaviorOnStruct(Deferred.BehaviorID, Deferred.StatePtr, Deferred.TypeKey);
 	}
 #endif
 
@@ -1289,14 +1465,14 @@ Verse::FOpResult UFlightVerseSubsystem::ExecuteVmEntryThunk(
 namespace
 {
 	/**
-	 * FVexDroidStateAccessor: Handles Get/Set for @symbols via RegistryThunk
+	 * FVexStateAccessor: Handles Get/Set for @symbols via Registry
 	 */
-	class FVexDroidStateAccessor : public Flight::Vex::IVexNativeFunction
+	class FVexStateAccessor : public Flight::Vex::IVexNativeFunction
 	{
 	public:
-		explicit FVexDroidStateAccessor(bool bInIsSetter) : bIsSetter(bInIsSetter) {}
+		explicit FVexStateAccessor(bool bInIsSetter) : bIsSetter(bInIsSetter) {}
 
-		virtual FString GetName() const override { return bIsSetter ? TEXT("SetDroidStateValue") : TEXT("GetDroidStateValue"); }
+		virtual FString GetName() const override { return bIsSetter ? TEXT("SetStateValue") : TEXT("GetStateValue"); }
 		virtual int32 GetNumArgs() const override { return bIsSetter ? 2 : 1; }
 
 		virtual Verse::FOpResult Execute(Verse::FRunningContext Context, Verse::VValue Self, Verse::VNativeFunction::Args Arguments) override
@@ -1307,13 +1483,13 @@ namespace
 			}
 
 			UFlightVerseSubsystem* Subsystem = Cast<UFlightVerseSubsystem>(Self.AsUObject());
-			if (!Subsystem || !Subsystem->ActiveVmDroidState)
+			if (!Subsystem || !Subsystem->ActiveVmStatePtr || !Subsystem->ActiveVmTypeKey)
 			{
 				return Verse::FOpResult(Verse::FOpResult::Error);
 			}
 
 			FString SymbolName = UTF8_TO_TCHAR(Arguments[0].AsString().AsUTF8());
-			const Flight::Vex::FVexSymbolAccessor* Accessor = Flight::Vex::FVexSymbolRegistry::Get().FindSymbol(SymbolName);
+			const Flight::Vex::FVexSymbolAccessor* Accessor = Flight::Vex::FVexSymbolRegistry::Get().FindSymbol(Subsystem->ActiveVmTypeKey, SymbolName);
 
 			if (!Accessor)
 			{
@@ -1326,14 +1502,14 @@ namespace
 				if (Arguments.Num() < 2 || !Arguments[1].IsFloat()) return Verse::FOpResult(Verse::FOpResult::Error);
 				if (!Accessor->Setter) return Verse::FOpResult(Verse::FOpResult::Error);
 
-				Accessor->Setter(*Subsystem->ActiveVmDroidState, Arguments[1].AsFloat());
+				Accessor->Setter(Subsystem->ActiveVmStatePtr, Arguments[1].AsFloat());
 				return Verse::FOpResult(Verse::FOpResult::Return, Verse::VValue::FromBool(true));
 			}
 			else
 			{
 				if (!Accessor->Getter) return Verse::FOpResult(Verse::FOpResult::Error);
 
-				float Result = Accessor->Getter(*Subsystem->ActiveVmDroidState);
+				float Result = Accessor->Getter(Subsystem->ActiveVmStatePtr);
 				return Verse::FOpResult(Verse::FOpResult::Return, Verse::VValue::FromFloat(Result));
 			}
 		}
@@ -1405,8 +1581,8 @@ void UFlightVerseSubsystem::RegisterNativeVerseFunctions()
 	using namespace Flight::Vex;
 	FVexNativeRegistry& Registry = FVexNativeRegistry::Get();
 
-	Registry.RegisterFunction(MakeShared<FVexDroidStateAccessor>(false));
-	Registry.RegisterFunction(MakeShared<FVexDroidStateAccessor>(true));
+	Registry.RegisterFunction(MakeShared<FVexStateAccessor>(false));
+	Registry.RegisterFunction(MakeShared<FVexStateAccessor>(true));
 
 	// Register built-in VVM thunks
 	VerseContext.EnterVM([&]()
@@ -1426,44 +1602,23 @@ void UFlightVerseSubsystem::RegisterNativeVerseFunctions()
 void UFlightVerseSubsystem::RegisterNativeVerseSymbols()
 {
 	using namespace Flight::Vex;
-	FVexSymbolRegistry& Registry = FVexSymbolRegistry::Get();
-
-	// @position
-	Registry.RegisterSymbol({
-		TEXT("@position"),
-		[](const Flight::Swarm::FDroidState& State) { return State.Position.X; },
-		nullptr
-	});
-
-	// @shield
-	Registry.RegisterSymbol({
-		TEXT("@shield"),
-		[](const Flight::Swarm::FDroidState& State) { return State.Shield; },
-		[](Flight::Swarm::FDroidState& State, float Value) { State.Shield = Value; State.bIsDirty = true; }
-	});
-
-	// @energy
-	Registry.RegisterSymbol({
-		TEXT("@energy"),
-		[](const Flight::Swarm::FDroidState& State) { return State.Energy; },
-		[](Flight::Swarm::FDroidState& State, float Value) { State.Energy = Value; State.bIsDirty = true; }
-	});
+	
+	// Register the swarm-specific symbols via the new generic reflection registry
+	TTypeVexRegistry<Flight::Swarm::FDroidState>::Register();
 
 	UE_LOG(LogFlightVerseSubsystem, Verbose, TEXT("UFlightVerseSubsystem: Registered native VEX symbols."));
 }
 
-Verse::FOpResult UFlightVerseSubsystem::GetDroidStateValue(Verse::FRunningContext Context, Verse::VValue Self, Verse::VNativeFunction::Args Arguments)
+Verse::FOpResult UFlightVerseSubsystem::GetStateValue(Verse::FRunningContext Context, Verse::VValue Self, Verse::VNativeFunction::Args Arguments)
 {
-	auto Thunk = Flight::Vex::FVexNativeRegistry::Get().FindFunction(TEXT("GetDroidStateValue"));
-	if (Thunk.IsValid()) return Thunk->Execute(Context, Self, Arguments);
-	return Verse::FOpResult(Verse::FOpResult::Error);
+	static FVexStateAccessor Getter(false);
+	return Getter.Execute(Context, Self, Arguments);
 }
 
-Verse::FOpResult UFlightVerseSubsystem::SetDroidStateValue(Verse::FRunningContext Context, Verse::VValue Self, Verse::VNativeFunction::Args Arguments)
+Verse::FOpResult UFlightVerseSubsystem::SetStateValue(Verse::FRunningContext Context, Verse::VValue Self, Verse::VNativeFunction::Args Arguments)
 {
-	auto Thunk = Flight::Vex::FVexNativeRegistry::Get().FindFunction(TEXT("SetDroidStateValue"));
-	if (Thunk.IsValid()) return Thunk->Execute(Context, Self, Arguments);
-	return Verse::FOpResult(Verse::FOpResult::Error);
+	static FVexStateAccessor Setter(true);
+	return Setter.Execute(Context, Self, Arguments);
 }
 
 #else
@@ -1479,10 +1634,19 @@ void UFlightVerseSubsystem::RegisterNativeComponents()
 
 void UFlightVerseSubsystem::AddReferencedObjects(UObject* InThis, FReferenceCollector& Collector)
 {
+	Super::AddReferencedObjects(InThis, Collector);
+
 #if WITH_VERSE_VM || defined(__INTELLISENSE__)
 	UFlightVerseSubsystem* Subsystem = Cast<UFlightVerseSubsystem>(InThis);
 	if (Subsystem)
 	{
+		for (auto& Pair : Subsystem->Behaviors)
+		{
+			FVerseBehavior& Behavior = Pair.Value;
+			Collector.AddReferencedVerseValue(Behavior.Procedure, Subsystem, nullptr);
+			Collector.AddReferencedVerseValue(Behavior.VmEntryPoint, Subsystem, nullptr);
+		}
+
 		for (auto& Pair : Subsystem->PendingReadbacks)
 		{
 			Collector.AddReferencedVerseValue(Pair.Value, Subsystem, nullptr);

@@ -185,6 +185,7 @@ class FLIGHTGPUCOMPUTE_API FFlightSwarmForceCS : public FGlobalShader
 		SHADER_PARAMETER(float, DeltaTime)
 		SHADER_PARAMETER(uint32, CommandType)
 		SHADER_PARAMETER(uint32, NumEntities)
+		SHADER_PARAMETER(uint32, NumEvents)
 	END_SHADER_PARAMETER_STRUCT()
 
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
@@ -216,6 +217,7 @@ class FLIGHTGPUCOMPUTE_API FFlightSwarmPredictiveCS : public FGlobalShader
 		SHADER_PARAMETER(uint32, FrameIndex)
 		SHADER_PARAMETER(uint32, PredictionHorizon)
 		SHADER_PARAMETER(uint32, NumEntities)
+		SHADER_PARAMETER(uint32, NumEvents)
 	END_SHADER_PARAMETER_STRUCT()
 
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)

@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Subsystems/WorldSubsystem.h"
+#include "Vex/FlightVexSchema.h"
 #include "Vex/FlightCompileArtifacts.h"
 #include "Vex/FlightVexParser.h"
 #include "Vex/FlightVexOptics.h"
@@ -54,13 +55,24 @@ public:
 	 * Compiles VEX source for a specific behavior ID.
 	 * Returns true only when an executable behavior is produced.
 	 */
-	bool CompileVex(uint32 BehaviorID, const FString& VexSource, FString& OutErrors);
+	bool CompileVex(uint32 BehaviorID, const FString& VexSource, FString& OutErrors, UScriptStruct* TargetStruct = nullptr);
 
 	/**
 	 * Executes the currently loaded Verse behavior on a drone state.
 	 * Uses Verse VM when available, otherwise native fallback execution.
 	 */
 	void ExecuteBehavior(uint32 BehaviorID, Flight::Swarm::FDroidState& DroidState);
+
+	/**
+	 * Executes a literal Tier 1 script AST directly on memory using schema offsets.
+	 * This is the zero-cost path for non-Verse VM execution.
+	 */
+	void ExecuteOnSchema(const Flight::Vex::FVexProgramAst& Program, void* StructPtr, const Flight::Vex::FVexTypeSchema& Schema);
+
+	/**
+	 * Executes a behavior on an arbitrary C++ struct.
+	 */
+	void ExecuteBehaviorOnStruct(uint32 BehaviorID, void* StructPtr, const void* TypeKey);
 
 	/**
 	 * Executes a behavior on multiple entities in bulk.
@@ -132,18 +144,19 @@ private:
 
 #if WITH_VERSE_VM || defined(__INTELLISENSE__)
 	/** Core execution logic that assumes the caller has already called EnterVM() */
-	void ExecuteBehaviorInContext(uint32 BehaviorID, const FVerseBehavior& Behavior, Flight::Swarm::FDroidState& DroidState, Verse::FAllocationContext& AllocContext);
+	void ExecuteBehaviorInContext(uint32 BehaviorID, const FVerseBehavior& Behavior, void* StructPtr, const void* TypeKey, Verse::FAllocationContext& AllocContext);
 #endif
 
 	/** A deferred closure representing a behavior execution pending async completion. */
 	struct FVexDeferredBehavior
 	{
 		uint32 BehaviorID;
-		Flight::Swarm::FDroidState* DroidState;
+		void* StatePtr;
+		const void* TypeKey;
 	};
 
 	/** Registers a behavior for deferred batch execution (Async Fusion). */
-	void DeferBehavior(uint32 BehaviorID, Flight::Swarm::FDroidState& DroidState);
+	void DeferBehavior(uint32 BehaviorID, void* StructPtr, const void* TypeKey);
 
 	/** Flushes all deferred behaviors in a single fused VVM transaction. */
 	void FlushDeferredBehaviors();
@@ -154,9 +167,9 @@ private:
 	static Verse::FOpResult VmBehaviorEntryThunk(Verse::FRunningContext Context, Verse::VValue Self, Verse::VNativeFunction::Args Arguments);
 	Verse::FOpResult ExecuteVmEntryThunk(Verse::FRunningContext Context, Verse::VNativeFunction::Args Arguments);
 
-	// VEX IR -> VVM Native Thunks
-	static Verse::FOpResult GetDroidStateValue(Verse::FRunningContext Context, Verse::VValue Self, Verse::VNativeFunction::Args Arguments);
-	static Verse::FOpResult SetDroidStateValue(Verse::FRunningContext Context, Verse::VValue Self, Verse::VNativeFunction::Args Arguments);
+	// VEX IR -> VVM Native Thunks (Now generalized)
+	static Verse::FOpResult GetStateValue(Verse::FRunningContext Context, Verse::VValue Self, Verse::VNativeFunction::Args Arguments);
+	static Verse::FOpResult SetStateValue(Verse::FRunningContext Context, Verse::VValue Self, Verse::VNativeFunction::Args Arguments);
 
 	/** Generic dispatcher for registered native thunks */
 	static Verse::FOpResult RegistryThunk(Verse::FRunningContext Context, Verse::VValue Self, Verse::VNativeFunction::Args Arguments);
@@ -166,7 +179,8 @@ private:
 
 	// Active execution payload consumed by VM thunk invocation.
 	uint32 ActiveVmBehaviorID = 0;
-	Flight::Swarm::FDroidState* ActiveVmDroidState = nullptr;
+	void* ActiveVmStatePtr = nullptr;
+	const void* ActiveVmTypeKey = nullptr;
 #endif
 
 #if WITH_VERSE_VM || defined(__INTELLISENSE__)

@@ -104,7 +104,7 @@ def _ensure_asset_requirement(requirement: dict, create_missing: bool) -> list:
     return issues
 
 
-def _validate_niagara_requirement(requirement: dict) -> list:
+def _validate_niagara_requirement(requirement: dict, create_missing: bool) -> list:
     issues = []
     requirement_id = requirement.get("requirementId", "unknown")
     system_object_path = requirement.get("systemPath", "")
@@ -119,9 +119,17 @@ def _validate_niagara_requirement(requirement: dict) -> list:
 
     required_user_parameters = requirement.get("requiredUserParameters", [])
     required_data_interfaces = requirement.get("requiredDataInterfaces", [])
-    contract_issues = unreal.FlightScriptingLibrary.validate_niagara_system_contract(
-        system_object_path, required_user_parameters, required_data_interfaces
-    )
+    
+    if create_missing:
+        # Call the new C++ function to author missing parameters/interfaces
+        contract_issues = unreal.FlightScriptingLibrary.ensure_niagara_system_contract(
+            system_object_path, required_user_parameters, required_data_interfaces
+        )
+    else:
+        contract_issues = unreal.FlightScriptingLibrary.validate_niagara_system_contract(
+            system_object_path, required_user_parameters, required_data_interfaces
+        )
+        
     for issue in contract_issues:
         issues.append(f"{requirement_id}: {issue}")
 
@@ -204,7 +212,7 @@ def ensure_manifest_requirements(manifest_path: str = "", create_missing: bool =
         issues.extend(_ensure_asset_requirement(requirement, create_missing))
 
     for requirement in manifest.get("niagaraRequirements", []):
-        issues.extend(_validate_niagara_requirement(requirement))
+        issues.extend(_validate_niagara_requirement(requirement, create_missing))
 
     issues.extend(validate_vex_symbol_contracts(manifest))
 
