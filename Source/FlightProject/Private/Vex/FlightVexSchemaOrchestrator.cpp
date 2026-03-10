@@ -22,6 +22,62 @@ EVexValueType ToSchemaValueType(const EFlightVexSymbolValueType ValueType)
 	}
 }
 
+void EnsureCanonicalRecords(FVexTypeSchema& Schema)
+{
+	if (!Schema.SymbolRecords.IsEmpty())
+	{
+		return;
+	}
+
+	for (const TPair<FString, FVexLogicalSymbolSchema>& Pair : Schema.LogicalSymbols)
+	{
+		FVexSymbolRecord Record;
+		Record.SymbolName = Pair.Key;
+		Record.ValueType = Pair.Value.ValueType;
+		Record.bReadable = Pair.Value.bReadable;
+		Record.bWritable = Pair.Value.bWritable;
+		Record.bRequired = Pair.Value.bRequired;
+		Record.bSimdReadAllowed = Pair.Value.bSimdReadAllowed;
+		Record.bSimdWriteAllowed = Pair.Value.bSimdWriteAllowed;
+		Record.bGpuTier1Allowed = Pair.Value.bGpuTier1Allowed;
+		Record.Residency = Pair.Value.Residency;
+		Record.Affinity = Pair.Value.Affinity;
+		Record.AlignmentRequirement = Pair.Value.AlignmentRequirement;
+		Record.MathDeterminismProfile = Pair.Value.MathDeterminismProfile;
+		Record.BackendBinding = Pair.Value.BackendBinding;
+		Record.Storage = Pair.Value.Storage;
+
+		if (const FVexSymbolAccessor* Accessor = Schema.Symbols.Find(Pair.Key))
+		{
+			if (Accessor->Getter)
+			{
+				Record.ReadValue = [LegacyGetter = Accessor->Getter](const void* Ptr) -> FVexRuntimeValue
+				{
+					return FVexRuntimeValue::FromFloat(LegacyGetter(Ptr));
+				};
+			}
+
+			if (Accessor->Setter)
+			{
+				Record.WriteValue = [LegacySetter = Accessor->Setter](void* Ptr, const FVexRuntimeValue& Value) -> bool
+				{
+					LegacySetter(Ptr, Value.AsFloat());
+					return true;
+				};
+			}
+
+			Record.Getter = Accessor->Getter;
+			Record.Setter = Accessor->Setter;
+			if (Record.Storage.MemberOffset == INDEX_NONE)
+			{
+				Record.Storage.MemberOffset = Accessor->MemberOffset;
+			}
+		}
+
+		Schema.SymbolRecords.Add(Pair.Key, MoveTemp(Record));
+	}
+}
+
 } // namespace
 
 FVexTypeId FVexSchemaOrchestrator::MakeTypeId(const void* RuntimeKey, const FName StableName)
@@ -34,42 +90,38 @@ FVexTypeId FVexSchemaOrchestrator::MakeTypeId(const void* RuntimeKey, const FNam
 
 FVexTypeSchema FVexSchemaOrchestrator::MergeManifestRequirements(FVexTypeSchema BaseSchema, const TArray<FFlightVexSymbolRow>& Rows)
 {
+	EnsureCanonicalRecords(BaseSchema);
+
 	for (const FFlightVexSymbolRow& Row : Rows)
 	{
-		FVexLogicalSymbolSchema& Logical = BaseSchema.LogicalSymbols.FindOrAdd(Row.SymbolName);
-		Logical.SymbolName = Row.SymbolName;
-		Logical.ValueType = ToSchemaValueType(Row.ValueType);
-		Logical.bWritable = Row.bWritable;
-		Logical.bRequired = Row.bRequired;
-		Logical.bSimdReadAllowed = Row.bSimdReadAllowed;
-		Logical.bSimdWriteAllowed = Row.bSimdWriteAllowed;
-		Logical.bGpuTier1Allowed = Row.bGpuTier1Allowed;
-		Logical.Residency = Row.Residency;
-		Logical.Affinity = Row.Affinity;
-		Logical.AlignmentRequirement = Row.AlignmentRequirement;
-		Logical.MathDeterminismProfile = Row.MathDeterminismProfile;
-		Logical.BackendBinding.HlslIdentifier = Row.HlslIdentifier;
-		Logical.BackendBinding.VerseIdentifier = Row.VerseIdentifier;
-
-		if (Logical.Storage.Kind == EVexStorageKind::None)
+		FVexSymbolRecord& Record = BaseSchema.SymbolRecords.FindOrAdd(Row.SymbolName);
+		Record.SymbolName = Row.SymbolName;
+		Record.ValueType = ToSchemaValueType(Row.ValueType);
+		Record.bWritable = Row.bWritable;
+		Record.bRequired = Row.bRequired;
+		Record.bSimdReadAllowed = Row.bSimdReadAllowed;
+		Record.bSimdWriteAllowed = Row.bSimdWriteAllowed;
+		Record.bGpuTier1Allowed = Row.bGpuTier1Allowed;
+		Record.Residency = Row.Residency;
+		Record.Affinity = Row.Affinity;
+		Record.AlignmentRequirement = Row.AlignmentRequirement;
+		Record.MathDeterminismProfile = Row.MathDeterminismProfile;
+		if (!Row.HlslIdentifier.IsEmpty())
 		{
-			Logical.Storage.Kind = EVexStorageKind::ExternalProvider;
+			Record.BackendBinding.HlslIdentifier = Row.HlslIdentifier;
+		}
+		if (!Row.VerseIdentifier.IsEmpty())
+		{
+			Record.BackendBinding.VerseIdentifier = Row.VerseIdentifier;
 		}
 
-		if (FVexSymbolAccessor* Accessor = BaseSchema.Symbols.Find(Row.SymbolName))
+		if (Record.Storage.Kind == EVexStorageKind::None)
 		{
-			Accessor->Residency = Row.Residency;
-			if (!Row.HlslIdentifier.IsEmpty())
-			{
-				Accessor->HlslIdentifier = Row.HlslIdentifier;
-			}
-			if (!Row.VerseIdentifier.IsEmpty())
-			{
-				Accessor->VerseIdentifier = Row.VerseIdentifier;
-			}
+			Record.Storage.Kind = EVexStorageKind::ExternalProvider;
 		}
 	}
 
+	BaseSchema.RebuildLegacyViews();
 	BaseSchema.LayoutHash = ComputeSchemaLayoutHash(BaseSchema);
 	return BaseSchema;
 }
@@ -77,7 +129,14 @@ FVexTypeSchema FVexSchemaOrchestrator::MergeManifestRequirements(FVexTypeSchema 
 uint32 FVexSchemaOrchestrator::ComputeSchemaLayoutHash(const FVexTypeSchema& Schema)
 {
 	TArray<FString> SymbolNames;
-	Schema.LogicalSymbols.GetKeys(SymbolNames);
+	if (!Schema.SymbolRecords.IsEmpty())
+	{
+		Schema.SymbolRecords.GetKeys(SymbolNames);
+	}
+	else
+	{
+		Schema.LogicalSymbols.GetKeys(SymbolNames);
+	}
 	SymbolNames.Sort();
 
 	FString LayoutText = Schema.TypeName;
@@ -86,23 +145,24 @@ uint32 FVexSchemaOrchestrator::ComputeSchemaLayoutHash(const FVexTypeSchema& Sch
 
 	for (const FString& SymbolName : SymbolNames)
 	{
-		const FVexLogicalSymbolSchema* Logical = Schema.LogicalSymbols.Find(SymbolName);
-		if (!Logical)
+		const FVexSymbolRecord* Record = Schema.FindSymbolRecord(SymbolName);
+		const FVexLogicalSymbolSchema* Logical = Record ? nullptr : Schema.LogicalSymbols.Find(SymbolName);
+		if (!Record && !Logical)
 		{
 			continue;
 		}
 
 		LayoutText += SymbolName;
 		LayoutText += TEXT("|");
-		LayoutText += ToTypeString(Logical->ValueType);
+		LayoutText += ToTypeString(Record ? Record->ValueType : Logical->ValueType);
 		LayoutText += TEXT("|");
-		LayoutText += FString::FromInt(static_cast<int32>(Logical->Storage.Kind));
+		LayoutText += FString::FromInt(static_cast<int32>(Record ? Record->Storage.Kind : Logical->Storage.Kind));
 		LayoutText += TEXT("|");
-		LayoutText += FString::FromInt(Logical->Storage.MemberOffset);
+		LayoutText += FString::FromInt(Record ? Record->Storage.MemberOffset : Logical->Storage.MemberOffset);
 		LayoutText += TEXT("|");
-		LayoutText += Logical->BackendBinding.HlslIdentifier;
+		LayoutText += Record ? Record->BackendBinding.HlslIdentifier : Logical->BackendBinding.HlslIdentifier;
 		LayoutText += TEXT("|");
-		LayoutText += Logical->BackendBinding.VerseIdentifier;
+		LayoutText += Record ? Record->BackendBinding.VerseIdentifier : Logical->BackendBinding.VerseIdentifier;
 		LayoutText += TEXT("|");
 	}
 

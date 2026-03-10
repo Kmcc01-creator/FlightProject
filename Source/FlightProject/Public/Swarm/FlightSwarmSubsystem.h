@@ -127,6 +127,8 @@ private:
 	mutable FCriticalSection PersistenceSnapshotMutex;
 	FFlightSwarmPersistenceDebugSnapshot LastPersistenceSnapshot;
 	int32 TotalEntities = 0;
+	uint32 DroidStateElementStrideBytes = sizeof(FDroidState);
+	FString DroidStateResourceId = TEXT("Swarm.DroidStateBuffer");
 
 	/** Current sort requirement for the next tick */
 	ESwarmSortRequirement RequiredSort = ESwarmSortRequirement::Full;

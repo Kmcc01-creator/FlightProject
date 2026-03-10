@@ -6,6 +6,7 @@
 #include "Core/FlightFunctional.h"
 #include "Core/FlightAsyncExecutor.h"
 #include "Engine/World.h"
+#include "Misc/App.h"
 
 #if PLATFORM_LINUX
 #include "IVulkanDynamicRHI.h"
@@ -29,7 +30,7 @@ UFlightGpuIoUringBridge::~UFlightGpuIoUringBridge()
 bool UFlightGpuIoUringBridge::ShouldCreateSubsystem(UObject* Outer) const
 {
 #if PLATFORM_LINUX
-	return true;
+	return FApp::CanEverRender();
 #else
 	return false;
 #endif
@@ -40,6 +41,20 @@ void UFlightGpuIoUringBridge::Initialize(FSubsystemCollectionBase& Collection)
 	Super::Initialize(Collection);
 
 #if PLATFORM_LINUX
+	if (!FApp::CanEverRender())
+	{
+		UE_LOG(LogFlightGpuBridge, Log,
+			TEXT("Skipping GPU-io_uring bridge initialization: rendering is disabled."));
+		return;
+	}
+
+	if (!GDynamicRHI || GDynamicRHI->GetInterfaceType() != ERHIInterfaceType::Vulkan)
+	{
+		UE_LOG(LogFlightGpuBridge, Log,
+			TEXT("Skipping GPU-io_uring bridge initialization: active RHI is not Vulkan."));
+		return;
+	}
+
 	UE_LOG(LogFlightGpuBridge, Log, TEXT("Initializing GPU-io_uring bridge with Managed Reactor..."));
 
 	// Get io_uring subsystem first

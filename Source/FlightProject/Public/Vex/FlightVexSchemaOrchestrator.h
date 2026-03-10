@@ -18,7 +18,7 @@ public:
 	static FVexTypeSchema MergeManifestRequirements(FVexTypeSchema BaseSchema, const TArray<FFlightVexSymbolRow>& Rows);
 	static uint32 ComputeSchemaLayoutHash(const FVexTypeSchema& Schema);
 
-	template<typename T>
+	template<Flight::Reflection::CReflectable T>
 	static FVexTypeSchema BuildSchemaFromReflection(const void* RuntimeKey)
 	{
 		using namespace Flight::Reflection;
@@ -46,97 +46,123 @@ public:
 					return;
 				}
 
-				FVexSymbolAccessor Accessor;
-				FVexLogicalSymbolSchema Logical;
+				FVexSymbolRecord Record;
 				const auto& SymbolNameAttr = DescType::template GetAttr<Attr::VexSymbol>::Value;
 
-				Accessor.SymbolName = FString(SymbolNameAttr.data());
-				Accessor.ValueType = ResolveValueType<FieldType>();
-				Accessor.MemberOffset = DescType::IsOffsetEligible ? DescType::GetOffset() : INDEX_NONE;
-				Accessor.Getter = [](const void* Ptr) -> float
-				{
-					const T& Instance = *static_cast<const T*>(Ptr);
-					if constexpr (std::is_convertible_v<FieldType, float>)
+					Record.SymbolName = FString(SymbolNameAttr.data());
+					Record.ValueType = ResolveValueType<FieldType>();
+					Record.Storage.Kind = DescType::IsOffsetEligible ? EVexStorageKind::AosOffset : EVexStorageKind::Accessor;
+					Record.Storage.MemberOffset = DescType::IsOffsetEligible ? DescType::GetOffset() : INDEX_NONE;
+					Record.Storage.ElementStride = sizeof(FieldType);
+					Record.ReadValue = [](const void* Ptr) -> FVexRuntimeValue
 					{
-						return static_cast<float>(DescType::Get(Instance));
-					}
-					return 0.0f;
-				};
-				Accessor.Setter = [](void* Ptr, float Value)
-				{
-					T& Instance = *static_cast<T*>(Ptr);
-					if constexpr (std::is_convertible_v<float, FieldType>)
+						const T& Instance = *static_cast<const T*>(Ptr);
+						return MakeRuntimeValue<FieldType>(DescType::Get(Instance));
+					};
+					Record.WriteValue = [](void* Ptr, const FVexRuntimeValue& Value) -> bool
 					{
-						DescType::Set(Instance, static_cast<FieldType>(Value));
-					}
-				};
-
-				Logical.SymbolName = Accessor.SymbolName;
-				Logical.ValueType = Accessor.ValueType;
-				Logical.bReadable = Accessor.Getter != nullptr;
-				Logical.bWritable = Accessor.Setter != nullptr;
-				Logical.Storage.Kind = DescType::IsOffsetEligible ? EVexStorageKind::AosOffset : EVexStorageKind::Accessor;
-				Logical.Storage.MemberOffset = Accessor.MemberOffset;
-				Logical.Storage.ElementStride = sizeof(FieldType);
+						T& Instance = *static_cast<T*>(Ptr);
+						DescType::Set(Instance, ConvertRuntimeValue<FieldType>(Value));
+						return true;
+					};
+					Record.Getter = [](const void* Ptr) -> float
+					{
+						const T& Instance = *static_cast<const T*>(Ptr);
+						return MakeRuntimeValue<FieldType>(DescType::Get(Instance)).AsFloat();
+					};
+					Record.Setter = [](void* Ptr, float Value)
+					{
+						T& Instance = *static_cast<T*>(Ptr);
+						DescType::Set(Instance, ConvertRuntimeValue<FieldType>(FVexRuntimeValue::FromFloat(Value)));
+					};
+					Record.bReadable = Record.ReadValue != nullptr;
+					Record.bWritable = Record.WriteValue != nullptr;
 
 				if constexpr (DescType::template HasAttrTemplate<Attr::VexResidency>)
 				{
-					Accessor.Residency = DescType::template GetAttr<Attr::VexResidency>::Value;
-					Logical.Residency = Accessor.Residency;
+					Record.Residency = DescType::template GetAttr<Attr::VexResidency>::Value;
 				}
 
 				if constexpr (DescType::template HasAttrTemplate<Attr::HlslIdentifier>)
 				{
-					Accessor.HlslIdentifier = FString(DescType::template GetAttr<Attr::HlslIdentifier>::Value.data());
-					Logical.BackendBinding.HlslIdentifier = Accessor.HlslIdentifier;
+					Record.BackendBinding.HlslIdentifier = FString(DescType::template GetAttr<Attr::HlslIdentifier>::Value.data());
 				}
 
 				if constexpr (DescType::template HasAttrTemplate<Attr::VerseIdentifier>)
 				{
-					Accessor.VerseIdentifier = FString(DescType::template GetAttr<Attr::VerseIdentifier>::Value.data());
-					Logical.BackendBinding.VerseIdentifier = Accessor.VerseIdentifier;
+					Record.BackendBinding.VerseIdentifier = FString(DescType::template GetAttr<Attr::VerseIdentifier>::Value.data());
 				}
 
 				if constexpr (DescType::template HasAttrTemplate<Attr::ThreadAffinity>)
 				{
-					Logical.Affinity = DescType::template GetAttr<Attr::ThreadAffinity>::Value;
+					Record.Affinity = DescType::template GetAttr<Attr::ThreadAffinity>::Value;
 				}
 
 				if constexpr (DescType::template HasAttrTemplate<Attr::SimdReadAllowed>)
 				{
-					Logical.bSimdReadAllowed = DescType::template GetAttr<Attr::SimdReadAllowed>::Value;
+					Record.bSimdReadAllowed = DescType::template GetAttr<Attr::SimdReadAllowed>::Value;
 				}
 
 				if constexpr (DescType::template HasAttrTemplate<Attr::SimdWriteAllowed>)
 				{
-					Logical.bSimdWriteAllowed = DescType::template GetAttr<Attr::SimdWriteAllowed>::Value;
+					Record.bSimdWriteAllowed = DescType::template GetAttr<Attr::SimdWriteAllowed>::Value;
 				}
 
 				if constexpr (DescType::template HasAttrTemplate<Attr::GpuTier1Allowed>)
 				{
-					Logical.bGpuTier1Allowed = DescType::template GetAttr<Attr::GpuTier1Allowed>::Value;
+					Record.bGpuTier1Allowed = DescType::template GetAttr<Attr::GpuTier1Allowed>::Value;
 				}
 
 				if constexpr (DescType::template HasAttrTemplate<Attr::VexAlignment>)
 				{
-					Logical.AlignmentRequirement = DescType::template GetAttr<Attr::VexAlignment>::Value;
+					Record.AlignmentRequirement = DescType::template GetAttr<Attr::VexAlignment>::Value;
 				}
 
 				if constexpr (DescType::template HasAttrTemplate<Attr::MathDeterminism>)
 				{
-					Logical.MathDeterminismProfile = DescType::template GetAttr<Attr::MathDeterminism>::Value;
+					Record.MathDeterminismProfile = DescType::template GetAttr<Attr::MathDeterminism>::Value;
 				}
 
-				Schema.Symbols.Add(Accessor.SymbolName, Accessor);
-				Schema.LogicalSymbols.Add(Logical.SymbolName, Logical);
+				Schema.SymbolRecords.Add(Record.SymbolName, Record);
 			});
 		}
 
+		Schema.RebuildLegacyViews();
 		Schema.LayoutHash = ComputeSchemaLayoutHash(Schema);
 		return Schema;
 	}
 
-private:
+	private:
+	template<typename TField>
+	static FVexRuntimeValue MakeRuntimeValue(const TField& Value)
+	{
+		using BaseFieldType = std::remove_cvref_t<TField>;
+
+		if constexpr (std::is_same_v<BaseFieldType, float>) return FVexRuntimeValue::FromFloat(Value);
+		if constexpr (std::is_same_v<BaseFieldType, int32>) return FVexRuntimeValue::FromInt(Value);
+		if constexpr (std::is_same_v<BaseFieldType, uint32>) return FVexRuntimeValue::FromInt(static_cast<int32>(Value));
+		if constexpr (std::is_same_v<BaseFieldType, bool>) return FVexRuntimeValue::FromBool(Value);
+		if constexpr (std::is_same_v<BaseFieldType, FVector2f>) return FVexRuntimeValue::FromVec2(Value);
+		if constexpr (std::is_same_v<BaseFieldType, FVector3f>) return FVexRuntimeValue::FromVec3(Value);
+		if constexpr (std::is_same_v<BaseFieldType, FVector4f>) return FVexRuntimeValue::FromVec4(Value);
+		return FVexRuntimeValue();
+	}
+
+	template<typename TField>
+	static std::remove_cvref_t<TField> ConvertRuntimeValue(const FVexRuntimeValue& Value)
+	{
+		using BaseFieldType = std::remove_cvref_t<TField>;
+
+		if constexpr (std::is_same_v<BaseFieldType, float>) return Value.AsFloat();
+		if constexpr (std::is_same_v<BaseFieldType, int32>) return Value.AsInt();
+		if constexpr (std::is_same_v<BaseFieldType, uint32>) return static_cast<uint32>(FMath::Max(0, Value.AsInt()));
+		if constexpr (std::is_same_v<BaseFieldType, bool>) return Value.AsBool();
+		if constexpr (std::is_same_v<BaseFieldType, FVector2f>) return Value.AsVec2();
+		if constexpr (std::is_same_v<BaseFieldType, FVector3f>) return Value.AsVec3();
+		if constexpr (std::is_same_v<BaseFieldType, FVector4f>) return Value.AsVec4();
+		return BaseFieldType{};
+	}
+
 	template<typename TField>
 	static EVexValueType ResolveValueType()
 	{

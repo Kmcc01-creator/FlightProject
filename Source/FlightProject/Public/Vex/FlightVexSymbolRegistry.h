@@ -31,6 +31,9 @@ public:
 	/** Find an accessor by name for a specific type key. */
 	const FVexSymbolAccessor* FindSymbol(const void* TypeKey, const FString& Name) const;
 
+	/** Find a canonical symbol record by name for a specific type key. */
+	const FVexSymbolRecord* FindSymbolRecord(const void* TypeKey, const FString& Name) const;
+
 	/** Find an existing schema using its reflected native struct bridge. */
 	const FVexTypeSchema* GetSchemaByNativeStruct(const UScriptStruct* NativeStruct) const;
 
@@ -46,7 +49,7 @@ private:
  * TTypeVexRegistry: Template helper to automatically register all VEX-tagged fields
  * for a reflectable C++ type.
  */
-template<typename T>
+template<Flight::Reflection::CReflectable T>
 struct TTypeVexRegistry
 {
 	static const void* GetTypeKey()

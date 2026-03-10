@@ -1,5 +1,8 @@
 # SimpleSCSL Shader Pipeline
 
+Status: reference document for an active testing/development workflow tool.
+This pipeline is integrated with [OrchestrationSubsystem.md](OrchestrationSubsystem.md) as a render adapter for workflow preview and diagnostics.
+
 ## Intent
 
 `UFlightSimpleSCSLShaderPipelineSubsystem` is a lightweight rendering adapter for testing and development workflows.

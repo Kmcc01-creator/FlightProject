@@ -2,6 +2,9 @@
 
 _Drafted: October 21, 2025 — Initial implementation landed the same day._
 
+Status: historical implementation note.
+Use `Docs/Architecture/GameModeBootstrapBoundary.md`, `Docs/Architecture/WorldExecutionModel.md`, and `Docs/Workflow/OrchestrationImplementationPlan.md` for the current startup/bootstrap direction.
+
 ## Why change?
 Originally `AFlightGameMode::StartPlay` performed four heavyweight responsibilities in sequence:
 

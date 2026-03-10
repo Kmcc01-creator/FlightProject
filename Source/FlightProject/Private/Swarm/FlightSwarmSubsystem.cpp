@@ -3,6 +3,8 @@
 #include "Swarm/FlightSwarmSubsystem.h"
 #include "Swarm/FlightSwarmRender.h"
 #include "FlightLogCategories.h"
+#include "Schema/FlightRequirementRegistry.h"
+#include "Core/FlightHlslReflection.h"
 #include "RenderGraphBuilder.h"
 #include "RenderGraphUtils.h"
 #include "RenderingThread.h"
@@ -142,6 +144,7 @@ namespace
         FGlobalShaderMap* ShaderMap, 
         const FSwarmGlobalCommand& Command, 
         uint32 NumEntities,
+        uint32 DroidStateElementStrideBytes,
         TRefCountPtr<FRDGPooledBuffer> DroidStateBuffer,
         TRefCountPtr<FRDGPooledTexture> PersistentLattice,
         TRefCountPtr<FRDGPooledTexture> PersistentCloud,
@@ -160,7 +163,9 @@ namespace
         // Radix Sort: Allocate counters and ping-pong target (16 bins for 4-bit passes)
         Ctx.SortBitCounts = GraphBuilder->CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), 16), TEXT("Swarm.Sort.BitCounts"));
         Ctx.SortOffsets = GraphBuilder->CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), 16), TEXT("Swarm.Sort.Offsets"));
-        Ctx.SortedDroidBuffer = GraphBuilder->CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(FDroidState), NumEntities), TEXT("Swarm.SortedDroids"));
+        Ctx.SortedDroidBuffer = GraphBuilder->CreateBuffer(
+            FRDGBufferDesc::CreateStructuredDesc(DroidStateElementStrideBytes, NumEntities),
+            TEXT("Swarm.DroidStateBuffer.SortScratch"));
 
         // SCSL: Event Field Allocation & Upload
         const uint32 NumActiveEvents = Command.NumEvents;
@@ -527,12 +532,45 @@ void UFlightSwarmSubsystem::Deinitialize()
 void UFlightSwarmSubsystem::InitializeSwarm(int32 NumEntities)
 {
 	TotalEntities = NumEntities;
+	const FString ResourceId = TEXT("Swarm.DroidStateBuffer");
+	const uint32 NativeStrideBytes = sizeof(FDroidState);
+	const uint32 NativeLayoutHash = Flight::Reflection::HLSL::ComputeLayoutHash<FDroidState>();
+	const TArray<FString> ContractIssues = Flight::Schema::ValidateStructuredBufferContract(ResourceId, NativeStrideBytes, NativeLayoutHash);
+
+	DroidStateResourceId = ResourceId;
+	DroidStateElementStrideBytes = NativeStrideBytes;
+
+	if (const TOptional<Flight::Schema::FFlightGpuStructuredBufferContract> Contract = Flight::Schema::ResolveStructuredBufferContract(ResourceId))
+	{
+		if (Contract->ElementStrideBytes == NativeStrideBytes)
+		{
+			DroidStateElementStrideBytes = Contract->ElementStrideBytes;
+		}
+
+		if (!Contract->bPreferUnrealRdg)
+		{
+			UE_LOG(LogFlightSwarm, Warning, TEXT("Swarm GPU contract '%s' does not prefer Unreal RDG, but the current swarm path still realizes it through RDG/RHI"), *ResourceId);
+		}
+
+		if (Contract->bRequiresRawVulkanInterop)
+		{
+			UE_LOG(LogFlightSwarm, Warning, TEXT("Swarm GPU contract '%s' requests raw Vulkan interop, but the current swarm state buffer path remains RDG/RHI-owned"), *ResourceId);
+		}
+	}
+
+	for (const FString& Issue : ContractIssues)
+	{
+		UE_LOG(LogFlightSwarm, Warning, TEXT("Swarm GPU contract validation: %s"), *Issue);
+	}
+
+	const FString BufferDebugName = DroidStateResourceId;
+	const uint32 EffectiveStrideBytes = DroidStateElementStrideBytes;
 	TWeakObjectPtr<UFlightSwarmSubsystem> WeakThis(this);
-	ENQUEUE_RENDER_COMMAND(InitializeDroidBuffer)([WeakThis, NumEntities](FRHICommandListImmediate& RHICmdList)
+	ENQUEUE_RENDER_COMMAND(InitializeDroidBuffer)([WeakThis, NumEntities, EffectiveStrideBytes, BufferDebugName](FRHICommandListImmediate& RHICmdList)
 	{
 		UFlightSwarmSubsystem* Self = WeakThis.Get();
 		if (!Self) return;
-		FRHIBufferCreateDesc Desc = FRHIBufferCreateDesc::CreateStructured(TEXT("Flight.Swarm.DroidState"), sizeof(FDroidState) * NumEntities, sizeof(FDroidState));
+		FRHIBufferCreateDesc Desc = FRHIBufferCreateDesc::CreateStructured(*BufferDebugName, EffectiveStrideBytes * NumEntities, EffectiveStrideBytes);
 		Desc.AddUsage(BUF_ShaderResource | BUF_UnorderedAccess);
 		Desc.SetInitialState(ERHIAccess::SRVMask);
 		FBufferRHIRef DroidRHI = RHICmdList.CreateBuffer(Desc);
@@ -541,8 +579,8 @@ void UFlightSwarmSubsystem::InitializeSwarm(int32 NumEntities)
 		void* BufferData = RHICmdList.LockBuffer(DroidRHI, 0, NumEntities * sizeof(FDroidState), RLM_WriteOnly);
 		FMemory::Memcpy(BufferData, InitialData.GetData(), NumEntities * sizeof(FDroidState));
 		RHICmdList.UnlockBuffer(DroidRHI);
-		FRDGBufferDesc RDGDesc = FRDGBufferDesc::CreateStructuredDesc(sizeof(FDroidState), NumEntities);
-		Self->DroidStateBuffer = new FRDGPooledBuffer(DroidRHI, RDGDesc, NumEntities, TEXT("Flight.Swarm.DroidState"));
+		FRDGBufferDesc RDGDesc = FRDGBufferDesc::CreateStructuredDesc(EffectiveStrideBytes, NumEntities);
+		Self->DroidStateBuffer = new FRDGPooledBuffer(DroidRHI, RDGDesc, NumEntities, *BufferDebugName);
 		});
 }
 
@@ -607,7 +645,7 @@ void UFlightSwarmSubsystem::TickSimulation(float DeltaTime)
 		if (!Self || !Self->DroidStateBuffer.IsValid() || IsRunningCommandlet()) return;
 		FRDGBuilder GraphBuilder(RHICmdList);
 		auto PipelineResult = CheckShaders(GetGlobalShaderMap(GMaxRHIFeatureLevel))
-			.AndThen([&](FGlobalShaderMap* ShaderMap) { return InitResources(&GraphBuilder, ShaderMap, PackedCmd, NumEntities, Self->DroidStateBuffer, Self->LatticeTexture, Self->CloudTexture, Self->RequiredSort); })
+			.AndThen([&](FGlobalShaderMap* ShaderMap) { return InitResources(&GraphBuilder, ShaderMap, PackedCmd, NumEntities, Self->DroidStateElementStrideBytes, Self->DroidStateBuffer, Self->LatticeTexture, Self->CloudTexture, Self->RequiredSort); })
 			.AndThen([&](FSwarmRDGContext Ctx)
 			{
 				FFlightSwarmPersistenceDebugSnapshot Snapshot;

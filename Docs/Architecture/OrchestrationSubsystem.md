@@ -40,7 +40,7 @@ Today that visibility is fragmented:
 - config/schema visibility is in `Flight::Schema::BuildManifestData()`
 - behavior visibility is in `UFlightVerseSubsystem::Behaviors`
 - swarm spawn visibility is implicit in `UFlightSwarmSpawnerSubsystem`
-- script execution in `UFlightVexBehaviorProcessor` is still effectively global/hard-wired
+- script execution in `UFlightVexBehaviorProcessor` now consumes orchestration-issued bindings, but the remaining execution-domain selection and reporting story is still distributed across runtime services
 
 That is enough to prototype, but not enough to support a clean code-first orchestration model.
 
@@ -267,9 +267,9 @@ Right now:
 - symbol definitions are built from the schema manifest in `UFlightVerseSubsystem`
 - compiled behaviors live in `UFlightVerseSubsystem::Behaviors`
 - task dispatch exists in `UFlightVexTaskSubsystem`
-- the Mass VEX behavior processor still uses a hard-coded `BehaviorID = 1`
+- the Mass VEX behavior processor now resolves orchestration-issued bindings per chunk/cohort before falling back
 
-That means behavior visibility is present, but not yet well-bound to world cohorts.
+That means behavior visibility and basic cohort binding are present, but richer execution-domain selection and reporting are not fully centralized yet.
 
 ### Proposed VEX-Orchestration Model
 

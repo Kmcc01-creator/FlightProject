@@ -1,5 +1,9 @@
 # FlightProject Testing Validation Plan
 
+Status note:
+Use `Docs/Workflow/CurrentBuild.md` as the dated source of truth for the latest build/test/GPU status.
+This document should focus on validation topology and recommended execution structure, not carry the only current-status snapshot.
+
 ## Objective
 
 Establish a repeatable full-suite validation flow for FlightProject that:
@@ -8,15 +12,9 @@ Establish a repeatable full-suite validation flow for FlightProject that:
 - surfaces architecture breakpoints early,
 - makes failures actionable from logs and source locations.
 
-## Status Snapshot (March 10, 2026)
+## Current Validation Status
 
-- Phase 1 is currently green on the default `triage` preset.
-- Phase 1 now includes the lightweight startup sequencing complex suite:
-  - `FlightProject.Integration.Startup.Sequencing.BootstrapCompletionSignal`
-  - `FlightProject.Integration.Startup.Sequencing.OrchestrationRebuildAdvancesPlan`
-  - `FlightProject.Integration.Startup.Sequencing.StartupReportJsonSurface`
-- Phase 2 is currently green after the earlier AutoRTFM + VEX SIMD fixes, the Milestone-0 logging/parser cleanup, and the deeper orchestration-binding slice that added anchor legality coverage.
-- GPU phase remains environment-dependent and is still blocked before automation discovery in the current runner.
+Use **[CurrentBuild.md](CurrentBuild.md)** for the latest dated snapshot of build results, test evidence, and GPU discovery status.
 
 ## Current Test Topology
 
@@ -61,45 +59,6 @@ Generated test frameworks:
   - reference: `Scripts/build_targets.sh:53`
 - This is useful for a gate, but not a full logic validation pass.
 
-## Evidence From Recent Runs
-
-- Pass: startup sequencing complex suite (`3` tests)
-  - filter: `FlightProject.Integration.Startup.Sequencing`
-- Pass: orchestration binding bucket (`5` tests)
-  - filter: `FlightProject.Orchestration.Bindings`
-  - cases:
-    - `PlanPrefersExecutableBehavior`
-    - `ProcessorResolverPrefersOrchestration`
-    - `AnchorPreferenceLegality`
-    - `AnchorContractLegality`
-    - `ProcessorResolverFallback`
-- Pass: phase-1 automation filter (`27` tests)
-  - filter: `FlightProject.Integration.SchemaDriven+FlightProject.Integration.Vex.VerticalSlice+FlightProject.Integration.Concurrency+FlightProject.Integration.Startup.Sequencing+FlightProject.Unit.Safety.MemoryLayout+FlightProject.Vex.Parser.Spec`
-- Pass: phase-2 automation filter (`50` tests)
-  - filter: `FlightProject.Schema+FlightProject.Vex.RewriteRegistry+FlightProject.Vex.TreeTraits.IR.PostOrder+FlightProject.Vex.Parsing+FlightProject.Vex.Simd+FlightProject.Vex.UI+FlightProject.Verse+FlightProject.Verse.Bytecode+FlightProject.AutoRTFM+FlightProject.Gpu.Reactive+FlightProject.Logging+FlightProject.Orchestration+FlightProject.Swarm.Pipeline+FlightProject.Spatial.GpuPerception+FlightProject.Benchmark.GpuPerception+FlightProject.Reactive+FlightProject.Reflection+FlightProject.Functional`
-
-## Current Architecture Risk Points
-
-1. Phase ordering is addressed.
-- `Scripts/run_tests_phased.sh` now enforces complex/spec-first, then phase-2 simple automation, with optional GPU phase.
-
-2. Shader-compile suppression coupling remains an operational caveat.
-- `-NoShaderCompile` is still useful for fast headless loops, but can interact with startup code paths that touch shader readiness.
-- reference startup path: `Source/FlightProject/Private/IoUring/FlightGpuPerceptionSubsystem.cpp:47`
-
-3. Phase-2 regression in AutoRTFM + SIMD parity is resolved.
-- AutoRTFM integration test now validates transactional and fallback (runtime-disabled) semantics.
-  - `Source/FlightProject/Private/Tests/FlightVexVerseTests.cpp`
-- VEX IR + SIMD execution fixes were applied for:
-  - member-access lowering (`@position.x`) and unsupported-op diagnostics,
-  - operand-kind handling (register vs constant),
-  - scalar constant lane broadcast.
-  - `Source/FlightProject/Private/Vex/FlightVexIr.cpp`
-  - `Source/FlightProject/Private/Vex/FlightVexSimdExecutor.cpp`
-
-4. Verification coverage gap remains for build-only verification.
-- `build_targets.sh --verify` still runs a narrow `--breaking` subset and does not execute the full phased validation path.
-
 ## Recommended Full-Suite Execution Order
 
 Preferred entrypoint is `./Scripts/run_tests_phased.sh` (now encodes this ordering).  
@@ -125,7 +84,4 @@ TEST_SCOPE=all TEST_STREAM_FILTER=errors ./Scripts/run_tests_full.sh
 
 ## Immediate Next Targets
 
-1. Keep the new orchestration binding bucket and the lightweight startup sequencing suite passing while the runtime boundary evolves.
-2. Extend binding legality beyond default/exact fallback and current anchor-aware rules into startup-profile-aware behavior resolution and clearer legality reporting.
-3. Add a dedicated startup fixture world/profile path when we are ready to assert full `StartPlay()` and post-spawn orchestration deltas.
-4. Finalize GPU phase validation on Vulkan-capable or software-Vulkan environments and document pass/fail criteria.
+For active goals and architecture risk points, see **[CurrentFocus.md](CurrentFocus.md)**.

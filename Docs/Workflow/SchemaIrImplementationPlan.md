@@ -21,8 +21,12 @@ The first goal is to create a stable schema boundary that:
 The implementation will build on these existing files:
 
 - `Source/FlightProject/Public/Vex/FlightVexSchema.h`
+- `Source/FlightProject/Public/Vex/FlightVexBackendCapabilities.h`
 - `Source/FlightProject/Public/Vex/FlightVexSymbolRegistry.h`
 - `Source/FlightProject/Private/Vex/FlightVexSymbolRegistry.cpp`
+- `Source/FlightProject/Private/Vex/FlightVexBackendCapabilities.cpp`
+- `Source/FlightProject/Public/Vex/FlightCompileArtifacts.h`
+- `Source/FlightProject/Private/Vex/FlightCompileArtifacts.cpp`
 - `Source/FlightProject/Public/Verse/UFlightVerseSubsystem.h`
 - `Source/FlightProject/Private/Verse/UFlightVerseSubsystem.cpp`
 - `Source/FlightProject/Public/Core/FlightReflection.h`
@@ -226,6 +230,21 @@ Keep phase-one behavior:
 
 The change here should be boundary cleanup, not backend replacement.
 
+Current landed state:
+
+- schema-bound `CompileVex(...)` now evaluates explicit backend capability profiles after schema binding
+- compile artifact reports now include `selectedBackend` and per-backend report entries
+- schema binding now carries backend legality and per-symbol backend diagnostics
+- current runtime dispatch still follows the pre-existing executable path logic
+
+Short-term TODO:
+
+- use reported backend selection to start gating actual runtime dispatch
+- teach `CompileVex(...)` and `ExecuteBehavior(...)` to honor the chosen backend when that backend is both legal and executable today
+- keep this step incremental:
+  - do not route into non-executable backends only because they scored well in reporting
+  - preserve explicit fallback and report why a selected backend was downgraded at commit time
+
 ### 5.3 `Public/Vex/FlightVexSchemaIr.h`
 
 Add the first SchemaIR types.
@@ -313,10 +332,13 @@ Examples that should migrate later:
 
 Do not change this in phase one except to avoid further coupling.
 
-Planned later change:
+Landed change:
 
-- replace `BehaviorID = 1`
-- consume orchestration-issued behavior/schema bindings
+- the old `BehaviorID = 1` path has been replaced with orchestration-issued behavior/schema bindings
+
+Remaining follow-on:
+
+- keep runtime consumers moving from fallback/global assumptions toward explicit schema-selected execution domains and reports
 
 ### 7.2 `Public/Orchestration/*` and `Private/Orchestration/*`
 
@@ -377,7 +399,9 @@ Relevant new test files:
 4. add explicit compile-time type-key path
 5. add SchemaIR types
 6. add AST-to-SchemaIR binder
-7. bridge low-level IR compilation from SchemaIR
-8. move runtime and orchestration consumers onto schema-issued bindings
+7. add backend capability profiles and compile-time backend selection/reporting
+8. bridge low-level IR compilation from SchemaIR
+9. teach compile/runtime dispatch to honor schema-selected executable backends
+10. move runtime and orchestration consumers onto schema-issued bindings
 
 This order establishes the new boundary without requiring a risky compiler rewrite in one pass.

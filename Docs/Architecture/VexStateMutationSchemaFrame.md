@@ -221,6 +221,41 @@ Without that layer, too much mutation meaning stays smeared across:
 
 SchemaIR is the cleanest place to unify those concerns.
 
+## 8.1 Backend Capability Handshake
+
+The next useful refinement is to make backend capability an explicit handshake between schema binding and execution.
+
+That handshake should answer:
+
+- which backends are legal for this bound program?
+- which symbol uses are direct-lane eligible vs fallback-only?
+- which backend is preferred for this program shape?
+- what report explains the selection?
+
+This is the right place for a profile-driven contract such as:
+
+- `NativeScalar`
+- `NativeSimd`
+- `VerseVm`
+- later `GpuKernel`
+
+The important design rule is:
+
+- schema remains the semantic owner of symbol meaning
+- backend profiles describe execution capability and preferred ABI lane
+- compile-time selection produces a report before runtime commit
+
+Current status:
+
+- compile-time backend capability evaluation and selection reporting now exist
+- compile artifacts can report the selected backend and rejected/fallback paths
+- runtime dispatch is not fully gated by that reported selection yet
+
+TODO:
+
+- teach `CompileVex(...)` and `ExecuteBehavior(...)` to honor the chosen backend when the backend is both legal and executable in the current build
+- keep reporting explicit when runtime commit falls back from the selected backend to another executable path
+
 ## 9. Mutation And Storage Shape
 
 Storage shape should be explicit because mutation legality depends on it.

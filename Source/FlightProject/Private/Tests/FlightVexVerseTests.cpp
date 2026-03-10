@@ -292,9 +292,17 @@ bool FFlightCompileArtifactReportTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Compile artifact JSON should contain backendPath"), RootObject->TryGetStringField(TEXT("backendPath"), BackendPath));
 	TestTrue(TEXT("Compile artifact report should record a non-empty backend path"), !BackendPath.IsEmpty());
 
+	FString SelectedBackend;
+	TestTrue(TEXT("Compile artifact JSON should contain selectedBackend"), RootObject->TryGetStringField(TEXT("selectedBackend"), SelectedBackend));
+	TestTrue(TEXT("Compile artifact report should record a non-empty selected backend"), !SelectedBackend.IsEmpty());
+
 	FString TargetFingerprint;
 	TestTrue(TEXT("Compile artifact JSON should contain targetFingerprint"), RootObject->TryGetStringField(TEXT("targetFingerprint"), TargetFingerprint));
 	TestTrue(TEXT("Compile artifact report should record a non-empty target fingerprint"), !TargetFingerprint.IsEmpty());
+
+	const TArray<TSharedPtr<FJsonValue>>* BackendReports = nullptr;
+	TestTrue(TEXT("Compile artifact JSON should contain backendReports"), RootObject->TryGetArrayField(TEXT("backendReports"), BackendReports));
+	TestTrue(TEXT("Compile artifact report should record at least one backend report"), BackendReports && BackendReports->Num() > 0);
 
 	const TSharedPtr<FJsonObject>* CodeShapeObject = nullptr;
 	TestTrue(TEXT("Compile artifact JSON should contain codeShapeMetrics"), RootObject->TryGetObjectField(TEXT("codeShapeMetrics"), CodeShapeObject));

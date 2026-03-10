@@ -21,6 +21,11 @@
 #include "Serialization/MemoryReader.h"
 #include "Vex/FlightVexTypes.h"
 
+enum class EFlightGpuResourceKind : uint8;
+enum class EFlightGpuResourceLifetime : uint8;
+enum class EFlightGpuExecutionDomain : uint8;
+enum class EFlightGpuAccessClass : uint8;
+
 namespace Flight::Reflection
 {
 
@@ -673,6 +678,49 @@ struct VexAlignment { static constexpr EFlightVexAlignmentRequirement Value = Al
 template<EFlightVexMathDeterminismProfile Profile>
 struct MathDeterminism { static constexpr EFlightVexMathDeterminismProfile Value = Profile; };
 
+template<TStaticString Str>
+struct GpuResourceId
+{
+	static constexpr std::string_view Value{Str};
+};
+
+template<EFlightGpuResourceKind Kind>
+struct GpuResourceKind
+{
+	static constexpr EFlightGpuResourceKind Value = Kind;
+};
+
+template<EFlightGpuResourceLifetime Lifetime>
+struct GpuResourceLifetime
+{
+	static constexpr EFlightGpuResourceLifetime Value = Lifetime;
+};
+
+template<TStaticString Str>
+struct GpuBindingName
+{
+	static constexpr std::string_view Value{Str};
+};
+
+template<bool bPreferred>
+struct PreferUnrealRdg
+{
+	static constexpr bool Value = bPreferred;
+};
+
+template<bool bRequired>
+struct RawVulkanInteropRequired
+{
+	static constexpr bool Value = bRequired;
+};
+
+template<EFlightGpuExecutionDomain Domain, EFlightGpuAccessClass Access>
+struct GpuAccessRule
+{
+	static constexpr EFlightGpuExecutionDomain DomainValue = Domain;
+	static constexpr EFlightGpuAccessClass AccessValue = Access;
+};
+
 // Meta specifiers
 struct AllowPrivateAccess {};
 struct ExposeOnSpawn {};
@@ -749,6 +797,24 @@ namespace Detail
 	// Required for TAccessContext
 	template<typename Tag, typename... Tags>
 	inline constexpr bool HasTag = (std::is_same_v<Tag, Tags> || ...);
+
+	template<template<auto...> class Template, typename Attr, typename F>
+	void InvokeIfTemplate(F&& Func)
+	{
+		if constexpr (IsSpecializationOfNTTP<Attr, Template>)
+		{
+			Func(Attr{});
+		}
+	}
+
+	template<template<typename...> class Template, typename Attr, typename F>
+	void InvokeIfTypeTemplate(F&& Func)
+	{
+		if constexpr (IsSpecializationOf<Attr, Template>)
+		{
+			Func(Attr{});
+		}
+	}
 }
 
 
@@ -771,6 +837,18 @@ struct TAttributeSet
 
 	template<template<typename...> class Template>
 	static constexpr bool HasTypeTemplate = (IsSpecializationOf<Attrs, Template> || ...);
+
+	template<template<auto...> class Template, typename F>
+	static void ForEachTemplate(F&& Func)
+	{
+		(Detail::InvokeIfTemplate<Template, Attrs>(Func), ...);
+	}
+
+	template<template<typename...> class Template, typename F>
+	static void ForEachTypeTemplate(F&& Func)
+	{
+		(Detail::InvokeIfTypeTemplate<Template, Attrs>(Func), ...);
+	}
 
 	// Check for any attribute in a category
 	static constexpr bool HasEditAccess =

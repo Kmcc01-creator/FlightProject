@@ -117,6 +117,14 @@ public:
     UFUNCTION(BlueprintPure, Category = "Flight|Scripting|Schema")
     static FString GetRequirementManifestJson();
 
+    /** Build and return the shared generated GPU resource contract shader include. */
+    UFUNCTION(BlueprintPure, Category = "Flight|Scripting|Schema")
+    static FString GetGeneratedGpuResourceContractHlsl();
+
+    /** Validate the reflected runtime GPU contracts against their native C++ type layouts. */
+    UFUNCTION(BlueprintCallable, Category = "Flight|Scripting|Schema")
+    static TArray<FString> ValidateReflectedGpuContracts();
+
     /**
      * Export the requirement manifest to disk.
      * Relative paths are rooted to the project directory.
@@ -124,6 +132,14 @@ public:
      */
     UFUNCTION(BlueprintCallable, Category = "Flight|Scripting|Schema")
     static FString ExportRequirementManifest(const FString& RelativeOutputPath = TEXT("Saved/Flight/Schema/requirements_manifest.json"));
+
+    /**
+     * Export the shared generated GPU resource contract shader include to disk.
+     * Relative paths are rooted to the project directory.
+     * Returns absolute output path on success, empty string on failure.
+     */
+    UFUNCTION(BlueprintCallable, Category = "Flight|Scripting|Schema")
+    static FString ExportGeneratedGpuResourceContracts(const FString& RelativeOutputPath = TEXT("Shaders/Private/Generated/FlightGpuResourceContracts.ush"));
 
     /**
      * Validate that a Niagara system satisfies required user params and data interface classes.

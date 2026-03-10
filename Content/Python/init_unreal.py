@@ -29,6 +29,9 @@ def on_editor_startup():
     # 3. Ensure schema-based contracts (PoC: Niagara + render profile manifest)
     from FlightProject import SchemaTools
     schema_issues = SchemaTools.ensure_manifest_requirements(create_missing=True)
+    generated_gpu_contracts = unreal.FlightScriptingLibrary.export_generated_gpu_resource_contracts()
+    if not generated_gpu_contracts:
+        unreal.log_warning("Failed to export generated GPU resource contracts include")
 
     # 4. Arm PIE tracing defaults and reporting hooks
     from FlightProject import PIETrace

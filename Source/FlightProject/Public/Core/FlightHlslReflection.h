@@ -9,6 +9,118 @@
 namespace Flight::Reflection::HLSL
 {
 
+namespace Detail
+{
+
+template<typename T, typename = void>
+struct THasTypeAttributes : std::false_type
+{
+};
+
+template<typename T>
+struct THasTypeAttributes<T, std::void_t<typename TReflectTraits<T>::Attributes>> : std::true_type
+{
+};
+
+template<CReflectable T>
+using TTypeAttributes = typename TReflectTraits<T>::Attributes;
+
+inline FString GpuResourceKindToString(const EFlightGpuResourceKind Kind)
+{
+	switch (Kind)
+	{
+	case EFlightGpuResourceKind::StructuredBuffer:
+		return TEXT("StructuredBuffer");
+	case EFlightGpuResourceKind::StorageBuffer:
+		return TEXT("StorageBuffer");
+	case EFlightGpuResourceKind::SampledImage:
+		return TEXT("SampledImage");
+	case EFlightGpuResourceKind::StorageImage:
+		return TEXT("StorageImage");
+	case EFlightGpuResourceKind::UniformBuffer:
+		return TEXT("UniformBuffer");
+	case EFlightGpuResourceKind::ReadbackBuffer:
+		return TEXT("ReadbackBuffer");
+	case EFlightGpuResourceKind::StagingBuffer:
+		return TEXT("StagingBuffer");
+	case EFlightGpuResourceKind::TransientAttachment:
+		return TEXT("TransientAttachment");
+	case EFlightGpuResourceKind::PersistentTexture:
+		return TEXT("PersistentTexture");
+	default:
+		return TEXT("Unknown");
+	}
+}
+
+inline FString GpuResourceLifetimeToString(const EFlightGpuResourceLifetime Lifetime)
+{
+	switch (Lifetime)
+	{
+	case EFlightGpuResourceLifetime::Transient:
+		return TEXT("Transient");
+	case EFlightGpuResourceLifetime::Persistent:
+		return TEXT("Persistent");
+	case EFlightGpuResourceLifetime::ExtractedPersistent:
+		return TEXT("ExtractedPersistent");
+	case EFlightGpuResourceLifetime::ExternalInterop:
+		return TEXT("ExternalInterop");
+	default:
+		return TEXT("Unknown");
+	}
+}
+
+inline FString GpuExecutionDomainToString(const EFlightGpuExecutionDomain Domain)
+{
+	switch (Domain)
+	{
+	case EFlightGpuExecutionDomain::Cpu:
+		return TEXT("Cpu");
+	case EFlightGpuExecutionDomain::RenderGraph:
+		return TEXT("RenderGraph");
+	case EFlightGpuExecutionDomain::GpuCompute:
+		return TEXT("GpuCompute");
+	case EFlightGpuExecutionDomain::ExternalInterop:
+		return TEXT("ExternalInterop");
+	default:
+		return TEXT("Any");
+	}
+}
+
+inline FString GpuAccessClassToString(const EFlightGpuAccessClass Access)
+{
+	switch (Access)
+	{
+	case EFlightGpuAccessClass::HostRead:
+		return TEXT("HostRead");
+	case EFlightGpuAccessClass::HostWrite:
+		return TEXT("HostWrite");
+	case EFlightGpuAccessClass::TransferSource:
+		return TEXT("TransferSource");
+	case EFlightGpuAccessClass::TransferDestination:
+		return TEXT("TransferDestination");
+	case EFlightGpuAccessClass::ShaderRead:
+		return TEXT("ShaderRead");
+	case EFlightGpuAccessClass::ShaderWrite:
+		return TEXT("ShaderWrite");
+	case EFlightGpuAccessClass::SampledRead:
+		return TEXT("SampledRead");
+	case EFlightGpuAccessClass::ColorAttachmentWrite:
+		return TEXT("ColorAttachmentWrite");
+	case EFlightGpuAccessClass::DepthStencilRead:
+		return TEXT("DepthStencilRead");
+	case EFlightGpuAccessClass::DepthStencilWrite:
+		return TEXT("DepthStencilWrite");
+	case EFlightGpuAccessClass::IndirectArgumentRead:
+		return TEXT("IndirectArgumentRead");
+	case EFlightGpuAccessClass::ExternalSync:
+		return TEXT("ExternalSync");
+	default:
+		return TEXT("Unknown");
+	}
+}
+
+} // namespace Detail
+
 template<typename T>
 FString GetHlslTypeName()
 {
@@ -193,6 +305,157 @@ TArray<FFlightVexSymbolRow> GenerateVexSymbolsFromStruct(FName Owner)
 	});
 
 	return Rows;
+}
+
+template<CReflectable T>
+constexpr bool HasGpuResourceContract()
+{
+	if constexpr (!Detail::THasTypeAttributes<T>::value)
+	{
+		return false;
+	}
+	else
+	{
+		return Detail::TTypeAttributes<T>::template HasTemplate<Attr::GpuResourceId>;
+	}
+}
+
+template<CReflectable T>
+TOptional<FFlightGpuResourceContractRow> GenerateGpuResourceContractFromStruct(FName Owner)
+{
+	if constexpr (!HasGpuResourceContract<T>())
+	{
+		return {};
+	}
+	else
+	{
+		using Attrs = Detail::TTypeAttributes<T>;
+		using ResourceIdAttr = typename Attrs::template GetTemplate<Attr::GpuResourceId>;
+
+		FFlightGpuResourceContractRow Row;
+		Row.Owner = Owner;
+		Row.ResourceId = FString(ResourceIdAttr::Value.data());
+		Row.RequirementId = FName(*FString::Printf(TEXT("%s.Contract"), *Row.ResourceId));
+		Row.ValueTypeName = ANSI_TO_TCHAR(TReflectTraits<T>::Name);
+		Row.HlslStructName = ANSI_TO_TCHAR(TReflectTraits<T>::Name);
+		Row.BindingName = Row.HlslStructName;
+		Row.ElementStrideBytes = sizeof(T);
+		Row.LayoutHash = static_cast<int32>(ComputeLayoutHash<T>());
+		Row.bRequired = true;
+		Row.bPreferUnrealRdg = true;
+		Row.bRequiresRawVulkanInterop = false;
+
+		if constexpr (Attrs::template HasTemplate<Attr::GpuResourceKind>)
+		{
+			using KindAttr = typename Attrs::template GetTemplate<Attr::GpuResourceKind>;
+			Row.ResourceKind = KindAttr::Value;
+		}
+
+		if constexpr (Attrs::template HasTemplate<Attr::GpuResourceLifetime>)
+		{
+			using LifetimeAttr = typename Attrs::template GetTemplate<Attr::GpuResourceLifetime>;
+			Row.ResourceLifetime = LifetimeAttr::Value;
+		}
+
+		if constexpr (Attrs::template HasTemplate<Attr::GpuBindingName>)
+		{
+			using BindingAttr = typename Attrs::template GetTemplate<Attr::GpuBindingName>;
+			Row.BindingName = FString(BindingAttr::Value.data());
+		}
+
+		if constexpr (Attrs::template HasTemplate<Attr::PreferUnrealRdg>)
+		{
+			using PreferRdgAttr = typename Attrs::template GetTemplate<Attr::PreferUnrealRdg>;
+			Row.bPreferUnrealRdg = PreferRdgAttr::Value;
+		}
+
+		if constexpr (Attrs::template HasTemplate<Attr::RawVulkanInteropRequired>)
+		{
+			using RawInteropAttr = typename Attrs::template GetTemplate<Attr::RawVulkanInteropRequired>;
+			Row.bRequiresRawVulkanInterop = RawInteropAttr::Value;
+		}
+
+		return Row;
+	}
+}
+
+template<CReflectable T>
+TArray<FFlightGpuAccessRuleRow> GenerateGpuAccessRulesFromStruct(FName Owner)
+{
+	TArray<FFlightGpuAccessRuleRow> Rows;
+
+	if constexpr (!HasGpuResourceContract<T>())
+	{
+		return Rows;
+	}
+	else
+	{
+		using Attrs = Detail::TTypeAttributes<T>;
+		using ResourceIdAttr = typename Attrs::template GetTemplate<Attr::GpuResourceId>;
+		const FString ResourceId = FString(ResourceIdAttr::Value.data());
+
+		Attrs::template ForEachTemplate<Attr::GpuAccessRule>([&](auto AccessAttr)
+		{
+			using AccessAttrType = decltype(AccessAttr);
+
+			FFlightGpuAccessRuleRow Row;
+			Row.Owner = Owner;
+			Row.ResourceId = ResourceId;
+			Row.ExecutionDomain = AccessAttrType::DomainValue;
+			Row.AccessClass = AccessAttrType::AccessValue;
+			Row.bRequired = true;
+			Row.RequirementId = FName(*FString::Printf(
+				TEXT("%s.%s.%s"),
+				*ResourceId,
+				*Detail::GpuExecutionDomainToString(Row.ExecutionDomain),
+				*Detail::GpuAccessClassToString(Row.AccessClass)));
+			Rows.Add(MoveTemp(Row));
+		});
+
+		return Rows;
+	}
+}
+
+template<CReflectable T>
+FString GenerateGpuResourceContractInclude(const FString& InMacroPrefix = FString())
+{
+	const TOptional<FFlightGpuResourceContractRow> ContractRow = GenerateGpuResourceContractFromStruct<T>(TEXT("Reflection.Generated"));
+	if (!ContractRow.IsSet())
+	{
+		return FString();
+	}
+
+	const TArray<FFlightGpuAccessRuleRow> AccessRows = GenerateGpuAccessRulesFromStruct<T>(TEXT("Reflection.Generated"));
+	const FString MacroPrefix = InMacroPrefix.IsEmpty()
+		? FString(ANSI_TO_TCHAR(TReflectTraits<T>::Name)).ToUpper()
+		: InMacroPrefix;
+
+	FString Source;
+	Source += FString::Printf(TEXT("// GPU Resource Contract: %s\n"), *ContractRow->ResourceId);
+	Source += FString::Printf(TEXT("// BindingName: %s\n"), *ContractRow->BindingName);
+	Source += FString::Printf(TEXT("// ValueType: %s\n"), *ContractRow->ValueTypeName);
+	Source += FString::Printf(TEXT("// ResourceKind: %s\n"), *Detail::GpuResourceKindToString(ContractRow->ResourceKind));
+	Source += FString::Printf(TEXT("// ResourceLifetime: %s\n"), *Detail::GpuResourceLifetimeToString(ContractRow->ResourceLifetime));
+	Source += FString::Printf(TEXT("#define %s_RESOURCE_KIND %d\n"), *MacroPrefix, static_cast<int32>(ContractRow->ResourceKind));
+	Source += FString::Printf(TEXT("#define %s_RESOURCE_LIFETIME %d\n"), *MacroPrefix, static_cast<int32>(ContractRow->ResourceLifetime));
+	Source += FString::Printf(TEXT("#define %s_RESOURCE_ELEMENT_STRIDE %d\n"), *MacroPrefix, ContractRow->ElementStrideBytes);
+	Source += FString::Printf(TEXT("#define %s_RESOURCE_ELEMENT_STRIDE_FLOAT4 %d\n"), *MacroPrefix, FMath::DivideAndRoundUp(ContractRow->ElementStrideBytes, 16));
+	Source += FString::Printf(TEXT("#define %s_RESOURCE_LAYOUT_HASH 0x%08X\n"), *MacroPrefix, static_cast<uint32>(ContractRow->LayoutHash));
+	Source += FString::Printf(TEXT("#define %s_RESOURCE_PREFER_UNREAL_RDG %d\n"), *MacroPrefix, ContractRow->bPreferUnrealRdg ? 1 : 0);
+	Source += FString::Printf(TEXT("#define %s_RESOURCE_REQUIRES_RAW_VULKAN %d\n"), *MacroPrefix, ContractRow->bRequiresRawVulkanInterop ? 1 : 0);
+	Source += FString::Printf(TEXT("#define %s_RESOURCE_ACCESS_RULE_COUNT %d\n"), *MacroPrefix, AccessRows.Num());
+
+	for (int32 Index = 0; Index < AccessRows.Num(); ++Index)
+	{
+		const FFlightGpuAccessRuleRow& Row = AccessRows[Index];
+		Source += FString::Printf(
+			TEXT("// AccessRule[%d]: Domain=%s Access=%s\n"),
+			Index,
+			*Detail::GpuExecutionDomainToString(Row.ExecutionDomain),
+			*Detail::GpuAccessClassToString(Row.AccessClass));
+	}
+
+	return Source;
 }
 
 } // namespace Flight::Reflection::HLSL

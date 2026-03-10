@@ -1,5 +1,8 @@
 # Next-Gen VEX & Reflective RDG Rendering Architecture
 
+Status: exploratory proposal.
+This is not the primary current roadmap. For active implementation direction, prefer [CurrentFocus.md](CurrentFocus.md), [SchemaIrImplementationPlan.md](SchemaIrImplementationPlan.md), and [../Architecture/CurrentProjectVision.md](../Architecture/CurrentProjectVision.md).
+
 This document formalizes the integration of the FlightProject "Shadow Engine" (Reflection, Functional, Schema) with the GPU Swarm simulation and VEX scripting pipeline.
 
 ## 1. Executive Recommendation

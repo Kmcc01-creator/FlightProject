@@ -183,8 +183,15 @@ That means the project has already moved beyond hardcoded field tables as the on
 - VEX is no longer only a parser-to-lowering pipeline
 - the compiler now has a first SchemaIR binder slice
 - schema-backed `CompileVex(...)` can project symbol definitions from schema and preserve backend bindings
+- backend capability profiles can now evaluate schema-bound programs and emit explicit backend-selection reports
 
 That means symbol meaning is starting to be resolved from contracts rather than rediscovered from ad hoc backend code.
+
+Near-term follow-through:
+
+- the next slice should use that reported backend selection to gate actual runtime dispatch
+- `CompileVex(...)` and `ExecuteBehavior(...)` should honor the chosen backend when it is both legal and executable today
+- when runtime must downgrade to another backend, the report should say why
 
 ### 7.3 Orchestration Direction
 

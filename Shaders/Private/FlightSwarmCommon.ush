@@ -4,14 +4,20 @@
 #ifndef FLIGHT_SWARM_COMMON
 #define FLIGHT_SWARM_COMMON
 
-// We use float4 for RHI compatibility in StructuredBuffers
-float3 GetDroidPosition(StructuredBuffer<float4> Buffer, uint Index) { return Buffer[Index * 2].xyz; }
-float GetDroidShield(StructuredBuffer<float4> Buffer, uint Index) { return Buffer[Index * 2].w; }
-float3 GetDroidVelocity(StructuredBuffer<float4> Buffer, uint Index) { return Buffer[Index * 2 + 1].xyz; }
-uint GetDroidStatus(StructuredBuffer<float4> Buffer, uint Index) { return asuint(Buffer[Index * 2 + 1].w); }
+#include "Generated/FlightGpuResourceContracts.ush"
 
-void SetDroidPositionShield(RWStructuredBuffer<float4> Buffer, uint Index, float3 Pos, float Shield) { Buffer[Index * 2] = float4(Pos, Shield); }
-void SetDroidVelocityStatus(RWStructuredBuffer<float4> Buffer, uint Index, float3 Vel, uint Status) { Buffer[Index * 2 + 1] = float4(Vel, asfloat(Status)); }
+#ifndef FDROIDSTATE_RESOURCE_ELEMENT_STRIDE_FLOAT4
+#define FDROIDSTATE_RESOURCE_ELEMENT_STRIDE_FLOAT4 2
+#endif
+
+// We use float4 for RHI compatibility in StructuredBuffers
+float3 GetDroidPosition(StructuredBuffer<float4> Buffer, uint Index) { return Buffer[Index * FDROIDSTATE_RESOURCE_ELEMENT_STRIDE_FLOAT4].xyz; }
+float GetDroidShield(StructuredBuffer<float4> Buffer, uint Index) { return Buffer[Index * FDROIDSTATE_RESOURCE_ELEMENT_STRIDE_FLOAT4].w; }
+float3 GetDroidVelocity(StructuredBuffer<float4> Buffer, uint Index) { return Buffer[Index * FDROIDSTATE_RESOURCE_ELEMENT_STRIDE_FLOAT4 + 1].xyz; }
+uint GetDroidStatus(StructuredBuffer<float4> Buffer, uint Index) { return asuint(Buffer[Index * FDROIDSTATE_RESOURCE_ELEMENT_STRIDE_FLOAT4 + 1].w); }
+
+void SetDroidPositionShield(RWStructuredBuffer<float4> Buffer, uint Index, float3 Pos, float Shield) { Buffer[Index * FDROIDSTATE_RESOURCE_ELEMENT_STRIDE_FLOAT4] = float4(Pos, Shield); }
+void SetDroidVelocityStatus(RWStructuredBuffer<float4> Buffer, uint Index, float3 Vel, uint Status) { Buffer[Index * FDROIDSTATE_RESOURCE_ELEMENT_STRIDE_FLOAT4 + 1] = float4(Vel, asfloat(Status)); }
 
 struct FSwarmGlobalCommand
 {

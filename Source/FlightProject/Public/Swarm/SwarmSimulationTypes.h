@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Core/FlightReflection.h"
 #include "Core/FlightReactive.h"
+#include "Schema/FlightRequirementSchema.h"
 #include "ShaderParameterMacros.h"
 #include "UniformBuffer.h"
 
@@ -158,8 +159,22 @@ struct alignas(16) FDroidState
 
 } // namespace Flight::Swarm
 
+using FFlightDroidStateReflectAttrs = ::Flight::Reflection::TAttributeSet<
+	::Flight::Reflection::Attr::VersePackage<"Flight.Swarm">,
+	::Flight::Reflection::Attr::GpuResourceId<"Swarm.DroidStateBuffer">,
+	::Flight::Reflection::Attr::GpuResourceKind<EFlightGpuResourceKind::StructuredBuffer>,
+	::Flight::Reflection::Attr::GpuResourceLifetime<EFlightGpuResourceLifetime::Persistent>,
+	::Flight::Reflection::Attr::GpuBindingName<"DroidStateBuffer">,
+	::Flight::Reflection::Attr::PreferUnrealRdg<true>,
+	::Flight::Reflection::Attr::RawVulkanInteropRequired<false>,
+	::Flight::Reflection::Attr::GpuAccessRule<EFlightGpuExecutionDomain::RenderGraph, EFlightGpuAccessClass::TransferDestination>,
+	::Flight::Reflection::Attr::GpuAccessRule<EFlightGpuExecutionDomain::RenderGraph, EFlightGpuAccessClass::TransferSource>,
+	::Flight::Reflection::Attr::GpuAccessRule<EFlightGpuExecutionDomain::GpuCompute, EFlightGpuAccessClass::ShaderRead>,
+	::Flight::Reflection::Attr::GpuAccessRule<EFlightGpuExecutionDomain::GpuCompute, EFlightGpuAccessClass::ShaderWrite>
+>;
+
 FLIGHT_REFLECT_FIELDS_VEX(Flight::Swarm::FDroidState, 
-	::Flight::Reflection::TAttributeSet<::Flight::Reflection::Attr::VersePackage<"Flight.Swarm">>,
+	FFlightDroidStateReflectAttrs,
 	FLIGHT_FIELD_ATTR(FVector3f, Position, 
 		::Flight::Reflection::Attr::VexSymbol<"@position">,
 		::Flight::Reflection::Attr::VexResidency<EFlightVexSymbolResidency::Shared>,

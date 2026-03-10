@@ -103,6 +103,13 @@ struct FLIGHTPROJECT_API FFlightCompressionSummary
 	double StateTransitionCompressionRatio = 1.0;
 };
 
+struct FLIGHTPROJECT_API FFlightCompileBackendReport
+{
+	FString Backend;
+	FString Decision;
+	TArray<FString> Reasons;
+};
+
 struct FLIGHTPROJECT_API FFlightCompileArtifactReport
 {
 	FString SchemaVersion = TEXT("0.1");
@@ -112,6 +119,7 @@ struct FLIGHTPROJECT_API FFlightCompileArtifactReport
 	FString TargetFingerprint;
 	FString CompileOutcome;
 	FString BackendPath;
+	FString SelectedBackend;
 	FString Diagnostics;
 	FString GeneratedVerseCode;
 	FString IrCompileErrors;
@@ -121,6 +129,7 @@ struct FLIGHTPROJECT_API FFlightCompileArtifactReport
 	bool bUsesNativeFallback = false;
 	bool bUsesVmEntryPoint = false;
 	TArray<EFlightCompileArtifactKind> AvailableArtifacts;
+	TArray<FFlightCompileBackendReport> BackendReports;
 	FFlightCodeShapeMetrics CodeShapeMetrics;
 	FFlightWarmupMetrics WarmupMetrics;
 	FFlightCompressionSummary CompressionSummary;

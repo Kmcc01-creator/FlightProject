@@ -1,6 +1,7 @@
 # SCSL Engine: Field-Based Simulation & Rendering
 
-This document outlines the architecture of the **SCSL (Structures, Clouds, Swarms, Light)** engine, a high-performance "shadow engine" built within FlightProject. It leverages C++23 reflection, monadic functional paradigms, and a bespoke VEX-inspired DSL to achieve massive-scale GPU simulation.
+Status: historical SCSL-era document.
+This file outlines the older "shadow engine" architecture. For the current schema-bound and orchestration-driven direction, prefer [CurrentProjectVision.md](CurrentProjectVision.md), [VexStateMutationSchemaFrame.md](VexStateMutationSchemaFrame.md), [WorldExecutionModel.md](WorldExecutionModel.md), and [OrchestrationSubsystem.md](OrchestrationSubsystem.md).
 
 ## 1. The SCSL Paradigm
 Rather than treating entities as individual actors, SCSL treats the world as a set of interacting **Data Fields** and **Lagrangian Points**.

@@ -58,7 +58,16 @@ const FVexSymbolAccessor* FVexSymbolRegistry::FindSymbol(const void* TypeKey, co
 {
 	if (const FVexTypeSchema* Schema = GetSchema(TypeKey))
 	{
-		return Schema->Symbols.Find(Name);
+		return Schema->FindAccessor(Name);
+	}
+	return nullptr;
+}
+
+const FVexSymbolRecord* FVexSymbolRegistry::FindSymbolRecord(const void* TypeKey, const FString& Name) const
+{
+	if (const FVexTypeSchema* Schema = GetSchema(TypeKey))
+	{
+		return Schema->FindSymbolRecord(Name);
 	}
 	return nullptr;
 }

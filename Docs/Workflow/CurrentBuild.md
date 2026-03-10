@@ -18,6 +18,10 @@ This section captures the most recent observed build/test outcomes and commands 
   - VM procedure wrapper execution path (`VProcedure` + `VFunction::Invoke`) with native fallback retained as safety net
   - experimental `IAssemblerPass` scaffold registration in `FlightProject` module (codegen/link hook only)
   - hardened concurrency spec world acquisition + async compile-state assertions
+  - runtime GPU contract alignment for `Swarm.DroidStateBuffer`:
+    - schema-side structured-buffer contract resolution/validation,
+    - swarm RDG/RHI descriptor consumption,
+    - scriptable reflected GPU contract validation
 - Parser stabilization also compiled cleanly:
   - precedence-aware expression parser (`function call`, `dot`, `pipe`, vector literals)
   - parser-side required-symbol enforcement path (`bRequireAllRequiredSymbols`)
@@ -51,15 +55,37 @@ This section captures the most recent observed build/test outcomes and commands 
   - swarm anchors can author preferred, allowed, denied, and required-contract behavior policy;
   - orchestration enforces those constraints during per-cohort plan rebuild;
   - the remaining legality TODO is startup-profile-aware policy layered above anchor/default selection.
+- GPU resource contract validation is now part of the schema baseline:
+  - `FlightProject.Schema.Vex.ManifestValidation` now checks structured-buffer contract resolution and reflected runtime validation for `Swarm.DroidStateBuffer`;
+  - the remaining TODO is to move beyond the current buffer-first, `FDroidState`-first path into images, transient attachments, and additional reflected resource types.
 - `FlightProject.Functional.Vex.CompileArtifactReport` remains passing in headless mode.
-- Headless runs still emit `LogFlightGpuBridge: Error: Failed to initialize Vulkan io_uring reactor` during startup in this environment, but that is not currently failing the non-GPU automation phases.
+- Headless startup no longer instantiates the GPU io_uring bridge under `-NullRHI`, so non-GPU runs are not carrying Vulkan reactor noise in their baseline logs.
 
 ### Latest GPU/Vulkan Snapshot (2026-03-10)
-- Full GPU-required validation is currently blocked before automation discovery.
-- `TEST_SCOPE=all ./Scripts/run_tests_full.sh` exits during Vulkan startup with:
-  - `Forced Vulkan device could not be created at the project's supported feature levels`
-  - evidence: `Saved/Logs/FlightProject.log:83`
-- Treat current GPU validation as environment-blocked until Vulkan/device creation succeeds on the runner.
+- Full GPU-required validation now reaches Vulkan device creation and automation discovery on the local Linux runner when using the recovered RADV loader preset.
+- The previous `SM6`-only Linux target restriction has been relaxed: the project now advertises both `SF_VULKAN_SM5` and `SF_VULKAN_SM6`.
+- `run_tests_full.sh` no longer forces `VK_KHR_external_semaphore` / `VK_KHR_external_semaphore_fd` on the command line by default; it relies on project/plugin registration unless `TEST_FORCE_VULKAN_EXTENSIONS=1` is set explicitly.
+- `run_tests_full.sh` now defaults to `TEST_GPU_VALIDATION_PRESET=local-radv`, which applies:
+  - `TEST_VK_DRIVER_FILES=/usr/share/vulkan/icd.d/radeon_icd.x86_64.json`
+  - `TEST_VK_LOADER_LAYERS_DISABLE='~implicit~'`
+  - opt-out via `TEST_GPU_VALIDATION_PRESET=off`
+- Verified on March 10, 2026 with:
+  - `./Scripts/run_tests_full.sh`
+  - `TEST_VK_DRIVER_FILES=/usr/share/vulkan/icd.d/radeon_icd.x86_64.json TEST_VK_LOADER_LAYERS_DISABLE='~implicit~' TEST_LOG_PROFILE=verbose ./Scripts/run_tests_full.sh`
+- Under that preset, Unreal now:
+  - enumerates `AMD Radeon 860M Graphics (RADV KRACKAN1)` in minimal/plain/profile temp-instance probes
+  - passes the `VP_UE_Vulkan_SM6` profile gate
+  - creates the Vulkan device successfully
+  - reaches automation discovery (`Found 1 automation tests based on 'FlightProject.Perf.GpuPerception'`)
+- The current benchmark bucket exits `0`, but only because the test is intentionally skipped:
+  - `Skipping FlightProject.Perf.GpuPerception - SCSL renderer pipeline under development`
+- Local host Vulkan inspection on March 10, 2026 shows:
+  - `vulkaninfo` sees `AMD Radeon 860M Graphics (RADV KRACKAN1)` plus `llvmpipe`
+  - `fragmentStoresAndAtomics = true`
+  - `maxBoundDescriptorSets = 32`
+  - `VK_KHR_external_fence_fd` and `VK_KHR_external_semaphore_fd` are present on the device
+- Current conclusion: the prior GPU blocker was primarily loader/layer/device-selection environment on this runner, not the project’s semaphore-extension registration or the io_uring bridge initialization path.
+- Remaining GPU work is now about meaningful test coverage beyond initialization/discovery, not basic Vulkan bring-up.
 
 ### Key Learning: Discovery Context
 Tests defined with `EAutomationTestFlags::ClientContext` are **not** discovered when running via `UnrealEditor-Cmd`. To enable discovery in commandlet/CI environments, tests must use:
@@ -108,7 +134,9 @@ export UE_ROOT=/home/kelly/Unreal/UnrealEngine
 ./Scripts/run_tests_full.sh
 ```
 *Optional scope: set `TEST_SCOPE=benchmark|gpu_smoke|all` (default `benchmark`).*
-*Optional log filtering: same `TEST_LOG_PROFILE` / `LOG_CMDS` behavior is supported for this path; current GPU runs are still blocked by Vulkan device creation in this environment.*
+*Optional extension forcing: set `TEST_FORCE_VULKAN_EXTENSIONS=1` to add explicit semaphore-extension command-line flags for comparison runs.*
+*Default GPU-validation preset: `TEST_GPU_VALIDATION_PRESET=local-radv` (applies the RADV ICD plus `VK_LOADER_LAYERS_DISABLE='~implicit~'` on this runner). Set `TEST_GPU_VALIDATION_PRESET=off` to disable it.*
+*Optional log filtering: same `TEST_LOG_PROFILE` / `LOG_CMDS` behavior is supported for this path.*
 
 **Schema Manifest Export (Code-First Contract):**
 ```python

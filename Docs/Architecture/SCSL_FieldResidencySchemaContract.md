@@ -1,7 +1,7 @@
 # SCSL Field Residency Schema Contract (Draft)
 
-Date: March 8, 2026  
-Status: Draft (planning contract only; no runtime implementation in this document)
+Status: historical draft (planning contract only).
+This document reflects older SCSL-era field residency concepts. For current GPU resource and contract direction, prefer [GpuResourceSchemaContract.md](GpuResourceSchemaContract.md) and [TargetCapabilitySchema.md](TargetCapabilitySchema.md).
 
 ## 1) Purpose
 

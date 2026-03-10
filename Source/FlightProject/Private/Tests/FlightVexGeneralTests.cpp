@@ -17,6 +17,7 @@ struct FGeneralVexTestState
 	float Health = 100.0f;
 	float Ammo = 50.0f;
 	float Score = 0.0f;
+	int32 Count = 0;
 
 	FLIGHT_REFLECT_BODY(FGeneralVexTestState);
 };
@@ -24,7 +25,8 @@ struct FGeneralVexTestState
 FLIGHT_REFLECT_FIELDS_ATTR(FGeneralVexTestState,
 	FLIGHT_FIELD_ATTR(float, Health, ::Flight::Reflection::Attr::VexSymbol<"@health">),
 	FLIGHT_FIELD_ATTR(float, Ammo, ::Flight::Reflection::Attr::VexSymbol<"@ammo">),
-	FLIGHT_FIELD_ATTR(float, Score, ::Flight::Reflection::Attr::VexSymbol<"@score">)
+	FLIGHT_FIELD_ATTR(float, Score, ::Flight::Reflection::Attr::VexSymbol<"@score">),
+	FLIGHT_FIELD_ATTR(int32, Count, ::Flight::Reflection::Attr::VexSymbol<"@count">)
 )
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVexGeneralizationTest, "FlightProject.Vex.Generalization.ExecuteOnCustomStruct", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -50,8 +52,8 @@ bool FFlightVexGeneralizationTest::RunTest(const FString& Parameters)
 	Flight::Vex::TTypeVexRegistry<FGeneralVexTestState>::Register();
 
 	// 2. Compile a VEX script that operates on this struct
-	// Note: @score = @health + @ammo
-	const FString VexSource = TEXT("@score = @health + @ammo; @health -= 10.0;");
+	// Note: exercises both float and int symbol execution paths without relying on implicit parser coercions.
+	const FString VexSource = TEXT("@score = @health + @ammo; @health -= 10.0; @count = @count + 2;");
 	FString Errors;
 	const uint32 BehaviorID = 9999; // Arbitrary test ID
 
@@ -68,13 +70,15 @@ bool FFlightVexGeneralizationTest::RunTest(const FString& Parameters)
 	TestState.Health = 80.0f;
 	TestState.Ammo = 20.0f;
 	TestState.Score = 0.0f;
+	TestState.Count = 3;
 
 	// 4. Execute
 	VerseSubsystem->ExecuteBehaviorOnStruct(BehaviorID, &TestState, TypeKey);
 
 	// 5. Verify results
-	TestEqual(TEXT("Score should be Health + Ammo (80 + 20)"), TestState.Score, 100.0f);
-	TestEqual(TEXT("Health should be decremented (80 - 10)"), TestState.Health, 70.0f);
+		TestEqual(TEXT("Score should be Health + Ammo (80 + 20)"), TestState.Score, 100.0f);
+		TestEqual(TEXT("Health should be decremented (80 - 10)"), TestState.Health, 70.0f);
+		TestEqual(TEXT("Count should be incremented through typed symbol writeback"), TestState.Count, 5);
 
 	return true;
 }

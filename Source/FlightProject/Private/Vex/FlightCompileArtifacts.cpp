@@ -141,6 +141,27 @@ void AddArtifactKindArrayToJson(const TArray<EFlightCompileArtifactKind>& Kinds,
 	Object->SetArrayField(FieldName, Values);
 }
 
+void AddBackendReportsToJson(const TArray<FFlightCompileBackendReport>& Reports, const TCHAR* FieldName, TSharedRef<FJsonObject> Object)
+{
+	TArray<TSharedPtr<FJsonValue>> Values;
+	for (const FFlightCompileBackendReport& Report : Reports)
+	{
+		TSharedRef<FJsonObject> BackendObject = MakeShared<FJsonObject>();
+		BackendObject->SetStringField(TEXT("backend"), Report.Backend);
+		BackendObject->SetStringField(TEXT("decision"), Report.Decision);
+
+		TArray<TSharedPtr<FJsonValue>> ReasonValues;
+		for (const FString& Reason : Report.Reasons)
+		{
+			ReasonValues.Add(MakeShared<FJsonValueString>(Reason));
+		}
+
+		BackendObject->SetArrayField(TEXT("reasons"), ReasonValues);
+		Values.Add(MakeShared<FJsonValueObject>(BackendObject));
+	}
+	Object->SetArrayField(FieldName, Values);
+}
+
 } // namespace
 
 FString CompileArtifactKindToString(const EFlightCompileArtifactKind Kind)
@@ -400,6 +421,7 @@ FString BuildCompileArtifactReportJson(const FFlightCompileArtifactReport& Repor
 	Root->SetStringField(TEXT("targetFingerprint"), Report.TargetFingerprint);
 	Root->SetStringField(TEXT("compileOutcome"), Report.CompileOutcome);
 	Root->SetStringField(TEXT("backendPath"), Report.BackendPath);
+	Root->SetStringField(TEXT("selectedBackend"), Report.SelectedBackend);
 	Root->SetStringField(TEXT("tier"), VexTierToString(Report.Tier));
 	Root->SetBoolField(TEXT("async"), Report.bAsync);
 	Root->SetBoolField(TEXT("hasIr"), Report.bHasIr);
@@ -409,6 +431,7 @@ FString BuildCompileArtifactReportJson(const FFlightCompileArtifactReport& Repor
 	Root->SetStringField(TEXT("generatedVerseCode"), Report.GeneratedVerseCode);
 	Root->SetStringField(TEXT("irCompileErrors"), Report.IrCompileErrors);
 	AddArtifactKindArrayToJson(Report.AvailableArtifacts, TEXT("availableArtifacts"), Root);
+	AddBackendReportsToJson(Report.BackendReports, TEXT("backendReports"), Root);
 
 	TSharedRef<FJsonObject> CodeShapeObject = MakeShared<FJsonObject>();
 	CodeShapeObject->SetNumberField(TEXT("instructionCount"), Report.CodeShapeMetrics.InstructionCount);

@@ -1,149 +1,134 @@
 # FlightProject Documentation
 
-## Overview
+This tree has grown large enough that the main problem is no longer lack of information.
+The main problem is distinguishing canonical guidance from historical or exploratory material.
 
-FlightProject is an autonomous flight simulation sandbox built on Unreal Engine 5.7.1, featuring large-scale swarm support and GPU-driven systems.
+This index is therefore organized by documentation status, not only by folder.
 
-## Documentation Structure
+## Canonical Reading Paths
 
-### [Environment/](Environment/) - Platform & Build
+Use these first when you need the current project direction.
 
-Development environment setup, build scripts, and platform-specific configuration.
+### Architecture Core
 
-| Document | Description |
-|----------|-------------|
-| [LinuxSetup.md](Environment/LinuxSetup.md) | Linux/CachyOS/Wayland/Hyprland configuration |
-| [BuildAndRegen.md](Environment/BuildAndRegen.md) | Project regeneration and build commands |
-| [VSCodeSetup.md](Environment/VSCodeSetup.md) | VS Code, clangd, tasks, and debugging |
-| [Configuration.md](Environment/Configuration.md) | INI file inventory and editing workflow |
-| [Troubleshooting.md](Environment/Troubleshooting.md) | Common issues and mitigations |
+1. [Architecture/ProjectOrganization.md](Architecture/ProjectOrganization.md)
+2. [Architecture/WorldExecutionModel.md](Architecture/WorldExecutionModel.md)
+3. [Architecture/GameModeBootstrapBoundary.md](Architecture/GameModeBootstrapBoundary.md)
+4. [Architecture/OrchestrationSubsystem.md](Architecture/OrchestrationSubsystem.md)
+5. [Architecture/CurrentProjectVision.md](Architecture/CurrentProjectVision.md)
+6. [Architecture/VexStateMutationSchemaFrame.md](Architecture/VexStateMutationSchemaFrame.md)
+7. [Architecture/DataPipeline.md](Architecture/DataPipeline.md)
+8. [Architecture/GpuResourceSchemaContract.md](Architecture/GpuResourceSchemaContract.md)
 
-### [Architecture/](Architecture/) - Project Design
+### Workflow / Current Status
 
-Technical architecture, engine integration, and system design.
+Use these for what is active right now, with dates and execution priorities.
 
-| Document | Description |
-|----------|-------------|
-| [Overview.md](Architecture/Overview.md) | Project vision, goals, and roadmap |
-| [EngineIntegration.md](Architecture/EngineIntegration.md) | UE systems usage and module dependencies |
-| [MassECS.md](Architecture/MassECS.md) | Mass Entity fragments, processors, spawning |
-| [Navigation.md](Architecture/Navigation.md) | Navigation architecture, route legality, cohorts, and orchestration integration |
-| [DataPipeline.md](Architecture/DataPipeline.md) | Data ingress architecture, typed contracts, and source-format flexibility |
-| [FlightControls.md](Architecture/FlightControls.md) | Input system and movement component |
-| [PluginArchitecture.md](Architecture/PluginArchitecture.md) | Plugin types and usage patterns |
-| [RowEvolutionDesignReview.md](Architecture/RowEvolutionDesignReview.md) | Row-type evolution strategy, reactive/reflection integration, and phased operations plan |
-| [SCSL_FieldResidencySchemaContract.md](Architecture/SCSL_FieldResidencySchemaContract.md) | Draft schema contract for SCSL field residency, page IDs, and persistence semantics |
-| [AssemblyInspectionModels.md](Architecture/AssemblyInspectionModels.md) | Register-pressure, spill, cache, warmup, and compression models for artifact and assembly inspection |
-| [CompilerArtifactTesting.md](Architecture/CompilerArtifactTesting.md) | Artifact-driven compiler and assembly-oriented automation testing for VEX, VVM, SIMD, and GPU backends |
-| [TargetCapabilitySchema.md](Architecture/TargetCapabilitySchema.md) | Host/device capability normalization, compilation policy derivation, and register-pressure guidance |
+- [Workflow/CurrentFocus.md](Workflow/CurrentFocus.md)
+- [Workflow/CurrentBuild.md](Workflow/CurrentBuild.md)
+- [Workflow/OrchestrationImplementationPlan.md](Workflow/OrchestrationImplementationPlan.md)
+- [Workflow/SchemaIrImplementationPlan.md](Workflow/SchemaIrImplementationPlan.md)
 
-### [Workflow/](Workflow/) - Development Process
+## Status Guide
 
-Day-to-day development workflows and runtime systems.
+Treat documents using these categories:
 
-| Document | Description |
-|----------|-------------|
-| [CurrentFocus.md](Workflow/CurrentFocus.md) | Current phase status, milestones, and immediate roadmap |
-| [CurrentFocus-VexRendering.md](Workflow/CurrentFocus-VexRendering.md) | Proposed typestate VEX + reflective RDG rendering direction |
-| [CurrentBuild.md](Workflow/CurrentBuild.md) | Current build/test baseline, schema validation coverage, and command reference |
-| [UnrealDevelopmentImprovementPlan.md](Workflow/UnrealDevelopmentImprovementPlan.md) | Milestone-based plan for stabilizing startup, orchestration, testing, and GPU validation |
-| [TestingValidationPlan.md](Workflow/TestingValidationPlan.md) | Current phased validation topology, evidence, and next testing targets |
-| [OrchestrationImplementationPlan.md](Workflow/OrchestrationImplementationPlan.md) | Current orchestration rollout state, gaps, and recommended execution boundary |
-| [GameplaySystems.md](Workflow/GameplaySystems.md) | Runtime bootstrap and system interactions |
-| [MapWorkflow.md](Workflow/MapWorkflow.md) | Level authoring and testing |
-| [EditorTooling.md](Workflow/EditorTooling.md) | Editor setup and recommended layout |
-| [StartPlayDecomposition.md](Workflow/StartPlayDecomposition.md) | Bootstrap subsystem migration (historical) |
-| [PIE_Spawn.md](Workflow/PIE_Spawn.md) | PIE startup spawn analysis and tracing reference |
-| [Phase0ImplementationChecklist.md](Workflow/Phase0ImplementationChecklist.md) | Phase 0 safety checklist for reactive/functional/reflection fixes |
+- Canonical:
+  current architecture or implementation direction; should align with the active codebase.
+- Operational:
+  dated workflow/build/test status documents such as `CurrentFocus.md` and `CurrentBuild.md`.
+- Reference:
+  still useful subsystem detail, but not the best starting point for current direction.
+- Exploratory / Historical:
+  concept documents, migration notes, or older proposals that may preserve useful ideas but can contain stale assumptions or speculative syntax.
 
-### [Scripting/](Scripting/) - Automation & Rapid Iteration
+If two docs disagree, prefer:
 
-Python, Blueprint, and data-driven development workflows.
+1. `CurrentFocus.md` / `CurrentBuild.md` for dated status
+2. `CurrentProjectVision.md`, `WorldExecutionModel.md`, and `ProjectOrganization.md` for architectural direction
+3. the more recent implementation plan for active migration work
 
-| Document | Description |
-|----------|-------------|
-| [DevelopmentCycle.md](Scripting/DevelopmentCycle.md) | Python → Blueprint → C++ iteration loop |
-| [EditorAutomation.md](Scripting/EditorAutomation.md) | Python tools, Editor Utility Widgets |
-| [DataDrivenDesign.md](Scripting/DataDrivenDesign.md) | CSV workflows, Data Assets, runtime tuning |
-| [PythonAPI.md](Scripting/PythonAPI.md) | Exposing C++ to Python (reflection) |
-| [VexSchemaValidation.md](Scripting/VexSchemaValidation.md) | Schema-driven VEX symbol contracts and tooling |
-| [VerseAssemblerScaffold.md](Scripting/VerseAssemblerScaffold.md) | `IAssemblerPass` scaffold, capability matrix, and Verse/Solaris viability plan |
-| [VexUiScaffold.md](Scripting/VexUiScaffold.md) | VEX-authored Slate composition, reactive signals, and schema snapshot workflow |
+## Folder Guide
 
-### [Future/](Future/) - Roadmap & Proposals
+### Architecture
 
-Planned features and design proposals.
+Primary design docs and subsystem contracts.
 
-| Document | Description |
-|----------|-------------|
-| [LevelLoader.md](Future/LevelLoader.md) | Composable level loading subsystem |
-| [HegeticInterface.md](Future/HegeticInterface.md) | Data-to-visual telemetry framework |
+Start with:
 
-### [Extensions/](Extensions/) - Experimental Integration
+- [Architecture/Overview.md](Architecture/Overview.md)
+- [Architecture/CurrentProjectVision.md](Architecture/CurrentProjectVision.md)
+- [Architecture/WorldExecutionModel.md](WorldExecutionModel.md)
+- [Architecture/OrchestrationSubsystem.md](OrchestrationSubsystem.md)
 
-Exploratory work on external framework integration and custom tooling.
+Use as current subsystem references when relevant:
 
-| Document | Description |
-|----------|-------------|
-| [EditorServiceArchitecture.md](Extensions/EditorServiceArchitecture.md) | DDC hierarchy, ZenServer, and team infrastructure |
-| [M2FrameworkIntegration.md](Extensions/M2FrameworkIntegration.md) | m2 compiler infrastructure for UE debugging utilities |
-| [MacrokidBehavioralSynthesis.md](Extensions/MacrokidBehavioralSynthesis.md) | macrokid_learning + neon_void → StateTree/Mass AI architecture |
+- [Architecture/Navigation.md](Architecture/Navigation.md)
+- [Architecture/EditorAssetShim.md](Architecture/EditorAssetShim.md)
+- [Architecture/TargetCapabilitySchema.md](Architecture/TargetCapabilitySchema.md)
+- [Architecture/CompilerArtifactTesting.md](Architecture/CompilerArtifactTesting.md)
+- [Architecture/AssemblyInspectionModels.md](Architecture/AssemblyInspectionModels.md)
+- [Architecture/SimpleSCSLShaderPipeline.md](Architecture/SimpleSCSLShaderPipeline.md)
 
-## Quick Reference
+Treat as historical or exploratory reference:
 
-### Key Directories
+- [Architecture/HistoricalVexVerseConcepts.md](Architecture/HistoricalVexVerseConcepts.md) (Consolidated exploratory VEX/Verse runtime models)
+- [Architecture/SCSL_Engine.md](Architecture/SCSL_Engine.md)
+- [Architecture/SCSL_FieldResidencySchemaContract.md](Architecture/SCSL_FieldResidencySchemaContract.md)
+- `SIMD_HLSL_INTRINSICS.md`
+- `SIMD_Strategy_ImplementationPlan.md`
+- `FieldTheoreticStylization.md`
 
-```
-/home/kelly/Unreal/
-├── UnrealEngine/                  # UE 5.7.1 source build
-│   └── Engine/Binaries/Linux/     # Editor binary
-└── Projects/FlightProject/
-    ├── Source/FlightProject/
-    │   ├── Public/                # Headers
-    │   ├── Private/               # Implementation
-    │   └── Public/Mass/           # ECS fragments & processors
-    ├── Config/                    # INI configuration
-    ├── Content/Data/              # CSV data files
-    ├── Scripts/                   # Build & run scripts
-    ├── Shaders/                   # Custom RDG shaders
-    └── Docs/                      # This documentation
-```
 
-### Common Commands
+### Workflow
 
-```bash
-# Set engine root (required)
-export UE_ROOT=/home/kelly/Unreal/UnrealEngine
+Day-to-day implementation notes, rollout plans, and dated status.
 
-# Generate project files
-./Scripts/generate_project_files.sh
+Canonical operational docs:
 
-# Build
-./Scripts/build_targets.sh Development
+- [Workflow/CurrentFocus.md](Workflow/CurrentFocus.md)
+- [Workflow/CurrentBuild.md](Workflow/CurrentBuild.md)
+- [Workflow/TestingValidationPlan.md](Workflow/TestingValidationPlan.md)
+- [Workflow/OrchestrationImplementationPlan.md](Workflow/OrchestrationImplementationPlan.md)
+- [Workflow/SchemaIrImplementationPlan.md](Workflow/SchemaIrImplementationPlan.md)
 
-# Run editor
-./Scripts/run_editor.sh --wayland
+Historical or narrow-scope references:
 
-# Cook and run game
-./Scripts/run_game.sh --wayland --gamescope
-```
+- `CurrentFocus-VexRendering.md`
+- `StartPlayDecomposition.md`
+- `PIE_Spawn.md`
+- `Phase0ImplementationChecklist.md`
+- `Phase2_ModularParser_PostMortem.md`
 
-### Core Classes
+### Environment
 
-| Class | Purpose |
-|-------|---------|
-| `AFlightVehiclePawn` | Player-controlled aircraft |
-| `AFlightAIPawn` | Autonomous drone (Actor-based) |
-| `UFlightMovementComponent` | Custom flight physics |
-| `UFlightSwarmSpawnerSubsystem` | Drone spawning orchestration |
-| `UFlightDataSubsystem` | CSV data loading |
-| `UFlightPathFollowProcessor` | Mass ECS path following |
+Build, configuration, and local setup documentation.
 
-## Two-Aspect Organization
+Start with:
 
-This documentation is organized around two primary aspects:
+- [Environment/BuildAndRegen.md](Environment/BuildAndRegen.md)
+- [Environment/Configuration.md](Environment/Configuration.md)
+- [Environment/Troubleshooting.md](Environment/Troubleshooting.md)
 
-1. **Environment** - How to build, run, and configure the project on Linux/CachyOS
-2. **Architecture** - What systems exist, how they integrate with UE, and how to extend them
+### Scripting
 
-This separation allows environment setup to be understood independently of project-specific code, and vice versa.
+Automation and tool-facing surfaces.
+
+Useful current references:
+
+- [Scripting/VexSchemaValidation.md](Scripting/VexSchemaValidation.md)
+- [Scripting/VerseAssemblerScaffold.md](Scripting/VerseAssemblerScaffold.md)
+- [Scripting/VexUiScaffold.md](Scripting/VexUiScaffold.md)
+
+### Future / Extensions / DevNotes
+
+These are not canonical starting points.
+Use them as proposal, archive, or research material unless a current doc links to them directly.
+
+## Documentation Maintenance Rules
+
+- Keep dated build/test evidence in `Workflow/CurrentBuild.md`.
+- Keep active milestones, risks, and next steps in `Workflow/CurrentFocus.md`.
+- Keep `Architecture/Overview.md` short and current; do not let it drift into a historical project pitch.
+- When an older concept doc is still worth keeping, label it as exploratory or historical instead of silently presenting it as current.
+- Prefer linking to one canonical document rather than copying the same architectural story into multiple files.

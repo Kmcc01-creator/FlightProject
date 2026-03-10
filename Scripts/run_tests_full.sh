@@ -20,6 +20,14 @@ TEST_LOG_PROFILE="${TEST_LOG_PROFILE:-full}"
 TEST_SCOPE="${TEST_SCOPE:-benchmark}"
 TEST_COLOR_MODE="${TEST_COLOR_MODE:-auto}" # auto|always|never
 TEST_STREAM_FILTER="${TEST_STREAM_FILTER:-all}" # all|errors
+TEST_FORCE_VULKAN_EXTENSIONS="${TEST_FORCE_VULKAN_EXTENSIONS:-0}"
+TEST_VIDEO_BACKEND="${TEST_VIDEO_BACKEND:-auto}" # auto|wayland|x11|dummy
+TEST_RENDER_OFFSCREEN="${TEST_RENDER_OFFSCREEN:-1}" # 1|0
+TEST_GPU_VALIDATION_PRESET="${TEST_GPU_VALIDATION_PRESET:-local-radv}" # local-radv|off
+TEST_VK_DRIVER_FILES="${TEST_VK_DRIVER_FILES:-}"
+TEST_VK_ICD_FILENAMES="${TEST_VK_ICD_FILENAMES:-}"
+TEST_VK_LOADER_LAYERS_DISABLE="${TEST_VK_LOADER_LAYERS_DISABLE:-}"
+DEFAULT_RADV_ICD="/usr/share/vulkan/icd.d/radeon_icd.x86_64.json"
 
 mkdir -p "$DDC_PATH"
 
@@ -67,17 +75,98 @@ EXEC_CMDS="Automation RunTests ${TEST_FILTER}; quit"
 
 echo "Using test scope: ${TEST_SCOPE} (ExecCmds='${EXEC_CMDS}')"
 
+case "${TEST_GPU_VALIDATION_PRESET,,}" in
+    local-radv|default)
+        if [[ -z "${TEST_VK_DRIVER_FILES}" && -z "${TEST_VK_ICD_FILENAMES}" && -f "${DEFAULT_RADV_ICD}" ]]; then
+            TEST_VK_DRIVER_FILES="${DEFAULT_RADV_ICD}"
+        fi
+        if [[ -z "${TEST_VK_LOADER_LAYERS_DISABLE}" ]]; then
+            TEST_VK_LOADER_LAYERS_DISABLE="~implicit~"
+        fi
+        echo "Using GPU validation preset: local-radv"
+        ;;
+    off|none|disabled)
+        echo "Using GPU validation preset: off"
+        ;;
+    *)
+        echo "Unknown TEST_GPU_VALIDATION_PRESET='${TEST_GPU_VALIDATION_PRESET}'. Expected one of: local-radv, off" >&2
+        exit 2
+        ;;
+esac
+
+case "${TEST_VIDEO_BACKEND,,}" in
+    auto)
+        echo "Using video backend: auto (SDL_VIDEODRIVER=${SDL_VIDEODRIVER:-<unset>})"
+        ;;
+    wayland|x11|dummy)
+        export SDL_VIDEODRIVER="${TEST_VIDEO_BACKEND,,}"
+        echo "Forcing video backend: ${SDL_VIDEODRIVER}"
+        ;;
+    *)
+        echo "Unknown TEST_VIDEO_BACKEND='${TEST_VIDEO_BACKEND}'. Expected one of: auto, wayland, x11, dummy" >&2
+        exit 2
+        ;;
+esac
+
+if [[ -n "${TEST_VK_DRIVER_FILES}" ]]; then
+    export VK_DRIVER_FILES="${TEST_VK_DRIVER_FILES}"
+    echo "Forcing VK_DRIVER_FILES=${VK_DRIVER_FILES}"
+else
+    echo "Using VK_DRIVER_FILES=${VK_DRIVER_FILES:-<unset>}"
+fi
+
+if [[ -n "${TEST_VK_ICD_FILENAMES}" ]]; then
+    export VK_ICD_FILENAMES="${TEST_VK_ICD_FILENAMES}"
+    echo "Forcing VK_ICD_FILENAMES=${VK_ICD_FILENAMES}"
+else
+    echo "Using VK_ICD_FILENAMES=${VK_ICD_FILENAMES:-<unset>}"
+fi
+
+if [[ -n "${TEST_VK_LOADER_LAYERS_DISABLE}" ]]; then
+    export VK_LOADER_LAYERS_DISABLE="${TEST_VK_LOADER_LAYERS_DISABLE}"
+    echo "Forcing VK_LOADER_LAYERS_DISABLE=${VK_LOADER_LAYERS_DISABLE}"
+else
+    echo "Using VK_LOADER_LAYERS_DISABLE=${VK_LOADER_LAYERS_DISABLE:-<unset>}"
+fi
+
+RENDER_ARGS=()
+case "${TEST_RENDER_OFFSCREEN,,}" in
+    1|true|yes|on)
+        echo "Render mode: offscreen"
+        RENDER_ARGS+=("-RenderOffscreen")
+        ;;
+    0|false|no|off)
+        echo "Render mode: onscreen/window-backed"
+        ;;
+    *)
+        echo "Unknown TEST_RENDER_OFFSCREEN='${TEST_RENDER_OFFSCREEN}'. Expected 1 or 0" >&2
+        exit 2
+        ;;
+esac
+
+VULKAN_EXTENSION_ARGS=()
+case "${TEST_FORCE_VULKAN_EXTENSIONS,,}" in
+    1|true|yes|on)
+        echo "Forcing Vulkan semaphore extensions via command line"
+        VULKAN_EXTENSION_ARGS+=("-vulkanextension=VK_KHR_external_semaphore_fd")
+        VULKAN_EXTENSION_ARGS+=("-vulkanextension=VK_KHR_external_semaphore")
+        ;;
+    *)
+        echo "Using project/plugin Vulkan extension registration only"
+        ;;
+esac
+
 UE_CMD=(
     "$UE_ROOT/Engine/Binaries/Linux/UnrealEditor-Cmd"
     "$PROJECT_DIR/FlightProject.uproject"
     -ExecCmds="$EXEC_CMDS"
     -unattended -nopause -nosplash -stdout -FullStdOutLogOutput
-    -Vulkan -RenderOffscreen
+    -Vulkan
+    "${RENDER_ARGS[@]}"
     -NoDDCMaintenance
     -DDC=Default -LocalDataCachePath="$DDC_PATH"
     -NoSound -NoVerifyGC
-    -vulkanextension="VK_KHR_external_semaphore_fd"
-    -vulkanextension="VK_KHR_external_semaphore"
+    "${VULKAN_EXTENSION_ARGS[@]}"
     "${LOG_CMDS_ARGS[@]}"
 )
 

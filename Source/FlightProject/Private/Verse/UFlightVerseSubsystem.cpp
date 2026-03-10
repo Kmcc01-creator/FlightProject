@@ -2,6 +2,7 @@
 
 #include "Verse/UFlightVerseSubsystem.h"
 #include "Vex/FlightCompileArtifacts.h"
+#include "Vex/FlightVexBackendCapabilities.h"
 #include "Vex/FlightVexParser.h"
 #include "Vex/FlightVexSchemaIr.h"
 #include "Vex/FlightVexTypes.h"
@@ -34,109 +35,46 @@ DEFINE_LOG_CATEGORY_STATIC(LogFlightVerseSubsystem, Log, All);
 
 namespace
 {
-	enum class ENativeValueType : uint8
-	{
-		Float,
-		Int,
-		Bool,
-		Vec3
-	};
-
-	struct FNativeValue
-	{
-		ENativeValueType Type = ENativeValueType::Float;
-		float FloatValue = 0.0f;
-		int32 IntValue = 0;
-		bool BoolValue = false;
-		FVector3f Vec3Value = FVector3f::ZeroVector;
-	};
+	using FNativeValue = Flight::Vex::FVexRuntimeValue;
 
 	FNativeValue MakeFloat(const float Value)
 	{
-		FNativeValue Result;
-		Result.Type = ENativeValueType::Float;
-		Result.FloatValue = Value;
-		Result.IntValue = static_cast<int32>(Value);
-		Result.BoolValue = !FMath::IsNearlyZero(Value);
-		return Result;
+		return FNativeValue::FromFloat(Value);
 	}
 
 	FNativeValue MakeInt(const int32 Value)
 	{
-		FNativeValue Result;
-		Result.Type = ENativeValueType::Int;
-		Result.IntValue = Value;
-		Result.FloatValue = static_cast<float>(Value);
-		Result.BoolValue = Value != 0;
-		return Result;
+		return FNativeValue::FromInt(Value);
 	}
 
 	FNativeValue MakeBool(const bool Value)
 	{
-		FNativeValue Result;
-		Result.Type = ENativeValueType::Bool;
-		Result.BoolValue = Value;
-		Result.IntValue = Value ? 1 : 0;
-		Result.FloatValue = Value ? 1.0f : 0.0f;
-		return Result;
+		return FNativeValue::FromBool(Value);
 	}
 
 	FNativeValue MakeVec3(const FVector3f& Value)
 	{
-		FNativeValue Result;
-		Result.Type = ENativeValueType::Vec3;
-		Result.Vec3Value = Value;
-		Result.FloatValue = Value.Size();
-		Result.BoolValue = !Value.IsNearlyZero();
-		return Result;
+		return FNativeValue::FromVec3(Value);
 	}
 
 	float AsFloat(const FNativeValue& Value)
 	{
-		switch (Value.Type)
-		{
-		case ENativeValueType::Float: return Value.FloatValue;
-		case ENativeValueType::Int: return static_cast<float>(Value.IntValue);
-		case ENativeValueType::Bool: return Value.BoolValue ? 1.0f : 0.0f;
-		case ENativeValueType::Vec3: return Value.Vec3Value.Size();
-		default: return 0.0f;
-		}
+		return Value.AsFloat();
 	}
 
 	int32 AsInt(const FNativeValue& Value)
 	{
-		switch (Value.Type)
-		{
-		case ENativeValueType::Int: return Value.IntValue;
-		case ENativeValueType::Bool: return Value.BoolValue ? 1 : 0;
-		case ENativeValueType::Float: return static_cast<int32>(Value.FloatValue);
-		case ENativeValueType::Vec3: return static_cast<int32>(Value.Vec3Value.Size());
-		default: return 0;
-		}
+		return Value.AsInt();
 	}
 
 	bool AsBool(const FNativeValue& Value)
 	{
-		switch (Value.Type)
-		{
-		case ENativeValueType::Bool: return Value.BoolValue;
-		case ENativeValueType::Int: return Value.IntValue != 0;
-		case ENativeValueType::Float: return !FMath::IsNearlyZero(Value.FloatValue);
-		case ENativeValueType::Vec3: return !Value.Vec3Value.IsNearlyZero();
-		default: return false;
-		}
+		return Value.AsBool();
 	}
 
 	FVector3f AsVec3(const FNativeValue& Value)
 	{
-		switch (Value.Type)
-		{
-		case ENativeValueType::Vec3: return Value.Vec3Value;
-		case ENativeValueType::Float: return FVector3f(Value.FloatValue);
-		case ENativeValueType::Int: return FVector3f(static_cast<float>(Value.IntValue));
-		case ENativeValueType::Bool: return FVector3f(Value.BoolValue ? 1.0f : 0.0f);
-		default: return FVector3f::ZeroVector;
-		}
+		return Value.AsVec3();
 	}
 
 	FNativeValue CastToType(const FNativeValue& Value, const FString& TypeName)
@@ -248,7 +186,7 @@ namespace
 
 	FNativeValue ApplyArithmetic(const FString& OperatorLexeme, const FNativeValue& Left, const FNativeValue& Right)
 	{
-		if (Left.Type == ENativeValueType::Vec3 || Right.Type == ENativeValueType::Vec3)
+		if (Left.Type == Flight::Vex::EVexValueType::Float3 || Right.Type == Flight::Vex::EVexValueType::Float3)
 		{
 			const FVector3f L = AsVec3(Left);
 			const FVector3f R = AsVec3(Right);
@@ -392,7 +330,7 @@ namespace
 				}
 
 				const Flight::Vex::FVexExpressionAst& RightNode = Program.Expressions[Node.RightNodeIndex];
-				if (Left.Type != ENativeValueType::Vec3 || RightNode.Kind != Flight::Vex::EVexExprKind::Identifier)
+				if (Left.Type != Flight::Vex::EVexValueType::Float3 || RightNode.Kind != Flight::Vex::EVexExprKind::Identifier)
 				{
 					return MakeFloat(0.0f);
 				}
@@ -451,7 +389,7 @@ namespace
 
 	void SetMemberComponent(FNativeValue& Target, const FString& Member, const FNativeValue& Value)
 	{
-		if (Target.Type != ENativeValueType::Vec3)
+		if (Target.Type != Flight::Vex::EVexValueType::Float3)
 		{
 			return;
 		}
@@ -662,12 +600,22 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 	double ParseTimeMs = 0.0;
 	double IrCompileTimeMs = 0.0;
 	double VmAssembleTimeMs = 0.0;
+	TOptional<Flight::Vex::FVexBackendSelection> BackendSelection;
 
 	auto FinalizeArtifactReport = [&]()
 	{
+		const FString LegacySelectedBackend = Behavior.bUsesVmEntryPoint
+			? Flight::Vex::VexBackendKindToString(Flight::Vex::EVexBackendKind::VerseVm)
+			: (Behavior.bUsesNativeFallback
+				? Flight::Vex::VexBackendKindToString(Flight::Vex::EVexBackendKind::NativeScalar)
+				: TEXT("Unknown"));
+
 		ArtifactReport.GeneratedAtUtc = FDateTime::UtcNow();
 		ArtifactReport.CompileOutcome = CompileStateToString(Behavior.CompileState);
 		ArtifactReport.BackendPath = BackendPath;
+		ArtifactReport.SelectedBackend = BackendSelection.IsSet()
+			? Flight::Vex::VexBackendKindToString(BackendSelection->ChosenBackend)
+			: LegacySelectedBackend;
 		ArtifactReport.Diagnostics = Behavior.LastCompileDiagnostics;
 		ArtifactReport.GeneratedVerseCode = Behavior.GeneratedVerseCode;
 		ArtifactReport.IrCompileErrors = IrErrors;
@@ -677,7 +625,25 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 		ArtifactReport.bUsesNativeFallback = Behavior.bUsesNativeFallback;
 		ArtifactReport.bUsesVmEntryPoint = Behavior.bUsesVmEntryPoint;
 		ArtifactReport.AvailableArtifacts.Reset();
+		ArtifactReport.BackendReports.Reset();
 		ArtifactReport.AvailableArtifacts.Add(Flight::Vex::EFlightCompileArtifactKind::CompileTelemetry);
+		if (BackendSelection.IsSet())
+		{
+			for (const TPair<Flight::Vex::EVexBackendKind, Flight::Vex::FVexBackendCompatibilityReport>& Pair : BackendSelection->Reports)
+			{
+				Flight::Vex::FFlightCompileBackendReport& BackendReport = ArtifactReport.BackendReports.AddDefaulted_GetRef();
+				BackendReport.Backend = Flight::Vex::VexBackendKindToString(Pair.Key);
+				BackendReport.Decision = Flight::Vex::VexBackendDecisionToString(Pair.Value.Decision);
+				BackendReport.Reasons = Pair.Value.Reasons;
+			}
+		}
+		else
+		{
+			Flight::Vex::FFlightCompileBackendReport& BackendReport = ArtifactReport.BackendReports.AddDefaulted_GetRef();
+			BackendReport.Backend = ArtifactReport.SelectedBackend;
+			BackendReport.Decision = Behavior.bHasExecutableProcedure ? TEXT("Supported") : TEXT("Rejected");
+			BackendReport.Reasons.Add(TEXT("Schema binding unavailable; compile used the legacy backend selection path."));
+		}
 		if (IrProgram.IsValid())
 		{
 			ArtifactReport.AvailableArtifacts.Add(Flight::Vex::EFlightCompileArtifactKind::IrProgram);
@@ -763,6 +729,10 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 	Behavior.ExecutionRateHz = Result.Program.ExecutionRateHz;
 	Behavior.FrameInterval = Result.Program.FrameInterval;
 	Behavior.Tier = Flight::Vex::FVexOptimizer::ClassifyTier(Result.Program, LocalDefinitions);
+	Behavior.bIsAsync = Result.Program.Statements.ContainsByPredicate([](const Flight::Vex::FVexStatementAst& Statement)
+	{
+		return Statement.Kind == Flight::Vex::EVexStatementKind::TargetDirective && Statement.SourceSpan == TEXT("@async");
+	});
 
 	TOptional<Flight::Vex::FVexSchemaBindingResult> SchemaBinding;
 	if (CompileSchema)
@@ -779,6 +749,35 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 			BackendPath = TEXT("SchemaBindingOnly");
 			FinalizeArtifactReport();
 			return false;
+		}
+
+#if WITH_VERSE_VM || defined(__INTELLISENSE__)
+		const bool bVerseVmAvailable = true;
+#else
+		const bool bVerseVmAvailable = false;
+#endif
+		BackendSelection = Flight::Vex::SelectBackendForProgram(
+			*SchemaBinding,
+			*CompileSchema,
+			Behavior.Tier,
+			Behavior.bIsAsync,
+			bVerseVmAvailable,
+			/* bPreferSimd */ true);
+		SchemaBinding->BackendDiagnostics.Reset();
+		SchemaBinding->BackendLegality.Reset();
+		for (const TPair<Flight::Vex::EVexBackendKind, Flight::Vex::FVexBackendCompatibilityReport>& Pair : BackendSelection->Reports)
+		{
+			SchemaBinding->BackendLegality.Add(Pair.Key, Pair.Value.Decision != Flight::Vex::EVexBackendDecision::Rejected);
+			for (const Flight::Vex::FVexSymbolBackendCompatibility& SymbolResult : Pair.Value.SymbolResults)
+			{
+				Flight::Vex::FVexBackendBindingDiagnostic& Diagnostic = SchemaBinding->BackendDiagnostics.AddDefaulted_GetRef();
+				Diagnostic.Backend = Pair.Key;
+				Diagnostic.SymbolName = SymbolResult.SymbolName;
+				Diagnostic.AccessKind = SymbolResult.AccessKind;
+				Diagnostic.Decision = SymbolResult.Decision;
+				Diagnostic.bPreferredFastLane = SymbolResult.bPreferredFastLane;
+				Diagnostic.Reason = SymbolResult.Reason;
+			}
 		}
 	}
 
@@ -823,17 +822,6 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 			Message += Behavior.SimdCompileDiagnostics;
 		}
 	};
-
-	// Check for @async
-	Behavior.bIsAsync = false;
-	for (const auto& S : Result.Program.Statements)
-	{
-		if (S.Kind == Flight::Vex::EVexStatementKind::TargetDirective && S.SourceSpan == TEXT("@async"))
-		{
-			Behavior.bIsAsync = true;
-			break;
-		}
-	}
 
 	// Generate the Verse source code from the VEX AST
 	TMap<FString, FString> VerseBySymbol = SchemaBinding.IsSet()
@@ -1045,19 +1033,12 @@ void UFlightVerseSubsystem::ExecuteOnSchema(const Flight::Vex::FVexProgramAst& P
 			Result = Locals.FindRef(Expr.Lexeme);
 			break;
 
-		case EVexExprKind::SymbolRef:
-			if (const FVexSymbolAccessor* Accessor = Schema.Symbols.Find(Expr.Lexeme))
-			{
-				if (Accessor->MemberOffset != INDEX_NONE)
+			case EVexExprKind::SymbolRef:
+				if (const FVexSymbolRecord* SymbolRecord = Schema.FindSymbolRecord(Expr.Lexeme))
 				{
-					Result = MakeFloat(*(float*)((uint8*)StructPtr + Accessor->MemberOffset));
+					Result = SymbolRecord->ReadRuntimeValue(StructPtr);
 				}
-				else if (Accessor->Getter)
-				{
-					Result = MakeFloat(Accessor->Getter(StructPtr));
-				}
-			}
-			break;
+				break;
 
 		case EVexExprKind::BinaryOp:
 		{
@@ -1122,33 +1103,28 @@ void UFlightVerseSubsystem::ExecuteOnSchema(const Flight::Vex::FVexProgramAst& P
 				continue;
 			}
 
-			if (LhsToken.Kind == EVexTokenKind::Symbol)
-			{
-				if (const FVexSymbolAccessor* Accessor = Schema.Symbols.Find(LhsToken.Lexeme))
+				if (LhsToken.Kind == EVexTokenKind::Symbol)
 				{
-					FNativeValue FinalValue = RhsValue;
-					if (OpLexeme != TEXT("="))
+					if (const FVexSymbolRecord* SymbolRecord = Schema.FindSymbolRecord(LhsToken.Lexeme))
 					{
-						const FString ArithmeticOp = OpLexeme.LeftChop(1);
-						FNativeValue Current;
-						if (Accessor->MemberOffset != INDEX_NONE) Current = MakeFloat(*(float*)((uint8*)StructPtr + Accessor->MemberOffset));
-						else if (Accessor->Getter) Current = MakeFloat(Accessor->Getter(StructPtr));
-						FinalValue = ApplyArithmetic(ArithmeticOp, Current, RhsValue);
-					}
+						FNativeValue FinalValue = RhsValue;
+						if (OpLexeme != TEXT("="))
+						{
+							const FString ArithmeticOp = OpLexeme.LeftChop(1);
+							const FNativeValue Current = SymbolRecord->ReadRuntimeValue(StructPtr);
+							FinalValue = ApplyArithmetic(ArithmeticOp, Current, RhsValue);
+						}
 
-					UE_LOG(LogFlightVerseSubsystem, Log, TEXT("    Store Symbol: '%s' (offset %d) = %f"), *LhsToken.Lexeme, Accessor->MemberOffset, AsFloat(FinalValue));
+						UE_LOG(LogFlightVerseSubsystem, Log, TEXT("    Store Symbol: '%s' (storage %d, offset %d) = %f"),
+							*LhsToken.Lexeme,
+							static_cast<int32>(SymbolRecord->Storage.Kind),
+							SymbolRecord->Storage.MemberOffset,
+							AsFloat(FinalValue));
 
-					if (Accessor->MemberOffset != INDEX_NONE)
-					{
-						*(float*)((uint8*)StructPtr + Accessor->MemberOffset) = AsFloat(FinalValue);
+						SymbolRecord->WriteRuntimeValue(StructPtr, FinalValue);
 					}
-					else if (Accessor->Setter)
-					{
-						Accessor->Setter(StructPtr, AsFloat(FinalValue));
-					}
+					continue;
 				}
-				continue;
-			}
 
 			if (LhsToken.Kind == EVexTokenKind::Identifier)
 			{
@@ -1543,30 +1519,33 @@ namespace
 				return Verse::FOpResult(Verse::FOpResult::Error);
 			}
 
-			FString SymbolName = UTF8_TO_TCHAR(Arguments[0].AsString().AsUTF8());
-			const Flight::Vex::FVexSymbolAccessor* Accessor = Flight::Vex::FVexSymbolRegistry::Get().FindSymbol(Subsystem->ActiveVmTypeKey, SymbolName);
+				FString SymbolName = UTF8_TO_TCHAR(Arguments[0].AsString().AsUTF8());
+				const Flight::Vex::FVexSymbolRecord* SymbolRecord = Flight::Vex::FVexSymbolRegistry::Get().FindSymbolRecord(Subsystem->ActiveVmTypeKey, SymbolName);
 
-			if (!Accessor)
-			{
-				UE_LOG(LogFlightVerseSubsystem, Warning, TEXT("VEX VM: Accessor not found for symbol '%s'"), *SymbolName);
-				return Verse::FOpResult(Verse::FOpResult::Error);
-			}
+				if (!SymbolRecord)
+				{
+					UE_LOG(LogFlightVerseSubsystem, Warning, TEXT("VEX VM: Accessor not found for symbol '%s'"), *SymbolName);
+					return Verse::FOpResult(Verse::FOpResult::Error);
+				}
 
-			if (bIsSetter)
-			{
-				if (Arguments.Num() < 2 || !Arguments[1].IsFloat()) return Verse::FOpResult(Verse::FOpResult::Error);
-				if (!Accessor->Setter) return Verse::FOpResult(Verse::FOpResult::Error);
+				if (bIsSetter)
+				{
+					if (Arguments.Num() < 2 || !Arguments[1].IsFloat()) return Verse::FOpResult(Verse::FOpResult::Error);
+					if (!SymbolRecord->bWritable) return Verse::FOpResult(Verse::FOpResult::Error);
 
-				Accessor->Setter(Subsystem->ActiveVmStatePtr, Arguments[1].AsFloat());
-				return Verse::FOpResult(Verse::FOpResult::Return, Verse::VValue::FromBool(true));
-			}
-			else
-			{
-				if (!Accessor->Getter) return Verse::FOpResult(Verse::FOpResult::Error);
+					if (!SymbolRecord->WriteRuntimeValue(Subsystem->ActiveVmStatePtr, Flight::Vex::FVexRuntimeValue::FromFloat(Arguments[1].AsFloat())))
+					{
+						return Verse::FOpResult(Verse::FOpResult::Error);
+					}
+					return Verse::FOpResult(Verse::FOpResult::Return, Verse::VValue::FromBool(true));
+				}
+				else
+				{
+					if (!SymbolRecord->bReadable) return Verse::FOpResult(Verse::FOpResult::Error);
 
-				float Result = Accessor->Getter(Subsystem->ActiveVmStatePtr);
-				return Verse::FOpResult(Verse::FOpResult::Return, Verse::VValue::FromFloat(Result));
-			}
+					float Result = SymbolRecord->ReadRuntimeValue(Subsystem->ActiveVmStatePtr).AsFloat();
+					return Verse::FOpResult(Verse::FOpResult::Return, Verse::VValue::FromFloat(Result));
+				}
 		}
 
 	private:

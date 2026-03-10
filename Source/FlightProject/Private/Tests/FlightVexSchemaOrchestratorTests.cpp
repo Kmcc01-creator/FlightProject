@@ -60,6 +60,14 @@ bool FFlightVexSchemaOrchestratorTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Schema should preserve the reflected type name"), Schema.TypeName, FString(TEXT("FSchemaOrchestratorTestState")));
 	TestEqual(TEXT("Schema should record the struct size"), Schema.Size, static_cast<uint32>(sizeof(FSchemaOrchestratorTestState)));
 	TestTrue(TEXT("Schema layout hash should be populated"), Schema.LayoutHash != 0);
+	TestEqual(TEXT("Schema should build one canonical symbol record per reflected VEX field"), Schema.SymbolRecords.Num(), 2);
+
+	const Flight::Vex::FVexSymbolRecord* HealthRecord = Schema.FindSymbolRecord(TEXT("@health"));
+	TestNotNull(TEXT("Schema should contain canonical health symbol record"), HealthRecord);
+	if (HealthRecord)
+	{
+		TestEqual(TEXT("Canonical health record should preserve its storage kind"), HealthRecord->Storage.Kind, Flight::Vex::EVexStorageKind::AosOffset);
+	}
 
 	const Flight::Vex::FVexLogicalSymbolSchema* HealthLogical = Schema.FindLogicalSymbol(TEXT("@health"));
 	TestNotNull(TEXT("Schema should contain logical health symbol"), HealthLogical);
@@ -87,6 +95,7 @@ bool FFlightVexSchemaOrchestratorTest::RunTest(const FString& Parameters)
 	{
 		TestEqual(TEXT("Registered schema should preserve its layout hash"), Registered->LayoutHash, Schema.LayoutHash);
 		TestTrue(TEXT("Registered schema should expose the health symbol"), Registered->HasSymbol(TEXT("@health")));
+		TestNotNull(TEXT("Registered schema should expose the canonical health record"), Registered->FindSymbolRecord(TEXT("@health")));
 	}
 
 	return true;

@@ -7,6 +7,7 @@
 #include "Core/FlightHlslReflection.h"
 #include "Swarm/SwarmSimulationTypes.h"
 #include "Dom/JsonObject.h"
+#include "Misc/FileHelper.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 
@@ -35,6 +36,20 @@ bool FSchemaVexManifestValidationTest::RunTest(const FString&)
 		return false;
 	}
 
+	const TArray<TSharedPtr<FJsonValue>>* GpuContracts = nullptr;
+	if (!RootObject->TryGetArrayField(TEXT("gpuResourceContracts"), GpuContracts))
+	{
+		AddError(TEXT("Manifest missing gpuResourceContracts array"));
+		return false;
+	}
+
+	const TArray<TSharedPtr<FJsonValue>>* GpuAccessRules = nullptr;
+	if (!RootObject->TryGetArrayField(TEXT("gpuAccessRules"), GpuAccessRules))
+	{
+		AddError(TEXT("Manifest missing gpuAccessRules array"));
+		return false;
+	}
+
 	TSet<FString> Symbols;
 	TMap<FString, FString> ValueTypeBySymbol;
 	for (const auto& Value : *VexRequirements)
@@ -56,6 +71,21 @@ bool FSchemaVexManifestValidationTest::RunTest(const FString&)
 	TestTrue(TEXT("Manifest should declare @status symbol"), Symbols.Contains(TEXT("@status")));
 	TestEqual(TEXT("@status should map to int valueType"), ValueTypeBySymbol.FindRef(TEXT("@status")), FString(TEXT("int")));
 
+	TestEqual(TEXT("Manifest should expose one reflected GPU resource contract"), GpuContracts->Num(), 1);
+	if (GpuContracts->Num() == 1)
+	{
+		const TSharedPtr<FJsonObject> Contract = (*GpuContracts)[0]->AsObject();
+		TestTrue(TEXT("GPU contract object should be valid"), Contract.IsValid());
+		if (Contract.IsValid())
+		{
+			TestEqual(TEXT("GPU contract should preserve the reflected resource id"), Contract->GetStringField(TEXT("resourceId")), FString(TEXT("Swarm.DroidStateBuffer")));
+			TestEqual(TEXT("GPU contract should prefer Unreal RDG"), Contract->GetBoolField(TEXT("preferUnrealRdg")), true);
+			TestEqual(TEXT("GPU contract should not require raw Vulkan interop"), Contract->GetBoolField(TEXT("requiresRawVulkanInterop")), false);
+		}
+	}
+
+	TestEqual(TEXT("Manifest should expose four reflected GPU access rules"), GpuAccessRules->Num(), 4);
+
 	const FString LayoutTokenName = TEXT("FLIGHT_DROIDSTATE_LAYOUT_HASH");
 	const FString ReflectedHlsl = Flight::Reflection::HLSL::GenerateStructContractHLSL<Flight::Swarm::FDroidState>(
 		TEXT("FDroidState"),
@@ -74,6 +104,39 @@ bool FSchemaVexManifestValidationTest::RunTest(const FString&)
 		ParsedLayoutHash);
 	TestTrue(TEXT("Reflected HLSL should contain layout hash token"), bExtracted);
 	TestEqual(TEXT("Reflected HLSL hash should match FDroidState layout hash"), ParsedLayoutHash, ExpectedLayoutHash);
+
+	const FString ResourceContractInclude = Flight::Reflection::HLSL::GenerateGpuResourceContractInclude<Flight::Swarm::FDroidState>(
+		TEXT("FDROIDSTATE"));
+	TestTrue(TEXT("Generated GPU resource include should preserve the resource id"), ResourceContractInclude.Contains(TEXT("// GPU Resource Contract: Swarm.DroidStateBuffer")));
+	TestTrue(TEXT("Generated GPU resource include should preserve the access-rule count"), ResourceContractInclude.Contains(TEXT("#define FDROIDSTATE_RESOURCE_ACCESS_RULE_COUNT 4")));
+
+	const FString ProjectGeneratedInclude = UFlightScriptingLibrary::GetGeneratedGpuResourceContractHlsl();
+	TestTrue(TEXT("Project-level generated GPU contract include should preserve the resource id"), ProjectGeneratedInclude.Contains(TEXT("// GPU Resource Contract: Swarm.DroidStateBuffer")));
+	TestTrue(TEXT("Project-level generated GPU contract include should expose the float4 stride macro"), ProjectGeneratedInclude.Contains(TEXT("#define FDROIDSTATE_RESOURCE_ELEMENT_STRIDE_FLOAT4 2")));
+
+	const TOptional<Flight::Schema::FFlightGpuStructuredBufferContract> StructuredContract =
+		Flight::Schema::ResolveStructuredBufferContract(TEXT("Swarm.DroidStateBuffer"));
+	TestTrue(TEXT("Structured GPU contract should resolve for the swarm droid state buffer"), StructuredContract.IsSet());
+	if (StructuredContract.IsSet())
+	{
+		TestEqual(TEXT("Structured GPU contract should match native FDroidState stride"), StructuredContract->ElementStrideBytes, static_cast<uint32>(sizeof(Flight::Swarm::FDroidState)));
+		TestEqual(TEXT("Structured GPU contract should expose transfer-destination support"), StructuredContract->bSupportsTransferDestination, true);
+		TestEqual(TEXT("Structured GPU contract should expose shader-read support"), StructuredContract->bSupportsShaderRead, true);
+		TestEqual(TEXT("Structured GPU contract should expose shader-write support"), StructuredContract->bSupportsShaderWrite, true);
+	}
+
+	const TArray<FString> ReflectedGpuIssues = UFlightScriptingLibrary::ValidateReflectedGpuContracts();
+	TestEqual(TEXT("Reflected GPU contracts should validate cleanly"), ReflectedGpuIssues.Num(), 0);
+
+	const FString ExportedContractPath = UFlightScriptingLibrary::ExportGeneratedGpuResourceContracts(
+		TEXT("Saved/Flight/Schema/test_gpu_resource_contracts.ush"));
+	TestFalse(TEXT("Project-level generated GPU contract export should return a path"), ExportedContractPath.IsEmpty());
+	if (!ExportedContractPath.IsEmpty())
+	{
+		FString ExportedSource;
+		TestTrue(TEXT("Exported GPU contract include should be readable"), FFileHelper::LoadFileToString(ExportedSource, *ExportedContractPath));
+		TestTrue(TEXT("Exported GPU contract include should contain the stride macro"), ExportedSource.Contains(TEXT("#define FDROIDSTATE_RESOURCE_ELEMENT_STRIDE_FLOAT4 2")));
+	}
 
 	return true;
 }

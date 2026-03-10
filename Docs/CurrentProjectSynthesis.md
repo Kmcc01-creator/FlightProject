@@ -1,5 +1,8 @@
 # FlightProject: Current Project Synthesis (March 2026)
 
+Status: dated synthesis snapshot.
+Keep this as a March 2026 reference summary, but prefer [Architecture/CurrentProjectVision.md](Architecture/CurrentProjectVision.md), [Architecture/WorldExecutionModel.md](Architecture/WorldExecutionModel.md), and [Workflow/CurrentFocus.md](Workflow/CurrentFocus.md) for the current source of truth.
+
 ## 1. Architectural Vision
 FlightProject is a **Target-Aware Orchestration Platform** built on top of Unreal Engine 5.7 and Mass ECS. It moves away from imperative C++ simulation logic toward a declarative, schema-driven paradigm where behaviors are authored in the **VEX DSL** and executed across tiered runtimes (CPU/Verse and GPU/HLSL).
 

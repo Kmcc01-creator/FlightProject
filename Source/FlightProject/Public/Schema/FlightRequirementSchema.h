@@ -144,6 +144,57 @@ enum class EFlightVexSymbolValueType : uint8
 	Bool
 };
 
+UENUM(BlueprintType)
+enum class EFlightGpuResourceKind : uint8
+{
+	Unknown,
+	StructuredBuffer,
+	StorageBuffer,
+	SampledImage,
+	StorageImage,
+	UniformBuffer,
+	ReadbackBuffer,
+	StagingBuffer,
+	TransientAttachment,
+	PersistentTexture
+};
+
+UENUM(BlueprintType)
+enum class EFlightGpuResourceLifetime : uint8
+{
+	Transient,
+	Persistent,
+	ExtractedPersistent,
+	ExternalInterop
+};
+
+UENUM(BlueprintType)
+enum class EFlightGpuExecutionDomain : uint8
+{
+	Any,
+	Cpu,
+	RenderGraph,
+	GpuCompute,
+	ExternalInterop
+};
+
+UENUM(BlueprintType)
+enum class EFlightGpuAccessClass : uint8
+{
+	HostRead,
+	HostWrite,
+	TransferSource,
+	TransferDestination,
+	ShaderRead,
+	ShaderWrite,
+	SampledRead,
+	ColorAttachmentWrite,
+	DepthStencilRead,
+	DepthStencilWrite,
+	IndirectArgumentRead,
+	ExternalSync
+};
+
 /**
  * VEX symbol contract row.
  * Defines typed symbol exposure and backend lowering targets for orchestrator compilation.
@@ -197,6 +248,75 @@ struct FFlightVexSymbolRow : public FTableRowBase
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Schema")
 	EFlightVexMathDeterminismProfile MathDeterminismProfile = EFlightVexMathDeterminismProfile::Fast;
+};
+
+USTRUCT(BlueprintType)
+struct FFlightGpuResourceContractRow : public FTableRowBase
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Schema")
+	FName Owner = NAME_None;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Schema")
+	FName RequirementId = NAME_None;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Schema")
+	FString ResourceId;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Schema")
+	EFlightGpuResourceKind ResourceKind = EFlightGpuResourceKind::Unknown;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Schema")
+	EFlightGpuResourceLifetime ResourceLifetime = EFlightGpuResourceLifetime::Transient;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Schema")
+	FString ValueTypeName;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Schema")
+	FString HlslStructName;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Schema")
+	FString BindingName;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Schema")
+	int32 ElementStrideBytes = 0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Schema")
+	int32 LayoutHash = 0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Schema")
+	bool bRequired = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Schema")
+	bool bPreferUnrealRdg = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Schema")
+	bool bRequiresRawVulkanInterop = false;
+};
+
+USTRUCT(BlueprintType)
+struct FFlightGpuAccessRuleRow : public FTableRowBase
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Schema")
+	FName Owner = NAME_None;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Schema")
+	FName RequirementId = NAME_None;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Schema")
+	FString ResourceId;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Schema")
+	EFlightGpuExecutionDomain ExecutionDomain = EFlightGpuExecutionDomain::Any;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Schema")
+	EFlightGpuAccessClass AccessClass = EFlightGpuAccessClass::ShaderRead;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Schema")
+	bool bRequired = true;
 };
 
 /**

@@ -50,6 +50,14 @@ struct FShaderContractData
     FLIGHT_REFLECT_BODY(FShaderContractData);
 };
 
+struct FGpuContractData
+{
+    FVector4f Position = FVector4f::Zero();
+    float Weight = 0.0f;
+
+    FLIGHT_REFLECT_BODY(FGpuContractData);
+};
+
 } // namespace Flight::Reflection::ComplexTest
 
 namespace Flight::Reflection
@@ -97,6 +105,25 @@ FLIGHT_REFLECT_FIELDS_ATTR(FShaderContractData,
     )
 )
 
+using FGpuContractDataReflectAttrs = ::Flight::Reflection::TAttributeSet<
+    ::Flight::Reflection::Attr::GpuResourceId<"Reflection.TestBuffer">,
+    ::Flight::Reflection::Attr::GpuResourceKind<EFlightGpuResourceKind::StorageBuffer>,
+    ::Flight::Reflection::Attr::GpuResourceLifetime<EFlightGpuResourceLifetime::Persistent>,
+    ::Flight::Reflection::Attr::GpuBindingName<"ReflectionTestBuffer">,
+    ::Flight::Reflection::Attr::PreferUnrealRdg<true>,
+    ::Flight::Reflection::Attr::RawVulkanInteropRequired<false>,
+    ::Flight::Reflection::Attr::GpuAccessRule<EFlightGpuExecutionDomain::RenderGraph, EFlightGpuAccessClass::TransferDestination>,
+    ::Flight::Reflection::Attr::GpuAccessRule<EFlightGpuExecutionDomain::GpuCompute, EFlightGpuAccessClass::ShaderRead>,
+    ::Flight::Reflection::Attr::GpuAccessRule<EFlightGpuExecutionDomain::GpuCompute, EFlightGpuAccessClass::ShaderWrite>
+>;
+
+FLIGHT_REFLECT_FIELDS_VEX(
+    FGpuContractData,
+    FGpuContractDataReflectAttrs,
+    FLIGHT_FIELD_ATTR(FVector4f, Position, EditAnywhere),
+    FLIGHT_FIELD_ATTR(float, Weight, EditAnywhere)
+)
+
 } // namespace Flight::Reflection
 
 static_assert(CReflectable<const Flight::Reflection::ComplexTest::FMessageEnvelope&>);
@@ -123,6 +150,9 @@ void FFlightReflectionComplexTest::GetTests(TArray<FString>& OutBeautifiedNames,
 
     OutBeautifiedNames.Add(TEXT("CodegenContract"));
     OutTestCommands.Add(TEXT("CodegenContract"));
+
+    OutBeautifiedNames.Add(TEXT("GpuResourceContract"));
+    OutTestCommands.Add(TEXT("GpuResourceContract"));
 }
 
 bool FFlightReflectionComplexTest::RunTest(const FString& Parameters)
@@ -246,6 +276,46 @@ bool FFlightReflectionComplexTest::RunTest(const FString& Parameters)
             TestEqual("Enabled symbol should preserve CPU residency", Rows[1].Residency, EFlightVexSymbolResidency::CpuOnly);
             TestEqual("Enabled symbol should preserve game-thread affinity", Rows[1].Affinity, EFlightVexSymbolAffinity::GameThread);
         }
+    }
+    else if (Parameters == TEXT("GpuResourceContract"))
+    {
+        const TOptional<FFlightGpuResourceContractRow> Contract =
+            HLSL::GenerateGpuResourceContractFromStruct<FGpuContractData>(TEXT("ReflectionComplexTest"));
+        TestTrue("GPU resource contract should be generated for attributed types", Contract.IsSet());
+        if (Contract.IsSet())
+        {
+            TestEqual("Resource contract should preserve the authored resource id", Contract->ResourceId, TEXT("Reflection.TestBuffer"));
+            TestEqual("Resource contract should preserve the authored resource kind", Contract->ResourceKind, EFlightGpuResourceKind::StorageBuffer);
+            TestEqual("Resource contract should preserve the authored binding name", Contract->BindingName, TEXT("ReflectionTestBuffer"));
+            TestEqual("Resource contract should preserve stride", Contract->ElementStrideBytes, static_cast<int32>(sizeof(FGpuContractData)));
+            TestEqual("Resource contract should preserve layout hash", static_cast<uint32>(Contract->LayoutHash), HLSL::ComputeLayoutHash<FGpuContractData>());
+        }
+
+        const TArray<FFlightGpuAccessRuleRow> AccessRules =
+            HLSL::GenerateGpuAccessRulesFromStruct<FGpuContractData>(TEXT("ReflectionComplexTest"));
+        TestEqual("GPU access rules should be emitted for every authored access attribute", AccessRules.Num(), 3);
+
+        bool bFoundTransferDestination = false;
+        bool bFoundShaderRead = false;
+        bool bFoundShaderWrite = false;
+        for (const FFlightGpuAccessRuleRow& Rule : AccessRules)
+        {
+            bFoundTransferDestination |= Rule.ExecutionDomain == EFlightGpuExecutionDomain::RenderGraph
+                && Rule.AccessClass == EFlightGpuAccessClass::TransferDestination;
+            bFoundShaderRead |= Rule.ExecutionDomain == EFlightGpuExecutionDomain::GpuCompute
+                && Rule.AccessClass == EFlightGpuAccessClass::ShaderRead;
+            bFoundShaderWrite |= Rule.ExecutionDomain == EFlightGpuExecutionDomain::GpuCompute
+                && Rule.AccessClass == EFlightGpuAccessClass::ShaderWrite;
+        }
+
+        TestTrue("GPU access rules should preserve transfer destination access", bFoundTransferDestination);
+        TestTrue("GPU access rules should preserve shader read access", bFoundShaderRead);
+        TestTrue("GPU access rules should preserve shader write access", bFoundShaderWrite);
+
+        const FString Include = HLSL::GenerateGpuResourceContractInclude<FGpuContractData>(TEXT("REFLECTION_TEST_BUFFER"));
+        TestTrue("GPU resource include should emit a layout hash macro", Include.Contains(TEXT("#define REFLECTION_TEST_BUFFER_RESOURCE_LAYOUT_HASH")));
+        TestTrue("GPU resource include should emit an access-rule-count macro", Include.Contains(TEXT("#define REFLECTION_TEST_BUFFER_RESOURCE_ACCESS_RULE_COUNT 3")));
+        TestTrue("GPU resource include should include the authored binding comment", Include.Contains(TEXT("// BindingName: ReflectionTestBuffer")));
     }
 
     return true;

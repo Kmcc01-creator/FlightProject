@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Vex/FlightVexBackendCapabilities.h"
 #include "Vex/Frontend/VexAst.h"
 #include "Vex/Frontend/VexParser.h"
 #include "Vex/FlightVexSchema.h"
@@ -44,6 +45,16 @@ struct FVexSchemaStatementBinding
 	TArray<int32> WrittenSymbols;
 };
 
+struct FVexBackendBindingDiagnostic
+{
+	EVexBackendKind Backend = EVexBackendKind::NativeScalar;
+	FString SymbolName;
+	EVexSchemaAccessKind AccessKind = EVexSchemaAccessKind::Read;
+	EVexBackendDecision Decision = EVexBackendDecision::Rejected;
+	bool bPreferredFastLane = false;
+	FString Reason;
+};
+
 struct FLIGHTPROJECT_API FVexSchemaBindingResult
 {
 	bool bSuccess = false;
@@ -54,6 +65,8 @@ struct FLIGHTPROJECT_API FVexSchemaBindingResult
 	TArray<FVexSchemaStatementBinding> StatementBindings;
 	TSet<FString> ReadSymbols;
 	TSet<FString> WrittenSymbols;
+	TArray<FVexBackendBindingDiagnostic> BackendDiagnostics;
+	TMap<EVexBackendKind, bool> BackendLegality;
 
 	const FVexSchemaBoundSymbol* FindBoundSymbolByName(const FString& Name) const;
 	TMap<FString, FString> BuildVerseSymbolMap() const;

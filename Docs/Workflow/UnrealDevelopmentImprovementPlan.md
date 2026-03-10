@@ -2,6 +2,10 @@
 
 _Drafted: March 10, 2026._
 
+Status note:
+Use `Docs/Workflow/CurrentBuild.md` and `Docs/Workflow/CurrentFocus.md` for dated operational truth.
+This document should remain an execution-frame and consolidation plan, not the only place where current status is updated.
+
 This document turns the current architectural direction and repo state into a concrete improvement plan for FlightProject's Unreal Engine development workflow.
 
 It is not a replacement for the architecture docs.
@@ -29,50 +33,11 @@ Improve FlightProject development by making five things true at the same time:
 4. Unreal-specific authoring seams are handled by repeatable shims and repair flows;
 5. GPU automation reaches discovery reliably and is clearly separated from environment failures.
 
-## 2. Current Snapshot (March 10, 2026)
+## 2. Current Snapshot
 
-Current reality from `Docs/Workflow/CurrentBuild.md`, `Docs/Workflow/CurrentFocus.md`, and the active source tree:
-
-- `./Scripts/build_targets.sh Development --no-uba` is compiling successfully.
-- `./Scripts/build_targets.sh Development --no-uba --verify` is also succeeding against the current verify subset.
-- Headless phased validation is green on the default `triage` preset.
-- GPU-required validation is blocked before automation discovery by Vulkan device creation failure.
-- `UFlightOrchestrationSubsystem` exists and already reports services, paths, anchors, spatial fields, and compiled behaviors.
-- `AFlightGameMode::StartPlay()` is still the trigger surface, but the default sandbox path now delegates through bootstrap and explicit orchestration rebuild calls.
-- A light startup sequencing complex automation suite now exists in Phase 1.
-- `UFlightVexBehaviorProcessor` now resolves orchestration-issued bindings per chunk/cohort before falling back, and spawned swarm batches carry cohort identity into Mass.
-- swarm anchors now contribute legality policy into orchestration cohorts:
-  - preferred behavior,
-  - allowed IDs,
-  - denied IDs,
-  - required contracts.
-- `UFlightDataSubsystem` now hosts a behavior compile policy contract surface:
-  - behavior ID / cohort / profile targeting,
-  - domain preference,
-  - fallback and generated-only policy,
-  - required symbols and contracts.
-- the remaining behavior-binding TODO is startup-profile-aware legality and richer binding-selection reporting.
-
-This means the project does not need a new direction.
-It needs the current direction finished and stabilized.
-
-## 2.1 Milestone Status
-
-Current milestone status:
-
-- Milestone 0: complete
-  - headless parser and logging-boundary regressions fixed
-  - phased headless validation green
-  - `--verify` green
-- Milestone 1: materially complete
-  - startup boundary cleaned up for the default sandbox path
-  - explicit orchestration rebuild surface added
-  - light startup sequencing automation added
-- Milestone 2: in progress
-  - processor/runtime path now consumes orchestration-issued bindings
-  - anchor-aware legality has landed
-  - behavior compile policy rows now exist as authored data contracts
-  - startup-profile-aware legality and binding-selection reporting remain TODO
+For the latest dated snapshot of build results, test evidence, and project status, see:
+- **[CurrentBuild.md](CurrentBuild.md)** (Build & Test results)
+- **[CurrentFocus.md](CurrentFocus.md)** (Active goals and milestone status)
 
 ## 3. Operating Principles
 

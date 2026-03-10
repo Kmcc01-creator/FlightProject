@@ -8,7 +8,9 @@
 #include "FlightProjectDeveloperSettings.h"
 #include "Rendering/FlightSimpleSCSLShaderPipelineSubsystem.h"
 #include "Swarm/FlightSwarmSubsystem.h"
+#include "Swarm/SwarmSimulationTypes.h"
 #include "Schema/FlightRequirementRegistry.h"
+#include "Core/FlightHlslReflection.h"
 #include "Diagnostics/FlightPIEObservationSubsystem.h"
 #include "Orchestration/FlightOrchestrationSubsystem.h"
 
@@ -939,6 +941,35 @@ FString UFlightScriptingLibrary::GetRequirementManifestJson()
     return Flight::Schema::BuildManifestJson();
 }
 
+FString UFlightScriptingLibrary::GetGeneratedGpuResourceContractHlsl()
+{
+    return Flight::Schema::BuildGeneratedGpuResourceContractHlsl();
+}
+
+TArray<FString> UFlightScriptingLibrary::ValidateReflectedGpuContracts()
+{
+    TArray<FString> Issues = Flight::Schema::ValidateStructuredBufferContract(
+        TEXT("Swarm.DroidStateBuffer"),
+        sizeof(Flight::Swarm::FDroidState),
+        Flight::Reflection::HLSL::ComputeLayoutHash<Flight::Swarm::FDroidState>());
+
+    if (const TOptional<Flight::Schema::FFlightGpuStructuredBufferContract> Contract =
+        Flight::Schema::ResolveStructuredBufferContract(TEXT("Swarm.DroidStateBuffer")))
+    {
+        if (!Contract->bPreferUnrealRdg)
+        {
+            Issues.Add(TEXT("GPU contract 'Swarm.DroidStateBuffer' should prefer Unreal RDG for the current runtime path"));
+        }
+
+        if (Contract->bRequiresRawVulkanInterop)
+        {
+            Issues.Add(TEXT("GPU contract 'Swarm.DroidStateBuffer' should not require raw Vulkan interop for the current runtime path"));
+        }
+    }
+
+    return Issues;
+}
+
 FString UFlightScriptingLibrary::ExportRequirementManifest(const FString& RelativeOutputPath)
 {
     FString AbsolutePath = RelativeOutputPath;
@@ -967,6 +998,37 @@ FString UFlightScriptingLibrary::ExportRequirementManifest(const FString& Relati
     }
 
     UE_LOG(LogFlightProject, Log, TEXT("FlightScriptingLibrary: Exported requirement manifest to '%s'"), *AbsolutePath);
+    return AbsolutePath;
+}
+
+FString UFlightScriptingLibrary::ExportGeneratedGpuResourceContracts(const FString& RelativeOutputPath)
+{
+    FString AbsolutePath = RelativeOutputPath;
+    if (FPaths::IsRelative(AbsolutePath))
+    {
+        AbsolutePath = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir(), AbsolutePath);
+    }
+
+    const FString DirectoryPath = FPaths::GetPath(AbsolutePath);
+    if (!DirectoryPath.IsEmpty())
+    {
+        IFileManager::Get().MakeDirectory(*DirectoryPath, true);
+    }
+
+    const FString ContractHlsl = Flight::Schema::BuildGeneratedGpuResourceContractHlsl();
+    if (ContractHlsl.IsEmpty())
+    {
+        UE_LOG(LogFlightProject, Error, TEXT("FlightScriptingLibrary: GPU resource contract generation produced empty output"));
+        return FString();
+    }
+
+    if (!FFileHelper::SaveStringToFile(ContractHlsl, *AbsolutePath))
+    {
+        UE_LOG(LogFlightProject, Error, TEXT("FlightScriptingLibrary: Failed to write GPU resource contract include '%s'"), *AbsolutePath);
+        return FString();
+    }
+
+    UE_LOG(LogFlightProject, Log, TEXT("FlightScriptingLibrary: Exported GPU resource contracts to '%s'"), *AbsolutePath);
     return AbsolutePath;
 }
 
