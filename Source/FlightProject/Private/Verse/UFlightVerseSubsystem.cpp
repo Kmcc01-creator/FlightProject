@@ -11,6 +11,9 @@
 #include "Vex/FlightVexIr.h"
 #include "Schema/FlightRequirementRegistry.h"
 #include "Swarm/SwarmSimulationTypes.h"
+#include "Orchestration/FlightOrchestrationSubsystem.h"
+#include "Engine/World.h"
+#include "FlightProject.h"
 
 #if WITH_VERSE_VM || defined(__INTELLISENSE__)
 #include "uLang/Toolchain/Toolchain.h"
@@ -664,6 +667,14 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 		Flight::Vex::FinalizeWarmupMetrics(ArtifactReport.WarmupMetrics);
 		Behavior.CompileArtifactReport = ArtifactReport;
 		Behavior.bHasCompileArtifactReport = true;
+
+		if (UWorld* World = GetWorld())
+		{
+			if (UFlightOrchestrationSubsystem* Orchestration = World->GetSubsystem<UFlightOrchestrationSubsystem>())
+			{
+				Orchestration->Rebuild();
+			}
+		}
 	};
 
 	// 1. Resolve Symbol Definitions for this compilation
@@ -838,12 +849,12 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 	const FString VerseCode = Flight::Vex::LowerToVerse(Result.Program, LocalDefinitions, VerseBySymbol);
 	Behavior.GeneratedVerseCode = VerseCode;
 	Behavior.bHasExecutableProcedure = false;
+	Behavior.NativeProgram = Result.Program;
 	Behavior.CompileState = EFlightVerseCompileState::GeneratedOnly;
 
 	FString NativeFallbackReason;
 	if (CanCompileNativeFallback(Result.Program, NativeFallbackReason))
 	{
-		Behavior.NativeProgram = Result.Program;
 		Behavior.bUsesNativeFallback = true;
 
 #if WITH_VERSE_VM || defined(__INTELLISENSE__)

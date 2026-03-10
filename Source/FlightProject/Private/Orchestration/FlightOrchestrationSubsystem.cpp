@@ -105,6 +105,14 @@ FString VerseCompileStateToString(const EFlightVerseCompileState CompileState)
 
 EFlightExecutionDomain ResolveExecutionDomain(const UFlightVerseSubsystem::FVerseBehavior& Behavior)
 {
+	for (const Flight::Vex::FVexStatementAst& Statement : Behavior.NativeProgram.Statements)
+	{
+		if (Statement.Kind == Flight::Vex::EVexStatementKind::TargetDirective && Statement.SourceSpan == TEXT("@gpu"))
+		{
+			return EFlightExecutionDomain::Gpu;
+		}
+	}
+
 	if (Behavior.SimdPlan.IsValid())
 	{
 		return EFlightExecutionDomain::Simd;
@@ -495,6 +503,7 @@ void UFlightOrchestrationSubsystem::RebuildExecutionPlan()
 	}
 
 	RebuildCachedReport();
+	OnExecutionPlanUpdated.Broadcast();
 }
 
 FString UFlightOrchestrationSubsystem::BuildReportJson() const
@@ -852,8 +861,8 @@ void UFlightOrchestrationSubsystem::IngestBehaviors()
 		Record.ExecutionRateHz = Pair.Value.ExecutionRateHz;
 		Record.FrameInterval = Pair.Value.FrameInterval;
 		Record.bAsync = Pair.Value.bIsAsync;
-		Record.bExecutable = Pair.Value.bHasExecutableProcedure || Pair.Value.bUsesNativeFallback || Pair.Value.SimdPlan.IsValid();
 		Record.ResolvedDomain = Flight::Orchestration::ResolveExecutionDomain(Pair.Value);
+		Record.bExecutable = Pair.Value.bHasExecutableProcedure || Pair.Value.bUsesNativeFallback || Pair.Value.SimdPlan.IsValid() || (Record.ResolvedDomain == Flight::Orchestration::EFlightExecutionDomain::Gpu);
 		Record.Diagnostics = Pair.Value.LastCompileDiagnostics;
 		RegisterBehavior(Pair.Key, Record);
 	}

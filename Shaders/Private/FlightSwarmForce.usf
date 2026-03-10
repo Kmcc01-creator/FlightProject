@@ -3,6 +3,11 @@
 
 #include "/Engine/Private/Common.ush"
 #include "FlightSwarmCommon.ush"
+#include "/FlightProject/Generated/VexMegaKernel.ush"
+
+#ifndef VEX_MEGA_KERNEL_DEFINED
+void ExecuteVexBehavior(uint BehaviorID, inout float3 pos, inout float3 vel, inout float shield, inout uint status, float dt, uint frame) {}
+#endif
 
 // --- Inputs ---
 StructuredBuffer<float4> DroidStates;
@@ -67,18 +72,19 @@ void ForceMain(uint3 DispatchThreadId : SV_DispatchThreadID)
         }
     }
 
-    // --- 2. VEX Behavioral Logic (Simulated Mega-Kernel) ---
+    // --- 2. VEX Behavioral Logic (Synthesized Mega-Kernel) ---
     
-    // Sample Event Field: Reaction to Explosion (Type 1)
-    float3 Danger = SampleEventField(Pos, 1, NumEvents, EventBuffer);
-    TotalForce += Danger * 500.0f;
+    // We fetch the BehaviorID from the status field (or a dedicated cohort buffer)
+    float Shield = GetDroidShield(DroidStates, EntityIndex);
+    uint Status = GetDroidStatus(DroidStates, EntityIndex);
+    uint BehaviorID = Status & 0xFFFF; // Assume ID is stored in lower 16 bits of status
 
-    // Sample Light Lattice: Phototaxis
-    float3 Light = SampleLightLattice(Pos, 0);
-    TotalForce += normalize(Light + 0.001f) * length(Light) * 10.0f;
+    // Execute the coordination layer
+    ExecuteVexBehavior(BehaviorID, Pos, Vel, Shield, Status, DeltaTime, 0 /* FrameIndex */);
 
-    // Inject Cloud: Leave a trail
-    InjectCloudDensity(Pos, 0.1f, 0);
+    // Write back modified state if needed (or through specialized store-back passes)
+    SetDroidPositionShield(DroidStatesRW, EntityIndex, Pos, Shield);
+    SetDroidVelocityStatus(DroidStatesRW, EntityIndex, Vel, Status);
 
     // --- 3. Final Integration ---
     float Accel = length(TotalForce);

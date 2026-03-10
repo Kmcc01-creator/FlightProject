@@ -42,6 +42,9 @@ public:
 	void RebuildVisibility();
 	void RebuildExecutionPlan();
 
+	DECLARE_MULTICAST_DELEGATE(FOnFlightExecutionPlanUpdated);
+	FOnFlightExecutionPlanUpdated OnExecutionPlanUpdated;
+
 	FString BuildReportJson() const;
 	void LogReport(bool bVerbose = false) const;
 

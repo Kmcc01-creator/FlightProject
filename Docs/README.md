@@ -17,8 +17,9 @@ Use these first when you need the current project direction.
 4. [Architecture/OrchestrationSubsystem.md](Architecture/OrchestrationSubsystem.md)
 5. [Architecture/CurrentProjectVision.md](Architecture/CurrentProjectVision.md)
 6. [Architecture/VexStateMutationSchemaFrame.md](Architecture/VexStateMutationSchemaFrame.md)
-7. [Architecture/DataPipeline.md](Architecture/DataPipeline.md)
-8. [Architecture/GpuResourceSchemaContract.md](Architecture/GpuResourceSchemaContract.md)
+7. [Architecture/MegaKernelOrchestration.md](Architecture/MegaKernelOrchestration.md)
+8. [Architecture/DataPipeline.md](Architecture/DataPipeline.md)
+9. [Architecture/GpuResourceSchemaContract.md](Architecture/GpuResourceSchemaContract.md)
 
 ### Workflow / Current Status
 
