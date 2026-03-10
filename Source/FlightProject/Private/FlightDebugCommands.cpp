@@ -132,8 +132,7 @@ namespace FlightDebugConsole
                 return;
             }
 
-            OrchestrationSubsystem->RebuildVisibility();
-            OrchestrationSubsystem->RebuildExecutionPlan();
+            OrchestrationSubsystem->Rebuild();
             OrchestrationSubsystem->LogReport(Args.Contains(TEXT("verbose")));
         }
     }

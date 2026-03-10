@@ -276,6 +276,17 @@ enum class EFlightProceduralAnchorType : uint8
     SpawnSwarm
 };
 
+UENUM(BlueprintType)
+enum class EFlightBehaviorCompileDomainPreference : uint8
+{
+    Unspecified,
+    NativeCpu,
+    TaskGraph,
+    VerseVm,
+    Simd,
+    Gpu
+};
+
 /**
  * Data table row describing procedural anchor overrides for editor-placeable layout sources.
  */
@@ -364,9 +375,135 @@ struct FFlightProceduralAnchorRow : public FTableRowBase
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SpawnSwarm")
     float SwarmAutopilotSpeed = -1.f;
 
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SpawnSwarm", meta = (ClampMin = "-1"))
+    int32 SwarmPreferredBehaviorId = -1;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SpawnSwarm")
+    TArray<int32> SwarmAllowedBehaviorIds;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SpawnSwarm")
+    TArray<int32> SwarmDeniedBehaviorIds;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "SpawnSwarm")
+    TArray<FName> SwarmRequiredBehaviorContracts;
+
     bool MatchesAnchor(const FName InAnchorId, const EFlightProceduralAnchorType InType) const
     {
         return AnchorType == InType &&
             (InAnchorId.IsNone() || AnchorId.IsNone() || AnchorId == InAnchorId);
     }
 };
+
+/**
+ * Data table row describing behavior compile/execution policy inputs.
+ * This row expresses authored policy and preference, not runtime compile truth.
+ */
+USTRUCT(BlueprintType)
+struct FFlightBehaviorCompilePolicyRow : public FTableRowBase
+{
+    GENERATED_BODY()
+
+    /** Optional exact behavior target. -1 means wildcard/default. */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "BehaviorPolicy", meta = (ClampMin = "-1"))
+    int32 BehaviorId = -1;
+
+    /** Optional cohort selector. Empty means any cohort. */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "BehaviorPolicy")
+    FName CohortName = NAME_None;
+
+    /** Optional startup/profile selector. Empty means any profile. */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "BehaviorPolicy")
+    FName ProfileName = NAME_None;
+
+    /** Higher priority wins among equally specific matching rows. */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "BehaviorPolicy")
+    int32 Priority = 0;
+
+    /** Preferred execution domain if multiple legal backends are available. */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "BehaviorPolicy")
+    EFlightBehaviorCompileDomainPreference PreferredDomain = EFlightBehaviorCompileDomainPreference::Unspecified;
+
+    /** Whether native fallback is allowed when the preferred backend is unavailable. */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "BehaviorPolicy")
+    int32 bAllowNativeFallback = 1;
+
+    /** Whether generated-only/non-executable compilation is acceptable for this target. */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "BehaviorPolicy")
+    int32 bAllowGeneratedOnly = 0;
+
+    /** Hint that async/task-backed execution is preferred when legal. */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "BehaviorPolicy")
+    int32 bPreferAsync = 0;
+
+    /** Optional required contracts expected from the selected compiled behavior. */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "BehaviorPolicy")
+    TArray<FName> RequiredContracts;
+
+    /** Optional required symbols expected to be present during compile/bind. */
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "BehaviorPolicy")
+    TArray<FName> RequiredSymbols;
+
+    UPROPERTY(Transient, VisibleAnywhere, BlueprintReadOnly, Category = "BehaviorPolicy")
+    FName RowName = NAME_None;
+
+    bool MatchesContext(const uint32 InBehaviorId, const FName InCohortName, const FName InProfileName) const
+    {
+        return (BehaviorId < 0 || BehaviorId == static_cast<int32>(InBehaviorId))
+            && (CohortName.IsNone() || CohortName == InCohortName)
+            && (ProfileName.IsNone() || ProfileName == InProfileName);
+    }
+
+    int32 GetSpecificityScore() const
+    {
+        return (BehaviorId >= 0 ? 4 : 0)
+            + (!CohortName.IsNone() ? 2 : 0)
+            + (!ProfileName.IsNone() ? 1 : 0);
+    }
+
+    bool AllowsNativeFallback() const
+    {
+        return bAllowNativeFallback != 0;
+    }
+
+    bool AllowsGeneratedOnly() const
+    {
+        return bAllowGeneratedOnly != 0;
+    }
+
+    bool PrefersAsync() const
+    {
+        return bPreferAsync != 0;
+    }
+};
+
+inline const FFlightBehaviorCompilePolicyRow* SelectBestBehaviorCompilePolicy(
+    const TArray<FFlightBehaviorCompilePolicyRow>& Policies,
+    const uint32 BehaviorId,
+    const FName CohortName = NAME_None,
+    const FName ProfileName = NAME_None)
+{
+    const FFlightBehaviorCompilePolicyRow* BestRow = nullptr;
+    int32 BestSpecificity = TNumericLimits<int32>::Lowest();
+    int32 BestPriority = TNumericLimits<int32>::Lowest();
+
+    for (const FFlightBehaviorCompilePolicyRow& Row : Policies)
+    {
+        if (!Row.MatchesContext(BehaviorId, CohortName, ProfileName))
+        {
+            continue;
+        }
+
+        const int32 Specificity = Row.GetSpecificityScore();
+        if (!BestRow
+            || Specificity > BestSpecificity
+            || (Specificity == BestSpecificity && Row.Priority > BestPriority)
+            || (Specificity == BestSpecificity && Row.Priority == BestPriority && Row.RowName.LexicalLess(BestRow->RowName)))
+        {
+            BestRow = &Row;
+            BestSpecificity = Specificity;
+            BestPriority = Row.Priority;
+        }
+    }
+
+    return BestRow;
+}

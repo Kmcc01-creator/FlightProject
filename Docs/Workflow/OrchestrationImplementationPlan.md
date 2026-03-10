@@ -28,13 +28,23 @@ Implemented in the current branch:
 - scripting/debug surfaces exist via:
   - `UFlightScriptingLibrary::GetOrchestrationReportJson`
   - `UFlightScriptingLibrary::ExportOrchestrationReport`
+  - `UFlightScriptingLibrary::RebuildOrchestration`
   - `Flight.Debug.DumpOrchestrationReport`
+- the default sandbox startup path now explicitly runs:
+  - bootstrap
+  - orchestration rebuild before spawn
+  - initial swarm spawn
+  - orchestration rebuild after spawn
+- a lightweight startup sequencing automation suite now covers:
+  - bootstrap completion signaling
+  - orchestration rebuild validity
+  - startup report JSON surface
 
 Still not done:
 
-- processors do not yet consume orchestration-issued bindings
+- processors now consume orchestration-issued cohort bindings and anchor-aware legality exists, but startup-profile-aware legality and richer binding-selection reporting are still TODO
 - the swarm spawner still owns its current world-scan path
-- the startup profile assets are not yet materialized on disk in this checkout
+- startup sequencing coverage does not yet use a dedicated world/profile fixture or assert full post-spawn cohort deltas
 
 ## 1. Current Reality
 
@@ -42,12 +52,17 @@ The implementation plan has to fit the current project, not an imagined clean sl
 
 Today:
 
-- `AFlightGameMode::StartPlay()` still triggers bootstrap and initial swarm spawn
+- `AFlightGameMode::StartPlay()` still acts as the trigger surface, but the default sandbox path now delegates through bootstrap and explicit orchestration rebuild calls
 - `UFlightWorldBootstrapSubsystem` already owns reusable world setup work
-- `UFlightSwarmSpawnerSubsystem` still scans the world for `AFlightSpawnSwarmAnchor`
+- `UFlightSwarmSpawnerSubsystem` still scans the world for `AFlightSpawnSwarmAnchor`, but spawned Mass batches now carry `Swarm.Default` / `SwarmAnchor.*` cohort identity
 - `UFlightWaypointPathRegistry` already provides a strong explicit registry pattern
 - `UFlightVerseSubsystem` already owns compiled behavior metadata
-- `UFlightVexBehaviorProcessor` still assumes `BehaviorID = 1`
+- `UFlightVexBehaviorProcessor` now resolves orchestration bindings per chunk/cohort before falling back to the narrow no-binding path
+- `AFlightSpawnSwarmAnchor` now contributes legality metadata that orchestration can use during binding selection:
+  - preferred behavior ID
+  - allowed behavior IDs
+  - denied behavior IDs
+  - required behavior contracts
 
 That means phase one should improve visibility and binding, not force an immediate replacement of the runtime stack.
 
@@ -213,6 +228,7 @@ void ClearBindingsForCohort(FName CohortName);
 const FFlightExecutionPlan& GetExecutionPlan() const;
 const FFlightOrchestrationReport& GetReport() const;
 
+void Rebuild();
 void RebuildVisibility();
 void RebuildExecutionPlan();
 ```
@@ -288,10 +304,9 @@ Module startup
     -> UFlightOrchestrationSubsystem resolves service availability
     -> AFlightGameMode::StartPlay()
         -> UFlightWorldBootstrapSubsystem::RunBootstrap()
-        -> swarm/path/anchor visibility rebuild
-        -> orchestration plan rebuild
+        -> orchestration rebuild
         -> initial swarm spawn
-        -> post-spawn orchestration report refresh
+        -> orchestration rebuild
 ```
 
 Recommended interpretation:
@@ -316,7 +331,7 @@ Schema should continue to define:
 - symbol legality
 - required contracts
 - asset and plugin expectations
-- future behavior-binding legality
+- future behavior-binding legality, including startup-profile-aware constraints layered above anchor/default selection
 
 ### 9.2 VEX/Verse Input
 
@@ -346,7 +361,7 @@ This is the step that removes the hard-coded `BehaviorID = 1` assumption from be
 
 Current problem:
 
-- behavior selection is global and hard-wired
+- the old global/hard-wired behavior path is no longer the main model, but startup-profile-aware legality still is not represented in processor-consumed bindings
 
 Phase-one change:
 
@@ -355,7 +370,8 @@ Phase-one change:
 
 Phase-two change:
 
-- process cohort-resolved bindings instead of one global behavior ID
+- keep processing cohort-resolved bindings
+- add startup-profile-aware legality and selection reasoning to the orchestration binding/report surface
 
 ### 10.2 `UFlightSwarmSpawnerSubsystem`
 
@@ -432,10 +448,11 @@ Deliverables:
 
 Deliverables:
 
-- schema-driven binding legality
+- schema-driven and startup-profile-aware binding legality
 - degraded-capability reporting
 - render-consumer visibility
 - per-world execution-plan export
+- explicit reporting of why a cohort binding was accepted, redirected, or denied
 
 ## 13. Things To Defer
 

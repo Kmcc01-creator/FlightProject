@@ -3,6 +3,7 @@
 #include "Verse/UFlightVerseSubsystem.h"
 #include "Vex/FlightCompileArtifacts.h"
 #include "Vex/FlightVexParser.h"
+#include "Vex/FlightVexSchemaIr.h"
 #include "Vex/FlightVexTypes.h"
 #include "Vex/FlightVexSimdExecutor.h"
 #include "Vex/FlightVexSymbolRegistry.h"
@@ -620,6 +621,21 @@ void UFlightVerseSubsystem::Deinitialize()
 
 bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSource, FString& OutErrors, UScriptStruct* TargetStruct)
 {
+	const Flight::Vex::FVexTypeSchema* Schema = nullptr;
+	if (TargetStruct)
+	{
+		Schema = Flight::Vex::FVexSymbolRegistry::Get().GetSchemaByNativeStruct(TargetStruct);
+		if (!Schema)
+		{
+			Schema = Flight::Vex::FVexSymbolRegistry::Get().GetSchema(static_cast<const void*>(TargetStruct));
+		}
+	}
+
+	return CompileVex(BehaviorID, VexSource, OutErrors, Schema ? Schema->TypeId.RuntimeKey : static_cast<const void*>(nullptr));
+}
+
+bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSource, FString& OutErrors, const void* TypeKey)
+{
 	// Initialize behavior state pessimistically; flip to executable only when a runnable path is available.
 	FVerseBehavior& Behavior = Behaviors.FindOrAdd(BehaviorID);
 	Behavior.CompileState = EFlightVerseCompileState::VmCompileFailed;
@@ -685,29 +701,12 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 	};
 
 	// 1. Resolve Symbol Definitions for this compilation
-	TArray<Flight::Vex::FVexSymbolDefinition> LocalDefinitions = SymbolDefinitions;
-	if (TargetStruct)
-	{
-		if (const Flight::Vex::FVexTypeSchema* Schema = Flight::Vex::FVexSymbolRegistry::Get().GetSchema(TargetStruct))
-		{
-			for (auto& It : Schema->Symbols)
-			{
-				const auto& Accessor = It.Value;
-				if (LocalDefinitions.ContainsByPredicate([SymbolName = Accessor.SymbolName](const Flight::Vex::FVexSymbolDefinition& D) { return D.SymbolName == SymbolName; }))
-				{
-					continue;
-				}
-
-				Flight::Vex::FVexSymbolDefinition Def;
-				Def.SymbolName = Accessor.SymbolName;
-				Def.ValueType = TEXT("float");
-				Def.Residency = Accessor.Residency;
-				Def.bWritable = Accessor.Setter != nullptr;
-				Def.bRequired = false;
-				LocalDefinitions.Add(Def);
-			}
-		}
-	}
+	const Flight::Vex::FVexTypeSchema* CompileSchema = TypeKey
+		? Flight::Vex::FVexSymbolRegistry::Get().GetSchema(TypeKey)
+		: nullptr;
+	TArray<Flight::Vex::FVexSymbolDefinition> LocalDefinitions = CompileSchema
+		? Flight::Vex::FVexSchemaBinder::BuildSymbolDefinitions(*CompileSchema, SymbolDefinitions)
+		: SymbolDefinitions;
 
 	const double ParseStartTime = FPlatformTime::Seconds();
 	const Flight::Vex::FVexParseResult Result = Flight::Vex::ParseAndValidate(VexSource, LocalDefinitions, false);
@@ -730,7 +729,7 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 	}
 
 	// Enforce required-symbol contract only if we're using the default swarm definitions
-	if (!TargetStruct)
+	if (!TypeKey)
 	{
 		TSet<FString> UsedSymbols;
 		for (const FString& Symbol : Result.Program.UsedSymbols)
@@ -765,6 +764,24 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 	Behavior.FrameInterval = Result.Program.FrameInterval;
 	Behavior.Tier = Flight::Vex::FVexOptimizer::ClassifyTier(Result.Program, LocalDefinitions);
 
+	TOptional<Flight::Vex::FVexSchemaBindingResult> SchemaBinding;
+	if (CompileSchema)
+	{
+		SchemaBinding = Flight::Vex::FVexSchemaBinder::BindProgram(Result.Program, *CompileSchema, SymbolDefinitions);
+		if (!SchemaBinding->bSuccess)
+		{
+			if (!OutErrors.IsEmpty() && !OutErrors.EndsWith(TEXT("\n")))
+			{
+				OutErrors += TEXT("\n");
+			}
+			OutErrors += FString::Join(SchemaBinding->Errors, TEXT("\n"));
+			Behavior.LastCompileDiagnostics = OutErrors;
+			BackendPath = TEXT("SchemaBindingOnly");
+			FinalizeArtifactReport();
+			return false;
+		}
+	}
+
 	// Always generate IR for VVM assembly if possible
 	const double IrCompileStartTime = FPlatformTime::Seconds();
 	IrProgram = Flight::Vex::FVexIrCompiler::Compile(Result.Program, LocalDefinitions, IrErrors);
@@ -773,7 +790,7 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 	if (Behavior.Tier == Flight::Vex::EVexTier::Literal)
 	{
 		FString SimdReason;
-		const bool bSimdEligible = Flight::Vex::FVexSimdExecutor::CanCompileProgram(Result.Program, SymbolDefinitions, &SimdReason);
+		const bool bSimdEligible = Flight::Vex::FVexSimdExecutor::CanCompileProgram(Result.Program, LocalDefinitions, &SimdReason);
 		if (bSimdEligible && IrProgram.IsValid())
 		{
 			Behavior.SimdPlan = Flight::Vex::FVexSimdExecutor::Compile(IrProgram);
@@ -819,13 +836,18 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 	}
 
 	// Generate the Verse source code from the VEX AST
-	TMap<FString, FString> VerseBySymbol;
-	for (const auto& Def : SymbolDefinitions)
+	TMap<FString, FString> VerseBySymbol = SchemaBinding.IsSet()
+		? SchemaBinding->BuildVerseSymbolMap()
+		: TMap<FString, FString>();
+	if (!SchemaBinding.IsSet())
 	{
-		VerseBySymbol.Add(Def.SymbolName, Def.SymbolName.Mid(1)); // Fallback: just remove '@'
+		for (const Flight::Vex::FVexSymbolDefinition& Def : LocalDefinitions)
+		{
+			VerseBySymbol.Add(Def.SymbolName, Def.SymbolName.StartsWith(TEXT("@")) ? Def.SymbolName.Mid(1) : Def.SymbolName);
+		}
 	}
 
-	const FString VerseCode = Flight::Vex::LowerToVerse(Result.Program, SymbolDefinitions, VerseBySymbol);
+	const FString VerseCode = Flight::Vex::LowerToVerse(Result.Program, LocalDefinitions, VerseBySymbol);
 	Behavior.GeneratedVerseCode = VerseCode;
 	Behavior.bHasExecutableProcedure = false;
 	Behavior.CompileState = EFlightVerseCompileState::GeneratedOnly;
@@ -1057,53 +1079,86 @@ void UFlightVerseSubsystem::ExecuteOnSchema(const Flight::Vex::FVexProgramAst& P
 	{
 		if (Stmt.Kind == EVexStatementKind::Assignment)
 		{
-			if (!Program.Expressions.IsValidIndex(Stmt.ExpressionNodeIndex)) continue;
-			const FVexExpressionAst& AssignExpr = Program.Expressions[Stmt.ExpressionNodeIndex];
-			
-			if (AssignExpr.Lexeme.EndsWith(TEXT("=")))
+			if (!Program.Expressions.IsValidIndex(Stmt.ExpressionNodeIndex)
+				|| !Program.Tokens.IsValidIndex(Stmt.StartTokenIndex)
+				|| !Program.Tokens.IsValidIndex(Stmt.EndTokenIndex))
 			{
-				const FVexExpressionAst& LhsExpr = Program.Expressions[AssignExpr.LeftNodeIndex];
-				FNativeValue RhsValue = EvaluateExpression(AssignExpr.RightNodeIndex);
+				continue;
+			}
 
-				UE_LOG(LogFlightVerseSubsystem, Log, TEXT("  Assign: LHS='%s', Op='%s', RHS=%f"), *LhsExpr.Lexeme, *AssignExpr.Lexeme, AsFloat(RhsValue));
-
-				if (LhsExpr.Kind == EVexExprKind::SymbolRef)
+			int32 OpIdx = INDEX_NONE;
+			for (int32 TokenIndex = Stmt.StartTokenIndex; TokenIndex <= Stmt.EndTokenIndex; ++TokenIndex)
+			{
+				const FVexToken& Token = Program.Tokens[TokenIndex];
+				if (Token.Kind == EVexTokenKind::Operator
+					&& (Token.Lexeme == TEXT("=")
+						|| Token.Lexeme == TEXT("+=")
+						|| Token.Lexeme == TEXT("-=")
+						|| Token.Lexeme == TEXT("*=")
+						|| Token.Lexeme == TEXT("/=")))
 				{
-					if (const FVexSymbolAccessor* Accessor = Schema.Symbols.Find(LhsExpr.Lexeme))
-					{
-						FNativeValue FinalValue = RhsValue;
-						if (AssignExpr.Lexeme != TEXT("="))
-						{
-							const FString ArithmeticOp = AssignExpr.Lexeme.LeftChop(1);
-							FNativeValue Current;
-							if (Accessor->MemberOffset != INDEX_NONE) Current = MakeFloat(*(float*)((uint8*)StructPtr + Accessor->MemberOffset));
-							else if (Accessor->Getter) Current = MakeFloat(Accessor->Getter(StructPtr));
-							FinalValue = ApplyArithmetic(ArithmeticOp, Current, RhsValue);
-						}
-
-						UE_LOG(LogFlightVerseSubsystem, Log, TEXT("    Store Symbol: '%s' (offset %d) = %f"), *LhsExpr.Lexeme, Accessor->MemberOffset, AsFloat(FinalValue));
-
-						if (Accessor->MemberOffset != INDEX_NONE)
-						{
-							*(float*)((uint8*)StructPtr + Accessor->MemberOffset) = AsFloat(FinalValue);
-						}
-						else if (Accessor->Setter)
-						{
-							Accessor->Setter(StructPtr, AsFloat(FinalValue));
-						}
-					}
+					OpIdx = TokenIndex;
+					break;
 				}
-				else if (LhsExpr.Kind == EVexExprKind::Identifier)
+			}
+
+			if (OpIdx == INDEX_NONE)
+			{
+				continue;
+			}
+
+			const FString OpLexeme = Program.Tokens[OpIdx].Lexeme;
+			const FNativeValue RhsValue = EvaluateExpression(Stmt.ExpressionNodeIndex);
+			const FVexToken& LhsToken = Program.Tokens[Stmt.StartTokenIndex];
+
+			UE_LOG(LogFlightVerseSubsystem, Log, TEXT("  Assign: LHS='%s', Op='%s', RHS=%f"), *LhsToken.Lexeme, *OpLexeme, AsFloat(RhsValue));
+
+			if (LhsToken.Kind == EVexTokenKind::Identifier
+				&& Stmt.StartTokenIndex + 1 < OpIdx
+				&& Program.Tokens[Stmt.StartTokenIndex + 1].Kind == EVexTokenKind::Identifier)
+			{
+				const FString VariableName = Program.Tokens[Stmt.StartTokenIndex + 1].Lexeme;
+				Locals.Add(VariableName, RhsValue);
+				continue;
+			}
+
+			if (LhsToken.Kind == EVexTokenKind::Symbol)
+			{
+				if (const FVexSymbolAccessor* Accessor = Schema.Symbols.Find(LhsToken.Lexeme))
 				{
-					FNativeValue LhsValue = Locals.FindRef(LhsExpr.Lexeme);
 					FNativeValue FinalValue = RhsValue;
-					if (AssignExpr.Lexeme != TEXT("="))
+					if (OpLexeme != TEXT("="))
 					{
-						const FString ArithmeticOp = AssignExpr.Lexeme.LeftChop(1);
-						FinalValue = ApplyArithmetic(ArithmeticOp, LhsValue, RhsValue);
+						const FString ArithmeticOp = OpLexeme.LeftChop(1);
+						FNativeValue Current;
+						if (Accessor->MemberOffset != INDEX_NONE) Current = MakeFloat(*(float*)((uint8*)StructPtr + Accessor->MemberOffset));
+						else if (Accessor->Getter) Current = MakeFloat(Accessor->Getter(StructPtr));
+						FinalValue = ApplyArithmetic(ArithmeticOp, Current, RhsValue);
 					}
-					Locals.Add(LhsExpr.Lexeme, FinalValue);
+
+					UE_LOG(LogFlightVerseSubsystem, Log, TEXT("    Store Symbol: '%s' (offset %d) = %f"), *LhsToken.Lexeme, Accessor->MemberOffset, AsFloat(FinalValue));
+
+					if (Accessor->MemberOffset != INDEX_NONE)
+					{
+						*(float*)((uint8*)StructPtr + Accessor->MemberOffset) = AsFloat(FinalValue);
+					}
+					else if (Accessor->Setter)
+					{
+						Accessor->Setter(StructPtr, AsFloat(FinalValue));
+					}
 				}
+				continue;
+			}
+
+			if (LhsToken.Kind == EVexTokenKind::Identifier)
+			{
+				FNativeValue FinalValue = RhsValue;
+				if (OpLexeme != TEXT("="))
+				{
+					const FString ArithmeticOp = OpLexeme.LeftChop(1);
+					FinalValue = ApplyArithmetic(ArithmeticOp, Locals.FindRef(LhsToken.Lexeme), RhsValue);
+				}
+				Locals.Add(LhsToken.Lexeme, FinalValue);
 			}
 		}
 	}

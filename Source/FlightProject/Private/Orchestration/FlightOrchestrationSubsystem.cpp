@@ -29,6 +29,8 @@ namespace Flight::Orchestration
 namespace
 {
 
+const FName DefaultSwarmCohortName(TEXT("Swarm.Default"));
+
 FString ParticipantKindToString(const EFlightParticipantKind Kind)
 {
 	switch (Kind)
@@ -130,6 +132,79 @@ void AddNameArrayToJson(const TArray<FName>& Names, const TCHAR* FieldName, TSha
 		Values.Add(MakeShared<FJsonValueString>(Name.ToString()));
 	}
 	Object->SetArrayField(FieldName, Values);
+}
+
+const Flight::Orchestration::FFlightBehaviorRecord* SelectBehaviorForCohort(
+	const Flight::Orchestration::FFlightCohortRecord& Cohort,
+	const TMap<uint32, Flight::Orchestration::FFlightBehaviorRecord>& BehaviorsById)
+{
+	if (Cohort.Name.IsNone())
+	{
+		return nullptr;
+	}
+
+	auto SatisfiesContracts = [](const TArray<FName>& RequiredContracts, const TArray<FName>& CandidateContracts) -> bool
+	{
+		for (const FName Contract : RequiredContracts)
+		{
+			if (!CandidateContracts.Contains(Contract))
+			{
+				return false;
+			}
+		}
+		return true;
+	};
+
+	auto IsBehaviorLegal = [&Cohort, &SatisfiesContracts](const Flight::Orchestration::FFlightBehaviorRecord& Behavior) -> bool
+	{
+		if (!Behavior.bExecutable)
+		{
+			return false;
+		}
+
+		if (!Cohort.AllowedBehaviorIds.IsEmpty() && !Cohort.AllowedBehaviorIds.Contains(Behavior.BehaviorID))
+		{
+			return false;
+		}
+
+		if (Cohort.DeniedBehaviorIds.Contains(Behavior.BehaviorID))
+		{
+			return false;
+		}
+
+		if (!Cohort.RequiredBehaviorContracts.IsEmpty()
+			&& !SatisfiesContracts(Cohort.RequiredBehaviorContracts, Behavior.RequiredContracts))
+		{
+			return false;
+		}
+
+		return true;
+	};
+
+	if (Cohort.PreferredBehaviorId >= 0)
+	{
+		if (const Flight::Orchestration::FFlightBehaviorRecord* PreferredBehavior = BehaviorsById.Find(static_cast<uint32>(Cohort.PreferredBehaviorId));
+			PreferredBehavior && IsBehaviorLegal(*PreferredBehavior))
+		{
+			return PreferredBehavior;
+		}
+	}
+
+	const Flight::Orchestration::FFlightBehaviorRecord* SelectedBehavior = nullptr;
+	for (const TPair<uint32, Flight::Orchestration::FFlightBehaviorRecord>& Pair : BehaviorsById)
+	{
+		if (!IsBehaviorLegal(Pair.Value))
+		{
+			continue;
+		}
+
+		if (!SelectedBehavior || Pair.Key < SelectedBehavior->BehaviorID)
+		{
+			SelectedBehavior = &Pair.Value;
+		}
+	}
+
+	return SelectedBehavior;
 }
 
 } // namespace
@@ -266,6 +341,56 @@ const Flight::Orchestration::FFlightCohortRecord* UFlightOrchestrationSubsystem:
 	return CohortsByName.Find(CohortName);
 }
 
+bool UFlightOrchestrationSubsystem::TryGetBindingForCohort(
+	const FName CohortName,
+	Flight::Orchestration::FFlightBehaviorBinding& OutBinding) const
+{
+	auto FindBinding = [this](const FName TargetCohortName) -> const Flight::Orchestration::FFlightBehaviorBinding*
+	{
+		const Flight::Orchestration::FFlightBehaviorBinding* SelectedBinding = nullptr;
+		bool bSelectedBehaviorIsExecutable = false;
+
+		for (const Flight::Orchestration::FFlightBehaviorBinding& Binding : Bindings)
+		{
+			if (Binding.CohortName != TargetCohortName)
+			{
+				continue;
+			}
+
+			const bool bBindingBehaviorIsExecutable = BehaviorsById.FindRef(Binding.BehaviorID).bExecutable;
+			if (!SelectedBinding
+				|| (bBindingBehaviorIsExecutable && !bSelectedBehaviorIsExecutable)
+				|| (bBindingBehaviorIsExecutable == bSelectedBehaviorIsExecutable && Binding.BehaviorID < SelectedBinding->BehaviorID))
+			{
+				SelectedBinding = &Binding;
+				bSelectedBehaviorIsExecutable = bBindingBehaviorIsExecutable;
+			}
+		}
+
+		return SelectedBinding;
+	};
+
+	if (!CohortName.IsNone())
+	{
+		if (const Flight::Orchestration::FFlightBehaviorBinding* ExactBinding = FindBinding(CohortName))
+		{
+			OutBinding = *ExactBinding;
+			return true;
+		}
+	}
+
+	if (CohortName != Flight::Orchestration::DefaultSwarmCohortName)
+	{
+		if (const Flight::Orchestration::FFlightBehaviorBinding* DefaultBinding = FindBinding(Flight::Orchestration::DefaultSwarmCohortName))
+		{
+			OutBinding = *DefaultBinding;
+			return true;
+		}
+	}
+
+	return false;
+}
+
 TArray<Flight::Orchestration::FFlightBehaviorBinding> UFlightOrchestrationSubsystem::GetBindingsForCohort(const FName CohortName) const
 {
 	TArray<Flight::Orchestration::FFlightBehaviorBinding> MatchingBindings;
@@ -278,6 +403,37 @@ TArray<Flight::Orchestration::FFlightBehaviorBinding> UFlightOrchestrationSubsys
 	}
 
 	return MatchingBindings;
+}
+
+bool UFlightOrchestrationSubsystem::ResolveFallbackBinding(Flight::Orchestration::FFlightBehaviorBinding& OutBinding) const
+{
+	if (!Bindings.IsEmpty())
+	{
+		return false;
+	}
+
+	const Flight::Orchestration::FFlightCohortRecord DefaultCohort{ Flight::Orchestration::DefaultSwarmCohortName };
+	const Flight::Orchestration::FFlightBehaviorRecord* SelectedBehavior =
+		Flight::Orchestration::SelectBehaviorForCohort(DefaultCohort, BehaviorsById);
+	if (!SelectedBehavior)
+	{
+		return false;
+	}
+
+	OutBinding = Flight::Orchestration::FFlightBehaviorBinding();
+	OutBinding.CohortName = Flight::Orchestration::DefaultSwarmCohortName;
+	OutBinding.BehaviorID = SelectedBehavior->BehaviorID;
+	OutBinding.ExecutionDomain = SelectedBehavior->ResolvedDomain;
+	OutBinding.FrameInterval = SelectedBehavior->FrameInterval;
+	OutBinding.bAsync = SelectedBehavior->bAsync;
+	OutBinding.RequiredContracts = SelectedBehavior->RequiredContracts;
+	return true;
+}
+
+void UFlightOrchestrationSubsystem::Rebuild()
+{
+	RebuildVisibility();
+	RebuildExecutionPlan();
 }
 
 void UFlightOrchestrationSubsystem::RebuildVisibility()
@@ -301,48 +457,41 @@ void UFlightOrchestrationSubsystem::RebuildExecutionPlan()
 	ExecutionPlan.BuiltAtUtc = FDateTime::UtcNow();
 	ExecutionPlan.Steps.Reset();
 
-	const Flight::Orchestration::FFlightBehaviorRecord* SelectedBehavior = nullptr;
-	for (const TPair<uint32, Flight::Orchestration::FFlightBehaviorRecord>& Pair : BehaviorsById)
+	for (const TPair<FName, Flight::Orchestration::FFlightCohortRecord>& Pair : CohortsByName)
 	{
-		if (!SelectedBehavior
-			|| (Pair.Value.bExecutable && !SelectedBehavior->bExecutable)
-			|| (Pair.Value.bExecutable == SelectedBehavior->bExecutable && Pair.Key < SelectedBehavior->BehaviorID))
+		const Flight::Orchestration::FFlightBehaviorRecord* SelectedBehavior =
+			Flight::Orchestration::SelectBehaviorForCohort(Pair.Value, BehaviorsById);
+		if (!SelectedBehavior)
 		{
-			SelectedBehavior = &Pair.Value;
+			continue;
 		}
-	}
 
-	if (SelectedBehavior)
-	{
-		for (const TPair<FName, Flight::Orchestration::FFlightCohortRecord>& Pair : CohortsByName)
+		Flight::Orchestration::FFlightBehaviorBinding Binding;
+		Binding.CohortName = Pair.Key;
+		Binding.BehaviorID = SelectedBehavior->BehaviorID;
+		Binding.ExecutionDomain = SelectedBehavior->ResolvedDomain;
+		Binding.FrameInterval = SelectedBehavior->FrameInterval;
+		Binding.bAsync = SelectedBehavior->bAsync;
+		Binding.RequiredContracts = SelectedBehavior->RequiredContracts;
+		Bindings.Add(Binding);
+
+		Flight::Orchestration::FFlightExecutionPlanStep Step;
+		Step.CohortName = Pair.Key;
+		Step.BehaviorID = SelectedBehavior->BehaviorID;
+		Step.ExecutionDomain = SelectedBehavior->ResolvedDomain;
+		Step.FrameInterval = SelectedBehavior->FrameInterval;
+		Step.bAsync = SelectedBehavior->bAsync;
+		Step.InputContracts = SelectedBehavior->RequiredContracts;
+		Step.OutputConsumers.Add(TEXT("Mass"));
+		Step.OutputConsumers.Add(TEXT("Swarm"));
+		if (const UFlightSimpleSCSLShaderPipelineSubsystem* SimpleSCSLSubsystem = GetWorld()
+			? GetWorld()->GetSubsystem<UFlightSimpleSCSLShaderPipelineSubsystem>()
+			: nullptr;
+			SimpleSCSLSubsystem && SimpleSCSLSubsystem->IsEnabled())
 		{
-			Flight::Orchestration::FFlightBehaviorBinding Binding;
-			Binding.CohortName = Pair.Key;
-			Binding.BehaviorID = SelectedBehavior->BehaviorID;
-			Binding.ExecutionDomain = SelectedBehavior->ResolvedDomain;
-			Binding.FrameInterval = SelectedBehavior->FrameInterval;
-			Binding.bAsync = SelectedBehavior->bAsync;
-			Binding.RequiredContracts = SelectedBehavior->RequiredContracts;
-			Bindings.Add(Binding);
-
-			Flight::Orchestration::FFlightExecutionPlanStep Step;
-			Step.CohortName = Pair.Key;
-			Step.BehaviorID = SelectedBehavior->BehaviorID;
-			Step.ExecutionDomain = SelectedBehavior->ResolvedDomain;
-			Step.FrameInterval = SelectedBehavior->FrameInterval;
-			Step.bAsync = SelectedBehavior->bAsync;
-			Step.InputContracts = SelectedBehavior->RequiredContracts;
-			Step.OutputConsumers.Add(TEXT("Mass"));
-			Step.OutputConsumers.Add(TEXT("Swarm"));
-			if (const UFlightSimpleSCSLShaderPipelineSubsystem* SimpleSCSLSubsystem = GetWorld()
-				? GetWorld()->GetSubsystem<UFlightSimpleSCSLShaderPipelineSubsystem>()
-				: nullptr;
-				SimpleSCSLSubsystem && SimpleSCSLSubsystem->IsEnabled())
-			{
-				Step.OutputConsumers.Add(TEXT("SimpleSCSLShaderPipeline"));
-			}
-			ExecutionPlan.Steps.Add(Step);
+			Step.OutputConsumers.Add(TEXT("SimpleSCSLShaderPipeline"));
 		}
+		ExecutionPlan.Steps.Add(Step);
 	}
 
 	RebuildCachedReport();
@@ -387,6 +536,22 @@ FString UFlightOrchestrationSubsystem::BuildReportJson() const
 		TSharedRef<FJsonObject> CohortObject = MakeShared<FJsonObject>();
 		CohortObject->SetStringField(TEXT("name"), Cohort.Name.ToString());
 		Flight::Orchestration::AddNameArrayToJson(Cohort.Tags, TEXT("tags"), CohortObject);
+		CohortObject->SetNumberField(TEXT("preferredBehaviorId"), Cohort.PreferredBehaviorId);
+
+		TArray<TSharedPtr<FJsonValue>> AllowedBehaviorValues;
+		for (const uint32 AllowedBehaviorId : Cohort.AllowedBehaviorIds)
+		{
+			AllowedBehaviorValues.Add(MakeShared<FJsonValueNumber>(static_cast<double>(AllowedBehaviorId)));
+		}
+		CohortObject->SetArrayField(TEXT("allowedBehaviorIds"), AllowedBehaviorValues);
+
+		TArray<TSharedPtr<FJsonValue>> DeniedBehaviorValues;
+		for (const uint32 DeniedBehaviorId : Cohort.DeniedBehaviorIds)
+		{
+			DeniedBehaviorValues.Add(MakeShared<FJsonValueNumber>(static_cast<double>(DeniedBehaviorId)));
+		}
+		CohortObject->SetArrayField(TEXT("deniedBehaviorIds"), DeniedBehaviorValues);
+		Flight::Orchestration::AddNameArrayToJson(Cohort.RequiredBehaviorContracts, TEXT("requiredBehaviorContracts"), CohortObject);
 
 		TArray<TSharedPtr<FJsonValue>> ParticipantHandleValues;
 		for (const Flight::Orchestration::FFlightParticipantHandle Handle : Cohort.Participants)
@@ -726,6 +891,25 @@ void UFlightOrchestrationSubsystem::BuildDefaultCohorts()
 			Cohort.Participants.Add(Participant.Handle);
 			Cohort.Tags.Add(TEXT("Swarm"));
 			Cohort.Tags.Add(TEXT("AnchorScoped"));
+			if (const AFlightSpawnSwarmAnchor* Anchor = Cast<AFlightSpawnSwarmAnchor>(Participant.SourceObject.Get()))
+			{
+				Cohort.PreferredBehaviorId = Anchor->GetPreferredBehaviorId();
+				for (const int32 AllowedBehaviorId : Anchor->GetAllowedBehaviorIds())
+				{
+					if (AllowedBehaviorId >= 0)
+					{
+						Cohort.AllowedBehaviorIds.Add(static_cast<uint32>(AllowedBehaviorId));
+					}
+				}
+				for (const int32 DeniedBehaviorId : Anchor->GetDeniedBehaviorIds())
+				{
+					if (DeniedBehaviorId >= 0)
+					{
+						Cohort.DeniedBehaviorIds.Add(static_cast<uint32>(DeniedBehaviorId));
+					}
+				}
+				Cohort.RequiredBehaviorContracts = Anchor->GetRequiredBehaviorContracts();
+			}
 			RegisterCohort(Cohort);
 		}
 	}

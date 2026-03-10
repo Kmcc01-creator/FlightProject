@@ -152,22 +152,19 @@ void AFlightGameMode::StartPlay()
     }
     else
     {
-        // Step 1: Run reusable world bootstrap.
-        if (UFlightWorldBootstrapSubsystem* Bootstrap = World->GetSubsystem<UFlightWorldBootstrapSubsystem>())
-        {
-            UE_LOG(LogFlightGameMode, Log, TEXT("Running world bootstrap..."));
-            Bootstrap->RunBootstrap();
-            UE_LOG(LogFlightGameMode, Log, TEXT("World bootstrap complete"));
-        }
-        else
-        {
-            UE_LOG(LogFlightGameMode, Warning, TEXT("FlightWorldBootstrapSubsystem not available"));
-        }
+        UE_LOG(LogFlightGameMode, Log, TEXT("Running world bootstrap..."));
+        UFlightScriptingLibrary::RunBootstrap(this);
+        UE_LOG(LogFlightGameMode, Log, TEXT("World bootstrap complete"));
 
-        // Step 2: Trigger spawn policy for the current startup mode.
+        UE_LOG(LogFlightGameMode, Log, TEXT("Rebuilding orchestration before initial swarm spawn..."));
+        UFlightScriptingLibrary::RebuildOrchestration(this);
+
         UE_LOG(LogFlightGameMode, Log, TEXT("Spawning initial swarm..."));
         int32 SpawnedCount = UFlightScriptingLibrary::SpawnInitialSwarm(this);
         UE_LOG(LogFlightGameMode, Log, TEXT("Spawned %d swarm entities"), SpawnedCount);
+
+        UE_LOG(LogFlightGameMode, Log, TEXT("Refreshing orchestration after initial swarm spawn..."));
+        UFlightScriptingLibrary::RebuildOrchestration(this);
 
         if (GEngine)
         {

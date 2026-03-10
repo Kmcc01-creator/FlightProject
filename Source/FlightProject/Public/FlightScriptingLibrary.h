@@ -21,7 +21,7 @@ public:
     // Data Subsystem
     // ============================================================================
 
-    /** Reload all Data Table configurations. */
+    /** Reload all configured data contracts from their current ingress sources. */
     UFUNCTION(BlueprintCallable, Category = "Flight|Scripting|Data", meta = (WorldContext = "WorldContextObject"))
     static void ReloadDataConfigs(const UObject* WorldContextObject);
 
@@ -29,7 +29,7 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Flight|Scripting|Data", meta = (WorldContext = "WorldContextObject"))
     static void ReloadCSVConfigs(const UObject* WorldContextObject);
 
-    /** Reload a specific configuration by name. */
+    /** Reload a specific configured data contract by name. */
     UFUNCTION(BlueprintCallable, Category = "Flight|Scripting|Data", meta = (WorldContext = "WorldContextObject"))
     static bool ReloadCSVConfig(const UObject* WorldContextObject, const FString& ConfigName);
 
@@ -48,6 +48,10 @@ public:
     /** Spawn the initial swarm entities. */
     UFUNCTION(BlueprintCallable, Category = "Flight|Scripting|Bootstrap", meta = (WorldContext = "WorldContextObject"))
     static int32 SpawnInitialSwarm(const UObject* WorldContextObject);
+
+    /** Rebuild orchestration visibility and execution plan for the current world. */
+    UFUNCTION(BlueprintCallable, Category = "Flight|Scripting|Bootstrap", meta = (WorldContext = "WorldContextObject"))
+    static void RebuildOrchestration(const UObject* WorldContextObject);
 
     /** Initialize the new GPU-driven swarm simulation. */
     UFUNCTION(BlueprintCallable, Category = "Flight|Scripting|Bootstrap", meta = (WorldContext = "WorldContextObject"))
@@ -85,7 +89,7 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Flight|Scripting|Validation")
     static TArray<FString> ValidateDataAssets();
 
-    /** Get Data Table asset paths configured in developer settings. */
+    /** Get the current default data-ingress asset paths configured in developer settings. */
     UFUNCTION(BlueprintPure, Category = "Flight|Scripting|Validation")
     static TArray<FString> GetConfiguredDataTablePaths();
 

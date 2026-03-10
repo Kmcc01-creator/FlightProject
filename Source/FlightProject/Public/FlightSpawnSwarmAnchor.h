@@ -28,6 +28,10 @@ public:
     float GetPhaseOffsetDeg() const { return EffectivePhaseOffsetDeg; }
     float GetPhaseSpreadDeg() const { return EffectivePhaseSpreadDeg; }
     float GetAutopilotSpeedOverride() const { return EffectiveAutopilotSpeed > 0.f ? EffectiveAutopilotSpeed : -1.f; }
+    int32 GetPreferredBehaviorId() const { return EffectivePreferredBehaviorId; }
+    const TArray<int32>& GetAllowedBehaviorIds() const { return EffectiveAllowedBehaviorIds; }
+    const TArray<int32>& GetDeniedBehaviorIds() const { return EffectiveDeniedBehaviorIds; }
+    const TArray<FName>& GetRequiredBehaviorContracts() const { return EffectiveRequiredBehaviorContracts; }
 
 protected:
     UPROPERTY(VisibleAnywhere, Category = "Components")
@@ -53,6 +57,22 @@ protected:
     UPROPERTY(EditAnywhere, Category = "Swarm", meta = (ClampMin = "-1.0"))
     float AutopilotSpeedOverride = -1.f;
 
+    /** Preferred behavior ID for this anchor cohort. -1 means no preference. */
+    UPROPERTY(EditAnywhere, Category = "Swarm|Behavior", meta = (ClampMin = "-1"))
+    int32 PreferredBehaviorId = -1;
+
+    /** Optional allowlist of behavior IDs legal for this anchor cohort. Empty means unrestricted. */
+    UPROPERTY(EditAnywhere, Category = "Swarm|Behavior")
+    TArray<int32> AllowedBehaviorIds;
+
+    /** Optional denylist of behavior IDs illegal for this anchor cohort. */
+    UPROPERTY(EditAnywhere, Category = "Swarm|Behavior")
+    TArray<int32> DeniedBehaviorIds;
+
+    /** Optional required contracts that a bound behavior must advertise. */
+    UPROPERTY(EditAnywhere, Category = "Swarm|Behavior")
+    TArray<FName> RequiredBehaviorContracts;
+
     /** Register this anchor as a node in the nav graph data hub for visualization/debug. */
     UPROPERTY(EditAnywhere, Category = "Swarm|NavGraph")
     bool bRegisterWithNavGraph = true;
@@ -70,6 +90,10 @@ private:
     float EffectivePhaseOffsetDeg = 0.f;
     float EffectivePhaseSpreadDeg = 360.f;
     float EffectiveAutopilotSpeed = -1.f;
+    int32 EffectivePreferredBehaviorId = -1;
+    TArray<int32> EffectiveAllowedBehaviorIds;
+    TArray<int32> EffectiveDeniedBehaviorIds;
+    TArray<FName> EffectiveRequiredBehaviorContracts;
     FGuid RegisteredNavNodeId;
 
     void RefreshAnchor(bool bApplyOverrides);

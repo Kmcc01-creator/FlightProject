@@ -57,7 +57,9 @@ In practice, the ordering is:
 1. subsystem initialization
 2. `AFlightGameMode::StartPlay()`
 3. `UFlightWorldBootstrapSubsystem::RunBootstrap()`
-4. swarm spawn or GPU-swarm initialization path
+4. orchestration rebuild before spawn (default sandbox path)
+5. swarm spawn or GPU-swarm initialization path
+6. orchestration rebuild after spawn (default sandbox path)
 
 That still fits the decomposition goal, but it is important not to confuse the target architecture with the exact current trigger path.
 
@@ -85,19 +87,14 @@ void AFlightGameMode::StartPlay()
 
     UE_LOG(LogFlightGameMode, Log, TEXT("StartPlay for map '%s'"), *GetWorld()->GetMapName());
 
-    if (UFlightWorldBootstrapSubsystem* Bootstrap = GetWorld()->GetSubsystem<UFlightWorldBootstrapSubsystem>())
-    {
-        Bootstrap->RunBootstrap();
-    }
-
-    if (UFlightSwarmSpawnerSubsystem* Swarm = GetWorld()->GetSubsystem<UFlightSwarmSpawnerSubsystem>())
-    {
-        Swarm->SpawnInitialSwarm();
-    }
+    UFlightScriptingLibrary::RunBootstrap(this);
+    UFlightScriptingLibrary::RebuildOrchestration(this);
+    UFlightScriptingLibrary::SpawnInitialSwarm(this);
+    UFlightScriptingLibrary::RebuildOrchestration(this);
 }
 ```
 
-Both subsystems can also auto-run via world delegates, so game modes that do nothing special still get the default bootstrap behavior.
+The current path is still `GameMode`-triggered rather than delegate-owned, but the reusable work now sits behind bootstrap/orchestration surfaces instead of being embedded directly in `StartPlay()`.
 
 ## Migration steps
 

@@ -57,7 +57,7 @@ bool FFlightVexGeneralizationTest::RunTest(const FString& Parameters)
 
 	const void* TypeKey = Flight::Vex::TTypeVexRegistry<FGeneralVexTestState>::GetTypeKey();
 
-	if (!VerseSubsystem->CompileVex(BehaviorID, VexSource, Errors, (UScriptStruct*)TypeKey))
+	if (!VerseSubsystem->CompileVex(BehaviorID, VexSource, Errors, TypeKey))
 	{
 		AddError(FString::Printf(TEXT("VEX Compile Failed: %s"), *Errors));
 		return false;

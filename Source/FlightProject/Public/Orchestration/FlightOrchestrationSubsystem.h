@@ -34,8 +34,11 @@ public:
 	bool IsServiceAvailable(FName ServiceName) const;
 	const Flight::Orchestration::FFlightParticipantRecord* FindParticipant(Flight::Orchestration::FFlightParticipantHandle Handle) const;
 	const Flight::Orchestration::FFlightCohortRecord* FindCohort(FName CohortName) const;
+	bool TryGetBindingForCohort(FName CohortName, Flight::Orchestration::FFlightBehaviorBinding& OutBinding) const;
 	TArray<Flight::Orchestration::FFlightBehaviorBinding> GetBindingsForCohort(FName CohortName) const;
+	bool ResolveFallbackBinding(Flight::Orchestration::FFlightBehaviorBinding& OutBinding) const;
 
+	void Rebuild();
 	void RebuildVisibility();
 	void RebuildExecutionPlan();
 

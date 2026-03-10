@@ -27,8 +27,8 @@ Technical architecture, engine integration, and system design.
 | [Overview.md](Architecture/Overview.md) | Project vision, goals, and roadmap |
 | [EngineIntegration.md](Architecture/EngineIntegration.md) | UE systems usage and module dependencies |
 | [MassECS.md](Architecture/MassECS.md) | Mass Entity fragments, processors, spawning |
-| [Navigation.md](Architecture/Navigation.md) | Nav graph design and buoy regions |
-| [DataPipeline.md](Architecture/DataPipeline.md) | CSV data loading and configuration |
+| [Navigation.md](Architecture/Navigation.md) | Navigation architecture, route legality, cohorts, and orchestration integration |
+| [DataPipeline.md](Architecture/DataPipeline.md) | Data ingress architecture, typed contracts, and source-format flexibility |
 | [FlightControls.md](Architecture/FlightControls.md) | Input system and movement component |
 | [PluginArchitecture.md](Architecture/PluginArchitecture.md) | Plugin types and usage patterns |
 | [RowEvolutionDesignReview.md](Architecture/RowEvolutionDesignReview.md) | Row-type evolution strategy, reactive/reflection integration, and phased operations plan |
@@ -46,6 +46,9 @@ Day-to-day development workflows and runtime systems.
 | [CurrentFocus.md](Workflow/CurrentFocus.md) | Current phase status, milestones, and immediate roadmap |
 | [CurrentFocus-VexRendering.md](Workflow/CurrentFocus-VexRendering.md) | Proposed typestate VEX + reflective RDG rendering direction |
 | [CurrentBuild.md](Workflow/CurrentBuild.md) | Current build/test baseline, schema validation coverage, and command reference |
+| [UnrealDevelopmentImprovementPlan.md](Workflow/UnrealDevelopmentImprovementPlan.md) | Milestone-based plan for stabilizing startup, orchestration, testing, and GPU validation |
+| [TestingValidationPlan.md](Workflow/TestingValidationPlan.md) | Current phased validation topology, evidence, and next testing targets |
+| [OrchestrationImplementationPlan.md](Workflow/OrchestrationImplementationPlan.md) | Current orchestration rollout state, gaps, and recommended execution boundary |
 | [GameplaySystems.md](Workflow/GameplaySystems.md) | Runtime bootstrap and system interactions |
 | [MapWorkflow.md](Workflow/MapWorkflow.md) | Level authoring and testing |
 | [EditorTooling.md](Workflow/EditorTooling.md) | Editor setup and recommended layout |

@@ -51,6 +51,10 @@ struct FLIGHTPROJECT_API FFlightCohortRecord
 	FName Name = NAME_None;
 	TArray<FFlightParticipantHandle> Participants;
 	TArray<FName> Tags;
+	int32 PreferredBehaviorId = -1;
+	TArray<uint32> AllowedBehaviorIds;
+	TArray<uint32> DeniedBehaviorIds;
+	TArray<FName> RequiredBehaviorContracts;
 };
 
 } // namespace Flight::Orchestration

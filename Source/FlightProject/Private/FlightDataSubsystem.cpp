@@ -2,10 +2,10 @@
 
 #include "FlightProject.h"
 #include "FlightProjectDeveloperSettings.h"
-
-#include "Engine/DataTable.h"
+#include "FlightDataResolver.h"
 
 using namespace Flight::Functional;
+using namespace Flight::Data;
 
 void UFlightDataSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
@@ -30,44 +30,10 @@ void UFlightDataSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     }
 
     bProceduralAnchorsLoaded = LoadProceduralAnchors();
+    bBehaviorCompilePolicyLoaded = LoadBehaviorCompilePolicies();
 
-    UE_LOG(LogFlightProject, Log, TEXT("FlightDataSubsystem: Initialized - Lighting=%d, Autopilot=%d, SpatialLayout=%d (%d rows), ProceduralAnchors=%d"),
-        bLightingLoaded, bAutopilotLoaded, bSpatialLayoutLoaded, SpatialLayoutRows.Num(), bProceduralAnchorsLoaded);
-}
-
-// Helper: Load a single-row config from a DataTable using TResult
-template<typename TRow>
-static TResult<TRow, FString> LoadConfigRow(
-    const TSoftObjectPtr<UDataTable>& TableRef,
-    FName RowName,
-    const TCHAR* TableName,
-    const TCHAR* Context)
-{
-    // Chain: Settings -> Table -> RowName -> Row
-    return TResult<UDataTable*, FString>::Ok(TableRef.LoadSynchronous())
-        .AndThen([TableName](UDataTable* Table) -> TResult<UDataTable*, FString>
-        {
-            if (!Table)
-            {
-                return Err<UDataTable*>(FString::Printf(TEXT("%s not set in project settings"), TableName));
-            }
-            return Ok(Table);
-        })
-        .AndThen([RowName, TableName, Context](UDataTable* Table) -> TResult<TRow, FString>
-        {
-            if (RowName.IsNone())
-            {
-                return Err<TRow>(FString::Printf(TEXT("%s row name not specified"), TableName));
-            }
-
-            const TRow* Row = Table->FindRow<TRow>(RowName, Context);
-            if (!Row)
-            {
-                return Err<TRow>(FString::Printf(TEXT("Row '%s' not found in %s"), *RowName.ToString(), TableName));
-            }
-
-            return Ok(*Row);
-        });
+    UE_LOG(LogFlightProject, Log, TEXT("FlightDataSubsystem: Initialized - Lighting=%d, Autopilot=%d, SpatialLayout=%d (%d rows), ProceduralAnchors=%d, BehaviorCompilePolicies=%d (%d rows)"),
+        bLightingLoaded, bAutopilotLoaded, bSpatialLayoutLoaded, SpatialLayoutRows.Num(), bProceduralAnchorsLoaded, bBehaviorCompilePolicyLoaded, BehaviorCompilePolicies.Num());
 }
 
 bool UFlightDataSubsystem::LoadLightingConfig()
@@ -78,9 +44,8 @@ bool UFlightDataSubsystem::LoadLightingConfig()
         return false;
     }
 
-    return LoadConfigRow<FFlightLightingConfigRow>(
-        Settings->LightingConfigTable,
-        Settings->LightingConfigRow,
+    return ResolveRow<FFlightLightingConfigRow>(
+        Settings->GetLightingConfigSource(),
         TEXT("LightingConfigTable"),
         TEXT("LoadLightingConfig"))
     .Match(
@@ -104,9 +69,8 @@ bool UFlightDataSubsystem::LoadAutopilotConfig()
         return false;
     }
 
-    return LoadConfigRow<FFlightAutopilotConfigRow>(
-        Settings->AutopilotConfigTable,
-        Settings->AutopilotConfigRow,
+    return ResolveRow<FFlightAutopilotConfigRow>(
+        Settings->GetAutopilotConfigSource(),
         TEXT("AutopilotConfigTable"),
         TEXT("LoadAutopilotConfig"))
     .Match(
@@ -122,50 +86,6 @@ bool UFlightDataSubsystem::LoadAutopilotConfig()
         });
 }
 
-// Helper: Load multi-row table with filtering
-template<typename TRow>
-static TResult<TArray<TRow>, FString> LoadTableRows(
-    const TSoftObjectPtr<UDataTable>& TableRef,
-    const TCHAR* TableName,
-    TFunction<bool(const TRow&)> RowFilter,
-    TFunction<void(TRow&, FName)> OnRow)
-{
-    UDataTable* Table = TableRef.LoadSynchronous();
-    if (!Table)
-    {
-        return Err<TArray<TRow>>(FString::Printf(TEXT("%s not set in project settings"), TableName));
-    }
-
-    TArray<TRow> Result;
-    for (const auto& Pair : Table->GetRowMap())
-    {
-        const TRow* Row = reinterpret_cast<const TRow*>(Pair.Value);
-        if (!Row)
-        {
-            continue;
-        }
-
-        if (RowFilter && !RowFilter(*Row))
-        {
-            continue;
-        }
-
-        TRow RowCopy = *Row;
-        if (OnRow)
-        {
-            OnRow(RowCopy, Pair.Key);
-        }
-        Result.Add(MoveTemp(RowCopy));
-    }
-
-    if (Result.Num() == 0)
-    {
-        return Err<TArray<TRow>>(FString::Printf(TEXT("No rows matched filter in %s"), TableName));
-    }
-
-    return Ok(MoveTemp(Result));
-}
-
 bool UFlightDataSubsystem::LoadSpatialLayout()
 {
     SpatialLayoutRows.Reset();
@@ -178,15 +98,13 @@ bool UFlightDataSubsystem::LoadSpatialLayout()
 
     const FName ActiveScenario = Settings->SpatialLayoutScenario;
 
-    return LoadTableRows<FFlightSpatialLayoutRow>(
-        Settings->SpatialLayoutTable,
+    return ResolveRows<FFlightSpatialLayoutRow>(
+        Settings->GetSpatialLayoutSource(),
         TEXT("SpatialLayoutTable"),
-        // Filter: match scenario (or all if no scenario specified)
         [ActiveScenario](const FFlightSpatialLayoutRow& Row)
         {
             return ActiveScenario.IsNone() || Row.Scenario == ActiveScenario;
         },
-        // OnRow: capture the row name
         [](FFlightSpatialLayoutRow& Row, FName RowName)
         {
             Row.RowName = RowName;
@@ -228,10 +146,13 @@ bool UFlightDataSubsystem::LoadProceduralAnchors()
     }
 
     // Load all rows, then group by AnchorId
-    return LoadTableRows<FFlightProceduralAnchorRow>(
-        Settings->ProceduralAnchorTable,
+    return ResolveRows<FFlightProceduralAnchorRow>(
+        Settings->GetProceduralAnchorSource(),
         TEXT("ProceduralAnchorTable"),
-        nullptr,  // No filter - load all
+        [](const FFlightProceduralAnchorRow&)
+        {
+            return true;
+        },
         [](FFlightProceduralAnchorRow& Row, FName RowName)
         {
             if (Row.AnchorId.IsNone())
@@ -258,6 +179,64 @@ bool UFlightDataSubsystem::LoadProceduralAnchors()
         [](const FString&)
         {
             // Procedural anchors are optional - silently return false
+            return false;
+        });
+}
+
+bool UFlightDataSubsystem::LoadBehaviorCompilePolicies()
+{
+    BehaviorCompilePolicies.Reset();
+
+    const UFlightProjectDeveloperSettings* Settings = GetDefault<UFlightProjectDeveloperSettings>();
+    if (!Settings)
+    {
+        return false;
+    }
+
+    const FFlightDataTableSource Source = Settings->GetBehaviorCompilePolicySource();
+    if (!Source.IsConfigured())
+    {
+        return true;
+    }
+
+    return ResolveRows<FFlightBehaviorCompilePolicyRow>(
+        Source,
+        TEXT("BehaviorCompilePolicyTable"),
+        [](const FFlightBehaviorCompilePolicyRow&)
+        {
+            return true;
+        },
+        [](FFlightBehaviorCompilePolicyRow& Row, FName RowName)
+        {
+            Row.RowName = RowName;
+        })
+    .Map([](TArray<FFlightBehaviorCompilePolicyRow> Rows)
+    {
+        Rows.Sort([](const FFlightBehaviorCompilePolicyRow& Left, const FFlightBehaviorCompilePolicyRow& Right)
+        {
+            const int32 LeftSpecificity = Left.GetSpecificityScore();
+            const int32 RightSpecificity = Right.GetSpecificityScore();
+            if (LeftSpecificity != RightSpecificity)
+            {
+                return LeftSpecificity > RightSpecificity;
+            }
+            if (Left.Priority != Right.Priority)
+            {
+                return Left.Priority > Right.Priority;
+            }
+            return Left.RowName.LexicalLess(Right.RowName);
+        });
+        return Rows;
+    })
+    .Match(
+        [this](TArray<FFlightBehaviorCompilePolicyRow> Rows)
+        {
+            BehaviorCompilePolicies = MoveTemp(Rows);
+            return true;
+        },
+        [](const FString& Error)
+        {
+            UE_LOG(LogFlightProject, Warning, TEXT("FlightDataSubsystem: %s"), *Error);
             return false;
         });
 }
@@ -302,6 +281,19 @@ const FFlightProceduralAnchorRow* UFlightDataSubsystem::FindProceduralAnchorConf
     return nullptr;
 }
 
+const FFlightBehaviorCompilePolicyRow* UFlightDataSubsystem::FindBehaviorCompilePolicy(
+    const uint32 BehaviorId,
+    const FName CohortName,
+    const FName ProfileName) const
+{
+    if (!bBehaviorCompilePolicyLoaded || BehaviorCompilePolicies.IsEmpty())
+    {
+        return nullptr;
+    }
+
+    return SelectBestBehaviorCompilePolicy(BehaviorCompilePolicies, BehaviorId, CohortName, ProfileName);
+}
+
 void UFlightDataSubsystem::ReloadAllConfigs()
 {
     UE_LOG(LogFlightProject, Log, TEXT("FlightDataSubsystem: Reloading all configurations..."));
@@ -310,9 +302,10 @@ void UFlightDataSubsystem::ReloadAllConfigs()
     bAutopilotLoaded = LoadAutopilotConfig();
     bSpatialLayoutLoaded = LoadSpatialLayout();
     bProceduralAnchorsLoaded = LoadProceduralAnchors();
+    bBehaviorCompilePolicyLoaded = LoadBehaviorCompilePolicies();
 
-    UE_LOG(LogFlightProject, Log, TEXT("FlightDataSubsystem: Reload complete. Lighting=%d, Autopilot=%d, SpatialLayout=%d (%d rows), ProceduralAnchors=%d"),
-        bLightingLoaded, bAutopilotLoaded, bSpatialLayoutLoaded, SpatialLayoutRows.Num(), bProceduralAnchorsLoaded);
+    UE_LOG(LogFlightProject, Log, TEXT("FlightDataSubsystem: Reload complete. Lighting=%d, Autopilot=%d, SpatialLayout=%d (%d rows), ProceduralAnchors=%d, BehaviorCompilePolicies=%d (%d rows)"),
+        bLightingLoaded, bAutopilotLoaded, bSpatialLayoutLoaded, SpatialLayoutRows.Num(), bProceduralAnchorsLoaded, bBehaviorCompilePolicyLoaded, BehaviorCompilePolicies.Num());
 }
 
 bool UFlightDataSubsystem::ReloadConfig(const FString& ConfigName)
@@ -337,12 +330,17 @@ bool UFlightDataSubsystem::ReloadConfig(const FString& ConfigName)
         bProceduralAnchorsLoaded = LoadProceduralAnchors();
         return bProceduralAnchorsLoaded;
     }
+    else if (ConfigName.Equals(TEXT("BehaviorCompilePolicies"), ESearchCase::IgnoreCase))
+    {
+        bBehaviorCompilePolicyLoaded = LoadBehaviorCompilePolicies();
+        return bBehaviorCompilePolicyLoaded;
+    }
 
-    UE_LOG(LogFlightProject, Warning, TEXT("FlightDataSubsystem: Unknown config name '%s'. Valid: Lighting, Autopilot, SpatialLayout, ProceduralAnchors"), *ConfigName);
+    UE_LOG(LogFlightProject, Warning, TEXT("FlightDataSubsystem: Unknown config name '%s'. Valid: Lighting, Autopilot, SpatialLayout, ProceduralAnchors, BehaviorCompilePolicies"), *ConfigName);
     return false;
 }
 
 bool UFlightDataSubsystem::IsFullyLoaded() const
 {
-    return bLightingLoaded && bAutopilotLoaded && bSpatialLayoutLoaded && bProceduralAnchorsLoaded;
+    return bLightingLoaded && bAutopilotLoaded && bSpatialLayoutLoaded && bProceduralAnchorsLoaded && bBehaviorCompilePolicyLoaded;
 }

@@ -71,6 +71,15 @@ struct FLIGHTPROJECT_API FFlightDroidStateFragment : public FMassFragment
 	bool bIsDirty = false;
 };
 
+USTRUCT()
+struct FLIGHTPROJECT_API FFlightBehaviorCohortFragment : public FMassConstSharedFragment
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	FName CohortName = NAME_None;
+};
+
 /**
  * Visual/rendering properties for flight entities.
  * Only required when representation (Actor) is spawned.

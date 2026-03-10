@@ -7,6 +7,7 @@
 #include "UObject/UnrealType.h"
 #include "Vex/FlightVexTypes.h"
 #include "Vex/FlightVexSchema.h"
+#include "Vex/FlightVexSchemaOrchestrator.h"
 #include "Core/FlightReflection.h"
 
 namespace Flight::Vex
@@ -30,6 +31,12 @@ public:
 	/** Find an accessor by name for a specific type key. */
 	const FVexSymbolAccessor* FindSymbol(const void* TypeKey, const FString& Name) const;
 
+	/** Find an existing schema using its reflected native struct bridge. */
+	const FVexTypeSchema* GetSchemaByNativeStruct(const UScriptStruct* NativeStruct) const;
+
+	/** Register or replace a complete schema. */
+	void RegisterSchema(FVexTypeSchema Schema);
+
 private:
 	/** Map: TypeKey -> Formal Schema */
 	TMap<const void*, FVexTypeSchema> Schemas;
@@ -50,67 +57,7 @@ struct TTypeVexRegistry
 
 	static void Register()
 	{
-		using namespace Flight::Reflection;
-		
-		if constexpr (CHasFields<T>)
-		{
-			const void* TypeKey = GetTypeKey();
-			FVexTypeSchema& Schema = FVexSymbolRegistry::Get().FindOrAddSchema(TypeKey);
-			
-			// Initialize Basic Schema Metadata
-			Schema.TypeName = FString(TReflectTraits<T>::Name);
-			Schema.Size = sizeof(T);
-			Schema.Alignment = alignof(T);
-
-			TReflectTraits<T>::Fields::ForEachDescriptor([&Schema](auto Descriptor) {
-				using DescType = decltype(Descriptor);
-				
-				if constexpr (DescType::template HasAttrTemplate<Attr::VexSymbol>)
-				{
-					FVexSymbolAccessor Accessor;
-					const auto& SymbolNameAttr = DescType::template GetAttr<Attr::VexSymbol>::Value;
-					Accessor.SymbolName = FString(SymbolNameAttr.data());
-					
-					// Zero-cost direct offset
-					Accessor.MemberOffset = DescType::GetOffset();
-
-					// Type-erased Getter
-					Accessor.Getter = [](const void* Ptr) -> float {
-						const T& Instance = *static_cast<const T*>(Ptr);
-						if constexpr (std::is_convertible_v<typename DescType::FieldType, float>)
-						{
-							return static_cast<float>(DescType::Get(Instance));
-						}
-						return 0.0f;
-					};
-
-					// Type-erased Setter
-					Accessor.Setter = [](void* Ptr, float Value) {
-						T& Instance = *static_cast<T*>(Ptr);
-						if constexpr (std::is_convertible_v<float, typename DescType::FieldType>)
-						{
-							DescType::Set(Instance, static_cast<typename DescType::FieldType>(Value));
-						}
-					};
-
-					// Metadata
-					if constexpr (DescType::template HasAttrTemplate<Attr::VexResidency>)
-					{
-						Accessor.Residency = DescType::template GetAttr<Attr::VexResidency>::Value;
-					}
-					if constexpr (DescType::template HasAttrTemplate<Attr::HlslIdentifier>)
-					{
-						Accessor.HlslIdentifier = FString(DescType::template GetAttr<Attr::HlslIdentifier>::Value.data());
-					}
-					if constexpr (DescType::template HasAttrTemplate<Attr::VerseIdentifier>)
-					{
-						Accessor.VerseIdentifier = FString(DescType::template GetAttr<Attr::VerseIdentifier>::Value.data());
-					}
-
-					Schema.Symbols.Add(Accessor.SymbolName, Accessor);
-				}
-			});
-		}
+		FVexSymbolRegistry::Get().RegisterSchema(FVexSchemaOrchestrator::BuildSchemaFromReflection<T>(GetTypeKey()));
 	}
 };
 

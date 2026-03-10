@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Vex/FlightVexSchemaTypes.h"
 #include "Vex/FlightVexTypes.h"
 #include "UObject/WeakObjectPtr.h"
 
@@ -21,6 +22,7 @@ struct FVexSymbolAccessor
 	FString SymbolName;
 	GetterFn Getter;
 	SetterFn Setter;
+	EVexValueType ValueType = EVexValueType::Unknown;
 
 	/** Offset from the start of the struct (INDEX_NONE if not a simple POD field) */
 	int32 MemberOffset = INDEX_NONE;
@@ -37,6 +39,9 @@ struct FVexSymbolAccessor
  */
 struct FLIGHTPROJECT_API FVexTypeSchema
 {
+	/** Stable runtime and reporting identity for this type schema */
+	FVexTypeId TypeId;
+
 	/** Formal name of the C++ type (from traits) */
 	FString TypeName;
 
@@ -49,6 +54,9 @@ struct FLIGHTPROJECT_API FVexTypeSchema
 	/** Map of @symbols to their accessors and metadata */
 	TMap<FString, FVexSymbolAccessor> Symbols;
 
+	/** Compiler-facing logical symbol records */
+	TMap<FString, FVexLogicalSymbolSchema> LogicalSymbols;
+
 	/** Optional bridge back to Unreal's reflection if it's a USTRUCT */
 	TWeakObjectPtr<UScriptStruct> NativeStruct;
 
@@ -56,7 +64,12 @@ struct FLIGHTPROJECT_API FVexTypeSchema
 	uint32 LayoutHash = 0;
 
 	/** Returns true if this schema has a direct memory mapping for a symbol */
-	bool HasSymbol(const FString& Name) const { return Symbols.Contains(Name); }
+	bool HasSymbol(const FString& Name) const { return Symbols.Contains(Name) || LogicalSymbols.Contains(Name); }
+
+	const FVexLogicalSymbolSchema* FindLogicalSymbol(const FString& Name) const
+	{
+		return LogicalSymbols.Find(Name);
+	}
 };
 
 } // namespace Flight::Vex

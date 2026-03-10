@@ -55,6 +55,12 @@ public:
 	 * Compiles VEX source for a specific behavior ID.
 	 * Returns true only when an executable behavior is produced.
 	 */
+	bool CompileVex(uint32 BehaviorID, const FString& VexSource, FString& OutErrors, const void* TypeKey);
+
+	/**
+	 * Compatibility overload that accepts an optional reflected native struct bridge.
+	 * Prefer the explicit type-key overload for generalized schema-driven compilation.
+	 */
 	bool CompileVex(uint32 BehaviorID, const FString& VexSource, FString& OutErrors, UScriptStruct* TargetStruct = nullptr);
 
 	/**

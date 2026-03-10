@@ -5,6 +5,7 @@
 #include "MassCommonFragments.h"
 #include "MassExecutor.h"
 #include "MassEntityConfigAsset.h"
+#include "MassEntityUtils.h"
 
 #include "FlightProject/Public/FlightDataSubsystem.h"
 #include "FlightProject/Public/FlightDataTypes.h"
@@ -17,6 +18,38 @@
 #include "EngineUtils.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogFlightSwarmSpawner, Log, All);
+
+namespace
+{
+
+const FName DefaultSwarmCohortName(TEXT("Swarm.Default"));
+
+FName MakeAnchorCohortName(const AFlightSpawnSwarmAnchor& Anchor)
+{
+	const FName AnchorName = Anchor.GetAnchorId().IsNone() ? Anchor.GetFName() : Anchor.GetAnchorId();
+	return FName(*FString::Printf(TEXT("SwarmAnchor.%s"), *AnchorName.ToString()));
+}
+
+void ApplyBehaviorCohortFragment(FMassEntityManager& EntityManager, const TArray<FMassEntityHandle>& Entities, const FName CohortName)
+{
+	if (Entities.IsEmpty() || CohortName.IsNone())
+	{
+		return;
+	}
+
+	FFlightBehaviorCohortFragment CohortFragment;
+	CohortFragment.CohortName = CohortName;
+
+	const FConstSharedStruct SharedFragment = EntityManager.GetOrCreateConstSharedFragment(CohortFragment);
+	FMassArchetypeSharedFragmentValues SharedFragmentValues;
+	SharedFragmentValues.Add(SharedFragment);
+
+	TArray<FMassArchetypeEntityCollection> EntityCollections;
+	UE::Mass::Utils::CreateEntityCollections(EntityManager, Entities, FMassArchetypeEntityCollection::NoDuplicates, EntityCollections);
+	EntityManager.BatchAddSharedFragmentsForEntities(EntityCollections, SharedFragmentValues);
+}
+
+} // namespace
 
 void UFlightSwarmSpawnerSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
@@ -88,6 +121,7 @@ void UFlightSwarmSpawnerSubsystem::SpawnMassEntities(const FFlightAutopilotConfi
         MassSpawner->SpawnEntities(TemplateID, Count, FConstStructView(), nullptr, SpawnedEntities);
 
         FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
+        ApplyBehaviorCohortFragment(EntityManager, SpawnedEntities, MakeAnchorCohortName(*Anchor));
 
         float PhaseOffset = Anchor->GetPhaseOffsetDeg();
         float PhaseSpread = Anchor->GetPhaseSpreadDeg();
@@ -133,6 +167,7 @@ void UFlightSwarmSpawnerSubsystem::SpawnMassEntities(const FFlightAutopilotConfi
             MassSpawner->SpawnEntities(TemplateID, Count, FConstStructView(), nullptr, SpawnedEntities);
             
             FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
+            ApplyBehaviorCohortFragment(EntityManager, SpawnedEntities, DefaultSwarmCohortName);
             for (int32 i = 0; i < SpawnedEntities.Num(); ++i)
             {
                 FMassEntityHandle Entity = SpawnedEntities[i];

@@ -19,16 +19,21 @@ This document catalogs the runtime actors, data sources, and interaction flows t
 | `AFlightNavBuoyRegion` | Editor-placeable buoy ring | Generates nav probe layout rows around its transform. |
 | `UFlightSpatialLayoutSourceComponent` | Component for layout rows | Lets any actor contribute layout rows that `AFlightSpatialLayoutDirector` will spawn. |
 | `AFlightSpatialLayoutDirector` | Orchestrates layout spawns | Aggregates CSV rows + layout components, spawns `AFlightSpatialTestEntity` actors. |
-| `UFlightDataSubsystem` | CSV-backed data loader | Provides lighting, autopilot, spatial layout, and procedural anchor overrides. |
+| `UFlightDataSubsystem` | Resolved gameplay-data ingress/binding arbiter | Provides typed lighting, autopilot, spatial layout, and procedural anchor data without becoming a live runtime blackboard. |
 | `UFlightSwarmSpawnerSubsystem` | Swarm orchestration (Plugin) | Spawns Mass Entities based on anchors, using `MassSpawnerSubsystem`. |
 | `UFlightProjectDeveloperSettings` | Config entry point | Points to CSV paths & tuning values. |
 
 ## Data-driven configuration
 
-- **Lighting & Autopilot** – `Content/Data/FlightLightingConfig.csv` and `FlightAutopilotConfig.csv` feed `UFlightDataSubsystem`.
+- **Lighting & Autopilot** – `Content/Data/FlightLightingConfig.csv` and `FlightAutopilotConfig.csv` currently feed `UFlightDataSubsystem`.
 - **Mass Entity Config** – `DA_SwarmDroneConfig` (Data Asset) defines the composition of a swarm drone (Traits: `FlightSwarmTrait`, etc).
 - **Static Spatial Layout** – `FlightSpatialLayout.csv` lists explicit points.
-- **Developer Settings** – `Config/DefaultGame.ini` sets the CSV paths.
+- **Developer Settings** – `Config/DefaultGame.ini` currently sets the default table paths and selected rows.
+
+Boundary note:
+
+- `UFlightDataSubsystem` is the source/binding/cache surface for resolved gameplay data
+- active world truth, live execution state, and inter-system runtime ownership should remain in orchestration or domain subsystems instead of accreting into a general-purpose data blackboard
 
 ## Drone swarm flow (Mass/ECS)
 
@@ -59,6 +64,6 @@ This document catalogs the runtime actors, data sources, and interaction flows t
 3. **Validate** – Check Output Log for "Mass Spawned X entities".
 
 ## Future cleanup goals
-- **Unify CSV ingestion** – Replace the repetitive `UFlightDataSubsystem` table loaders with a shared helper.
+- **Unify data ingress** – Replace the repetitive `UFlightDataSubsystem` table loaders with a shared resolver/helper that can support additional ingress formats cleanly.
 - **Anchor runtime base** – Introduce a shared procedural-anchor component.
 - **Batch nav-graph updates** – Extend `UFlightNavGraphDataHubSubsystem` with scoped/batched notifications.

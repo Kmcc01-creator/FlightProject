@@ -1,13 +1,53 @@
 // Copyright Kelly Rey Wilson. All Rights Reserved.
 
 #include "Mass/UFlightVexBehaviorProcessor.h"
+
 #include "Mass/FlightMassFragments.h"
-#include "Verse/UFlightVerseSubsystem.h"
-#include "Verse/UFlightVexTaskSubsystem.h"
-#include "Swarm/FlightSwarmSubsystem.h"
 #include "MassExecutionContext.h"
 #include "MassEntitySubsystem.h"
+#include "Orchestration/FlightBehaviorBinding.h"
+#include "Orchestration/FlightOrchestrationSubsystem.h"
+#include "Swarm/FlightSwarmSubsystem.h"
 #include "Swarm/SwarmSimulationTypes.h"
+#include "Verse/UFlightVerseSubsystem.h"
+#include "Verse/UFlightVexTaskSubsystem.h"
+
+namespace
+{
+
+const FName DefaultSwarmCohortName(TEXT("Swarm.Default"));
+
+bool IsBehaviorExecutable(const UFlightVerseSubsystem::FVerseBehavior& Behavior)
+{
+	return Behavior.bHasExecutableProcedure || Behavior.bUsesNativeFallback || Behavior.SimdPlan.IsValid();
+}
+
+bool ResolveFallbackBehaviorSelection(const UFlightVerseSubsystem& VerseSubsystem, uint32& OutBehaviorID)
+{
+	const TPair<uint32, UFlightVerseSubsystem::FVerseBehavior>* SelectedPair = nullptr;
+	for (const TPair<uint32, UFlightVerseSubsystem::FVerseBehavior>& Pair : VerseSubsystem.Behaviors)
+	{
+		if (!IsBehaviorExecutable(Pair.Value))
+		{
+			continue;
+		}
+
+		if (!SelectedPair || Pair.Key < SelectedPair->Key)
+		{
+			SelectedPair = &Pair;
+		}
+	}
+
+	if (!SelectedPair)
+	{
+		return false;
+	}
+
+	OutBehaviorID = SelectedPair->Key;
+	return true;
+}
+
+} // namespace
 
 UFlightVexBehaviorProcessor::UFlightVexBehaviorProcessor()
 {
@@ -16,56 +56,106 @@ UFlightVexBehaviorProcessor::UFlightVexBehaviorProcessor()
 	RegisterQuery(EntityQuery);
 }
 
+bool UFlightVexBehaviorProcessor::ResolveBehaviorSelection(
+	UWorld* World,
+	const UFlightVerseSubsystem& VerseSubsystem,
+	uint32& OutBehaviorID,
+	Flight::Orchestration::FFlightBehaviorBinding* OutBinding,
+	const FName CohortName)
+{
+	if (OutBinding)
+	{
+		*OutBinding = Flight::Orchestration::FFlightBehaviorBinding();
+	}
+
+	if (World)
+	{
+		if (const UFlightOrchestrationSubsystem* OrchestrationSubsystem = World->GetSubsystem<UFlightOrchestrationSubsystem>())
+		{
+			const FName EffectiveCohortName = CohortName.IsNone() ? DefaultSwarmCohortName : CohortName;
+			Flight::Orchestration::FFlightBehaviorBinding Binding;
+			if (OrchestrationSubsystem->TryGetBindingForCohort(EffectiveCohortName, Binding))
+			{
+				if (const UFlightVerseSubsystem::FVerseBehavior* Behavior = VerseSubsystem.Behaviors.Find(Binding.BehaviorID);
+					Behavior && IsBehaviorExecutable(*Behavior))
+				{
+					OutBehaviorID = Binding.BehaviorID;
+					if (OutBinding)
+					{
+						*OutBinding = Binding;
+					}
+					return true;
+				}
+			}
+		}
+	}
+
+	return ResolveFallbackBehaviorSelection(VerseSubsystem, OutBehaviorID);
+}
+
 void UFlightVexBehaviorProcessor::ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager)
 {
 	// We require the transform and drone state fragments
 	EntityQuery.AddRequirement<FFlightTransformFragment>(EMassFragmentAccess::ReadWrite);
 	EntityQuery.AddRequirement<FFlightDroidStateFragment>(EMassFragmentAccess::ReadWrite);
+	EntityQuery.AddConstSharedRequirement<FFlightBehaviorCohortFragment>(EMassFragmentPresence::Optional);
 }
 
 void UFlightVexBehaviorProcessor::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
 {
 	UWorld* World = GetWorld();
-	UFlightVerseSubsystem* VerseSubsystem = World->GetSubsystem<UFlightVerseSubsystem>();
-	UFlightVexTaskSubsystem* TaskSubsystem = World->GetSubsystem<UFlightVexTaskSubsystem>();
-	UFlightSwarmSubsystem* SwarmSubsystem = World->GetSubsystem<UFlightSwarmSubsystem>();
-	
-	if (!VerseSubsystem || !TaskSubsystem || !SwarmSubsystem) return;
+	UFlightVerseSubsystem* VerseSubsystem = World ? World->GetSubsystem<UFlightVerseSubsystem>() : nullptr;
+	UFlightVexTaskSubsystem* TaskSubsystem = World ? World->GetSubsystem<UFlightVexTaskSubsystem>() : nullptr;
+	UFlightSwarmSubsystem* SwarmSubsystem = World ? World->GetSubsystem<UFlightSwarmSubsystem>() : nullptr;
+
+	if (!VerseSubsystem || !TaskSubsystem || !SwarmSubsystem)
+	{
+		return;
+	}
 
 	const uint32 CurrentFrame = static_cast<uint32>(GFrameCounter);
 	TArray<UE::Tasks::FTask> ActiveTasks;
 
 	EntityQuery.ForEachEntityChunk(Context, [&](FMassExecutionContext& ChunkContext)
 	{
-		const uint32 BehaviorID = 1; 
-		const auto* Behavior = VerseSubsystem->Behaviors.Find(BehaviorID);
-		
-		if (Behavior)
+		const FFlightBehaviorCohortFragment* CohortFragment = ChunkContext.GetConstSharedFragmentPtr<FFlightBehaviorCohortFragment>();
+		const FName CohortName = (CohortFragment && !CohortFragment->CohortName.IsNone())
+			? CohortFragment->CohortName
+			: DefaultSwarmCohortName;
+
+		uint32 BehaviorID = 0;
+		if (!ResolveBehaviorSelection(World, *VerseSubsystem, BehaviorID, nullptr, CohortName))
 		{
-			uint32 Interval = Behavior->FrameInterval;
-			if (Behavior->ExecutionRateHz > 0.0f)
-			{
-				Interval = FMath::Max(1u, static_cast<uint32>(60.0f / Behavior->ExecutionRateHz));
-			}
-			if (CurrentFrame % Interval != 0) return;
+			return;
+		}
+
+		const UFlightVerseSubsystem::FVerseBehavior* Behavior = VerseSubsystem->Behaviors.Find(BehaviorID);
+		if (!Behavior)
+		{
+			return;
+		}
+
+		uint32 Interval = Behavior->FrameInterval;
+		if (Behavior->ExecutionRateHz > 0.0f)
+		{
+			Interval = FMath::Max(1u, static_cast<uint32>(60.0f / Behavior->ExecutionRateHz));
+		}
+		if (CurrentFrame % Interval != 0)
+		{
+			return;
 		}
 
 		const TArrayView<::FFlightTransformFragment> Transforms = ChunkContext.GetMutableFragmentView<::FFlightTransformFragment>();
 		const TArrayView<::FFlightDroidStateFragment> DroidStates = ChunkContext.GetMutableFragmentView<::FFlightDroidStateFragment>();
 		const int32 NumEntities = ChunkContext.GetNumEntities();
 
-		// PILOT: Direct SIMD path
-		if (Behavior && Behavior->Tier == Flight::Vex::EVexTier::Literal && Behavior->SimdPlan.IsValid())
+		if (Behavior->Tier == Flight::Vex::EVexTier::Literal && Behavior->SimdPlan.IsValid())
 		{
 			VerseSubsystem->ExecuteBehaviorDirect(BehaviorID, Transforms, DroidStates);
-			
-			// Optional: Update SwarmSubsystem if needed, or assume Direct SIMD handles internal state.
-			// For this pilot, we'll still request a sort if any were dirty.
 			SwarmSubsystem->RequestSort(ESwarmSortRequirement::Behavior);
 			return;
 		}
 
-		// FALLBACK: Gather/Scatter path
 		TArray<Flight::Swarm::FDroidState> ModifiedDroids;
 		ModifiedDroids.SetNumUninitialized(NumEntities);
 
@@ -75,24 +165,21 @@ void UFlightVexBehaviorProcessor::Execute(FMassEntityManager& EntityManager, FMa
 
 			for (int32 i = 0; i < NumEntities; ++i)
 			{
-				Transforms[i].Location = (FVector)ModifiedDroids[i].Position;
-				Transforms[i].Velocity = (FVector)ModifiedDroids[i].Velocity;
+				Transforms[i].Location = static_cast<FVector>(ModifiedDroids[i].Position);
+				Transforms[i].Velocity = static_cast<FVector>(ModifiedDroids[i].Velocity);
 				DroidStates[i].Shield = ModifiedDroids[i].Shield;
 				DroidStates[i].bIsDirty = true;
 			}
 		};
 
-		bool bHasJob = Behavior != nullptr; 
-
-		// Initialize ModifiedDroids with current state
 		for (int32 i = 0; i < NumEntities; ++i)
 		{
-			ModifiedDroids[i].Position = (FVector3f)Transforms[i].Location;
-			ModifiedDroids[i].Velocity = (FVector3f)Transforms[i].Velocity;
+			ModifiedDroids[i].Position = static_cast<FVector3f>(Transforms[i].Location);
+			ModifiedDroids[i].Velocity = static_cast<FVector3f>(Transforms[i].Velocity);
 			ModifiedDroids[i].Shield = DroidStates[i].Shield;
 		}
 
-		if (bHasJob && Behavior->bIsAsync)
+		if (Behavior->bIsAsync)
 		{
 			ActiveTasks.Add(TaskSubsystem->LaunchVexJob(BehaviorID, 0, [ProcessChunk]()
 			{

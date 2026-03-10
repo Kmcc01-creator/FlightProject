@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Engine/DeveloperSettings.h"
 #include "Engine/DataTable.h"
+#include "FlightDataSources.h"
 #include "FlightProjectDeveloperSettings.generated.h"
 
 class UDataTable;
@@ -14,6 +15,12 @@ class FLIGHTPROJECT_API UFlightProjectDeveloperSettings : public UDeveloperSetti
 
 public:
     UFlightProjectDeveloperSettings();
+
+    FFlightDataRowSource GetLightingConfigSource() const;
+    FFlightDataRowSource GetAutopilotConfigSource() const;
+    FFlightDataTableSource GetSpatialLayoutSource() const;
+    FFlightDataTableSource GetProceduralAnchorSource() const;
+    FFlightDataTableSource GetBehaviorCompilePolicySource() const;
 
     UPROPERTY(EditAnywhere, Config, Category = "Flight|Mass")
     int32 DefaultMassBatchSize;
@@ -30,23 +37,23 @@ public:
     UPROPERTY(EditAnywhere, Config, Category = "Flight|Simulation")
     float HighAltitudeThreshold;
 
-    /** Data table containing lighting configuration (row type: FFlightLightingConfigRow) */
+    /** Current default ingress asset for lighting configuration (row type: FFlightLightingConfigRow). */
     UPROPERTY(EditAnywhere, Config, Category = "Flight|Data", meta = (RequiredAssetDataTags = "RowStructure=/Script/FlightProject.FlightLightingConfigRow"))
     TSoftObjectPtr<UDataTable> LightingConfigTable;
 
-    /** Row name to use from the lighting config table */
+    /** Selected lighting contract row in the current default ingress asset. */
     UPROPERTY(EditAnywhere, Config, Category = "Flight|Data")
     FName LightingConfigRow;
 
-    /** Data table containing autopilot configuration (row type: FFlightAutopilotConfigRow) */
+    /** Current default ingress asset for autopilot configuration (row type: FFlightAutopilotConfigRow). */
     UPROPERTY(EditAnywhere, Config, Category = "Flight|Data", meta = (RequiredAssetDataTags = "RowStructure=/Script/FlightProject.FlightAutopilotConfigRow"))
     TSoftObjectPtr<UDataTable> AutopilotConfigTable;
 
-    /** Row name to use from the autopilot config table */
+    /** Selected autopilot contract row in the current default ingress asset. */
     UPROPERTY(EditAnywhere, Config, Category = "Flight|Data")
     FName AutopilotConfigRow;
 
-    /** Data table containing spatial layout entities (row type: FFlightSpatialLayoutRow) */
+    /** Current default ingress asset for spatial layout entities (row type: FFlightSpatialLayoutRow). */
     UPROPERTY(EditAnywhere, Config, Category = "Flight|Data", meta = (RequiredAssetDataTags = "RowStructure=/Script/FlightProject.FlightSpatialLayoutRow"))
     TSoftObjectPtr<UDataTable> SpatialLayoutTable;
 
@@ -54,7 +61,11 @@ public:
     UPROPERTY(EditAnywhere, Config, Category = "Flight|Data")
     FName SpatialLayoutScenario;
 
-    /** Data table containing procedural anchor overrides (row type: FFlightProceduralAnchorRow) */
+    /** Current default ingress asset for procedural anchor overrides (row type: FFlightProceduralAnchorRow). */
     UPROPERTY(EditAnywhere, Config, Category = "Flight|Data", meta = (RequiredAssetDataTags = "RowStructure=/Script/FlightProject.FlightProceduralAnchorRow"))
     TSoftObjectPtr<UDataTable> ProceduralAnchorTable;
+
+    /** Current default ingress asset for behavior compile policy rows (row type: FFlightBehaviorCompilePolicyRow). */
+    UPROPERTY(EditAnywhere, Config, Category = "Flight|Data", meta = (RequiredAssetDataTags = "RowStructure=/Script/FlightProject.FlightBehaviorCompilePolicyRow"))
+    TSoftObjectPtr<UDataTable> BehaviorCompilePolicyTable;
 };

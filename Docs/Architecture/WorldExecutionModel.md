@@ -174,6 +174,7 @@ This should remain explicit and machine-readable.
 
 | System | Recommended Role |
 | --- | --- |
+| `UFlightDataSubsystem` | Game-instance data ingress/binding boundary. Resolve authored contracts, overrides, and defaults without becoming a live runtime blackboard. |
 | `UFlightWorldBootstrapSubsystem` | World setup/orchestration layer. Resume simulation, apply lighting policy, ensure layout actors. |
 | `UFlightSwarmSubsystem` | Authoritative simulation service for swarm GPU state and reactive parameter ingress. |
 | `UFlightSpatialSubsystem` | Spatial service registry and force aggregation boundary. |
@@ -184,6 +185,7 @@ This should remain explicit and machine-readable.
 
 The current codebase already shows the right pattern in several places:
 
+- `UFlightDataSubsystem` centralizes resolved authored data ingress so world/runtime consumers do not parse source formats directly.
 - `UFlightWorldBootstrapSubsystem` handles environment setup and world coordination rather than sim internals.
 - `UFlightSwarmSubsystem` owns reactive inputs, persistent GPU resources, and simulation tick behavior.
 - `FSwarmSceneViewExtension` reads shared render data and composites into the post-process chain.
@@ -228,7 +230,7 @@ The current codebase already shows the right pattern in several places:
 
 | Class / System | Layer | Primary Responsibility | Ownership Notes |
 | --- | --- | --- | --- |
-| `UFlightDataSubsystem` | World Services | Load and cache authored config rows for runtime consumption. | Keeps data ingestion outside hot loops and out of level scripts. |
+| `UFlightDataSubsystem` | World Services | Load, bind, merge, and cache authored data contracts for runtime consumption. | Good place for source arbitration and typed config access; not the right home for live world truth or a general-purpose runtime blackboard. |
 | `UFlightWorldBootstrapSubsystem` | World Services | Resume Mass, apply lighting policy, ensure layout actors. | Good example of world orchestration instead of simulation ownership. |
 | `UFlightSpatialSubsystem` | World Services | Register spatial fields and expose aggregate queries. | Should remain a boundary registry, not a place for arbitrary actor traversal. |
 | `UFlightSwarmSubsystem` | World Services + Simulation Boundary | Own reactive ingress, GPU resources, simulation tick, and render bridge state. | This is the best current template for a sim domain attached to Unreal safely. |
@@ -236,6 +238,12 @@ The current codebase already shows the right pattern in several places:
 | Mass processors/fragments | Simulation | Execute authoritative entity updates. | Keep plain-data oriented. |
 | `FSwarmSceneViewExtension` | Presentation | Read sim-owned buffers and composite the frame. | Presentation adapter only; should not own gameplay truth. |
 | Niagara systems / data interfaces | Authoring + Presentation | Visualize or expose render-facing state. | Useful for visualization, but should not become the simulation authority. |
+
+Important boundary note:
+
+- `UFlightDataSubsystem` is a good home for source arbitration, typed binding, merged defaults, and resolved gameplay data
+- it is not the right home for live world-specific truth, frame-relevant interop state, or execution ownership
+- those responsibilities belong to world-scoped coordination surfaces such as orchestration or to domain-owned runtime services
 
 ## 4. Recommended Dataflow
 

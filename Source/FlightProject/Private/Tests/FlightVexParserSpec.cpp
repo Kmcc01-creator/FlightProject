@@ -58,11 +58,12 @@ void FFlightVexParserSpec::Define()
 
 	Describe("Verse Lowering", [this]() {
 		It("should generate idiomatic Verse code", [this]() {
-			FString Source = TEXT("@velocity = {0,0,0};");
+			FString Source = TEXT("@velocity = @position;");
 			auto Result = Flight::Vex::ParseAndValidate(Source, MockSymbols, false);
 			
 			TMap<FString, FString> SymbolMap;
 			SymbolMap.Add(TEXT("@velocity"), TEXT("Droid.Velocity"));
+			SymbolMap.Add(TEXT("@position"), TEXT("Droid.Position"));
 			FString Output = Flight::Vex::LowerToVerse(Result.Program, TArray<Flight::Vex::FVexSymbolDefinition>(), SymbolMap);
 			
 			TestTrue("Uses 'set' keyword", Output.Contains(TEXT("set Droid.Velocity")));

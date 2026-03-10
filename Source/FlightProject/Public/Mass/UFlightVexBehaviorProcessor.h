@@ -6,6 +6,14 @@
 #include "MassProcessor.h"
 #include "UFlightVexBehaviorProcessor.generated.h"
 
+class UFlightVerseSubsystem;
+class UWorld;
+
+namespace Flight::Orchestration
+{
+struct FFlightBehaviorBinding;
+}
+
 /**
  * Mass processor that executes VEX-generated Verse behaviors.
  * 
@@ -19,6 +27,12 @@ class FLIGHTPROJECT_API UFlightVexBehaviorProcessor : public UMassProcessor
 
 public:
 	UFlightVexBehaviorProcessor();
+	static bool ResolveBehaviorSelection(
+		UWorld* World,
+		const UFlightVerseSubsystem& VerseSubsystem,
+		uint32& OutBehaviorID,
+		Flight::Orchestration::FFlightBehaviorBinding* OutBinding = nullptr,
+		FName CohortName = NAME_None);
 
 protected:
 	virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;

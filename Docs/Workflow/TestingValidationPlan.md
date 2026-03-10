@@ -8,24 +8,24 @@ Establish a repeatable full-suite validation flow for FlightProject that:
 - surfaces architecture breakpoints early,
 - makes failures actionable from logs and source locations.
 
-## Status Snapshot (March 9, 2026)
+## Status Snapshot (March 10, 2026)
 
-- Phase 2 is currently green after targeted fixes in AutoRTFM + VEX SIMD paths.
-- Targeted rerun (`FlightProject.AutoRTFM.Integration+FlightProject.Vex.Simd.Parity`) passes:
-  - `Saved/Logs/FlightProject-backup-2026.03.09-04.32.45.log:101,107,109,110`
-- Full phase-2 filter rerun passes (`63` tests, exit code `0`):
-  - `Saved/Logs/FlightProject.log:105,297`
-- GPU phase remains environment-dependent; previous failure was Vulkan device enumeration (`VK_ERROR_INITIALIZATION_FAILED`, zero devices):
-  - `Saved/Logs/FlightProject-backup-2026.03.09-04.14.54.log:535,538,539`
+- Phase 1 is currently green on the default `triage` preset.
+- Phase 1 now includes the lightweight startup sequencing complex suite:
+  - `FlightProject.Integration.Startup.Sequencing.BootstrapCompletionSignal`
+  - `FlightProject.Integration.Startup.Sequencing.OrchestrationRebuildAdvancesPlan`
+  - `FlightProject.Integration.Startup.Sequencing.StartupReportJsonSurface`
+- Phase 2 is currently green after the earlier AutoRTFM + VEX SIMD fixes, the Milestone-0 logging/parser cleanup, and the deeper orchestration-binding slice that added anchor legality coverage.
+- GPU phase remains environment-dependent and is still blocked before automation discovery in the current runner.
 
 ## Current Test Topology
 
 Based on current `Source/FlightProject/Private/Tests` declarations:
 
-- `65` simple automation tests (`IMPLEMENT_SIMPLE_AUTOMATION_TEST`)
-- `2` complex/generated tests (`IMPLEMENT_COMPLEX_AUTOMATION_TEST`)
+- `81` simple automation tests (`IMPLEMENT_SIMPLE_AUTOMATION_TEST`)
+- `9` complex/generated tests (`IMPLEMENT_COMPLEX_AUTOMATION_TEST`)
 - `3` spec tests (`BEGIN_DEFINE_SPEC`)
-- `18` test files with declared automation/spec entries
+- `33` test files with declared automation/spec entries
 
 Generated test frameworks:
 
@@ -63,14 +63,20 @@ Generated test frameworks:
 
 ## Evidence From Recent Runs
 
-- Pass: targeted parity rerun (`2` tests)
-  - filter: `FlightProject.AutoRTFM.Integration+FlightProject.Vex.Simd.Parity`
-  - log: `Saved/Logs/FlightProject-backup-2026.03.09-04.32.45.log:101,110`
-- Pass: phase-2 automation filter (`63` tests)
-  - filter: `FlightProject.Schema+FlightProject.Vex.RewriteRegistry+FlightProject.Vex.TreeTraits.IR.PostOrder+FlightProject.Vex.Parsing+FlightProject.Vex.Simd+FlightProject.Vex.UI+FlightProject.Verse+FlightProject.Verse.Bytecode+FlightProject.AutoRTFM+FlightProject.Gpu.Reactive+FlightProject.Logging+FlightProject.Swarm.Pipeline+FlightProject.Spatial.GpuPerception+FlightProject.Benchmark.GpuPerception+FlightProject.Reactive+FlightProject.Reflection+FlightProject.Functional`
-  - log: `Saved/Logs/FlightProject.log:105,297`
-- Historical failure context (now resolved):
-  - `FlightProject.AutoRTFM.Integration` and `FlightProject.Vex.Simd.Parity` previously failed in phase 2 before the fixes listed below.
+- Pass: startup sequencing complex suite (`3` tests)
+  - filter: `FlightProject.Integration.Startup.Sequencing`
+- Pass: orchestration binding bucket (`5` tests)
+  - filter: `FlightProject.Orchestration.Bindings`
+  - cases:
+    - `PlanPrefersExecutableBehavior`
+    - `ProcessorResolverPrefersOrchestration`
+    - `AnchorPreferenceLegality`
+    - `AnchorContractLegality`
+    - `ProcessorResolverFallback`
+- Pass: phase-1 automation filter (`27` tests)
+  - filter: `FlightProject.Integration.SchemaDriven+FlightProject.Integration.Vex.VerticalSlice+FlightProject.Integration.Concurrency+FlightProject.Integration.Startup.Sequencing+FlightProject.Unit.Safety.MemoryLayout+FlightProject.Vex.Parser.Spec`
+- Pass: phase-2 automation filter (`50` tests)
+  - filter: `FlightProject.Schema+FlightProject.Vex.RewriteRegistry+FlightProject.Vex.TreeTraits.IR.PostOrder+FlightProject.Vex.Parsing+FlightProject.Vex.Simd+FlightProject.Vex.UI+FlightProject.Verse+FlightProject.Verse.Bytecode+FlightProject.AutoRTFM+FlightProject.Gpu.Reactive+FlightProject.Logging+FlightProject.Orchestration+FlightProject.Swarm.Pipeline+FlightProject.Spatial.GpuPerception+FlightProject.Benchmark.GpuPerception+FlightProject.Reactive+FlightProject.Reflection+FlightProject.Functional`
 
 ## Current Architecture Risk Points
 
@@ -102,13 +108,13 @@ Equivalent explicit phased commands are listed below for manual/debug runs.
 ### Phase 1: Complex/Generated + Spec (run first)
 
 ```bash
-TEST_STREAM_FILTER=errors ./Scripts/run_tests_headless.sh --timestamps --filter="FlightProject.Integration.SchemaDriven+FlightProject.Integration.Vex.VerticalSlice+FlightProject.Integration.Concurrency+FlightProject.Unit.Safety.MemoryLayout+FlightProject.Vex.Parser.Spec"
+TEST_STREAM_FILTER=errors ./Scripts/run_tests_headless.sh --timestamps --filter="FlightProject.Integration.SchemaDriven+FlightProject.Integration.Vex.VerticalSlice+FlightProject.Integration.Concurrency+FlightProject.Integration.Startup.Sequencing+FlightProject.Unit.Safety.MemoryLayout+FlightProject.Vex.Parser.Spec"
 ```
 
 ### Phase 2: Simple Automation (run second)
 
 ```bash
-TEST_STREAM_FILTER=errors ./Scripts/run_tests_headless.sh --timestamps --filter="FlightProject.Schema+FlightProject.Vex.RewriteRegistry+FlightProject.Vex.TreeTraits.IR.PostOrder+FlightProject.Vex.Parsing+FlightProject.Vex.Simd+FlightProject.Vex.UI+FlightProject.Verse+FlightProject.Verse.Bytecode+FlightProject.AutoRTFM+FlightProject.Gpu.Reactive+FlightProject.Logging+FlightProject.Swarm.Pipeline+FlightProject.Spatial.GpuPerception+FlightProject.Benchmark.GpuPerception+FlightProject.Reactive+FlightProject.Reflection+FlightProject.Functional"
+TEST_STREAM_FILTER=errors ./Scripts/run_tests_headless.sh --timestamps --filter="FlightProject.Schema+FlightProject.Vex.RewriteRegistry+FlightProject.Vex.TreeTraits.IR.PostOrder+FlightProject.Vex.Parsing+FlightProject.Vex.Simd+FlightProject.Vex.UI+FlightProject.Verse+FlightProject.Verse.Bytecode+FlightProject.AutoRTFM+FlightProject.Gpu.Reactive+FlightProject.Logging+FlightProject.Orchestration+FlightProject.Swarm.Pipeline+FlightProject.Spatial.GpuPerception+FlightProject.Benchmark.GpuPerception+FlightProject.Reactive+FlightProject.Reflection+FlightProject.Functional"
 ```
 
 ### Phase 3: Optional GPU/System pass
@@ -119,7 +125,7 @@ TEST_SCOPE=all TEST_STREAM_FILTER=errors ./Scripts/run_tests_full.sh
 
 ## Immediate Next Targets
 
-1. Run full phased validation (`run_tests_phased.sh`) after each substantial parser/SIMD change.
-2. Keep phase-2 focused rerun (`FlightProject.AutoRTFM.Integration+FlightProject.Vex.Simd.Parity`) as a fast gate for this regression class.
-3. Finalize GPU phase validation on Vulkan-capable environments and document pass/fail criteria.
-4. Update `build_targets.sh --verify` to include at least phase 1 + phase 2, or explicitly include the parity gate subset.
+1. Keep the new orchestration binding bucket and the lightweight startup sequencing suite passing while the runtime boundary evolves.
+2. Extend binding legality beyond default/exact fallback and current anchor-aware rules into startup-profile-aware behavior resolution and clearer legality reporting.
+3. Add a dedicated startup fixture world/profile path when we are ready to assert full `StartPlay()` and post-spawn orchestration deltas.
+4. Finalize GPU phase validation on Vulkan-capable or software-Vulkan environments and document pass/fail criteria.

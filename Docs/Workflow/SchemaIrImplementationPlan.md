@@ -210,6 +210,12 @@ Update `CompileVex(...)` to:
 - resolve schema from explicit type key
 - stop using `UScriptStruct*` as a generic schema key
 - build compile-time symbol information from schema logical symbols
+- resolve the best matching authored behavior compile policy from `UFlightDataSubsystem`
+- apply policy inputs where legal:
+  - preferred execution domain
+  - fallback allowance
+  - required symbol/contract expectations
+- record selected policy in compile diagnostics or artifact/report output
 
 Keep phase-one behavior:
 

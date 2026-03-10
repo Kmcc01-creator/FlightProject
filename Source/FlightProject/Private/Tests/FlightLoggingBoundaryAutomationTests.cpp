@@ -53,6 +53,11 @@ public:
         return true;
     }
 
+    virtual bool CanBeUsedOnMultipleThreads() const override
+    {
+        return true;
+    }
+
     void Reset()
     {
         Categories.Reset();

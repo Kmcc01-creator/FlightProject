@@ -24,18 +24,35 @@ This section captures the most recent observed build/test outcomes and commands 
   - mega-kernel hoisting/local alias generation aligned with parser tests
 
 ### Latest Headless Automation Snapshot (2026-03-10)
-- Full phased headless validation is currently **not green**.
-- Phase 1 (`24` tests) has `1` failing spec:
+- Full phased headless validation is currently **green** on the default `triage` preset.
+- Verified on March 10, 2026 with:
+  - `./Scripts/run_tests_headless.sh --preset=triage --filter="FlightProject.Vex.Parser.Spec"`
+  - `./Scripts/run_tests_headless.sh --preset=triage --filter="FlightProject.Logging.Boundaries"`
+  - `./Scripts/run_tests_headless.sh --preset=triage --filter="FlightProject.Integration.Startup.Sequencing"`
+  - `./Scripts/run_tests_headless.sh --preset=triage --filter="FlightProject.Orchestration.Bindings"`
+  - `TEST_PRESET=triage ./Scripts/run_tests_phased.sh --timestamps`
+- Phase 1 now passes (`27` tests, exit code `0`).
+- Phase 2 now passes (`50` tests, exit code `0`).
+- The previously failing tests are now passing:
   - `FlightProject.Vex.Parser.Spec.Verse Lowering.should generate idiomatic Verse code`
-  - evidence: `Saved/Logs/FlightProject-backup-2026.03.10-00.57.49.log:177-178`
-- Phase 2 (`45` tests) has `2` failing logging-boundary tests:
   - `FlightProject.Logging.Boundaries.DualSinkNoDuplication`
   - `FlightProject.Logging.Boundaries.UnrealOutputBridge`
-  - evidence: `Saved/Logs/FlightProject-backup-2026.03.10-00.57.59.log:181-193`
-- The new VEX artifact-report automation is passing in headless mode:
-  - `FlightProject.Functional.Vex.CompileArtifactReport`
-- The current recommended headless command is:
-  - `TEST_PRESET=triage ./Scripts/run_tests_phased.sh --timestamps`
+- The lightweight startup sequencing suite is also passing in Phase 1:
+  - `FlightProject.Integration.Startup.Sequencing.BootstrapCompletionSignal`
+  - `FlightProject.Integration.Startup.Sequencing.OrchestrationRebuildAdvancesPlan`
+  - `FlightProject.Integration.Startup.Sequencing.StartupReportJsonSurface`
+- The new orchestration binding automation is also passing in Phase 2:
+  - `FlightProject.Orchestration.Bindings.PlanPrefersExecutableBehavior`
+  - `FlightProject.Orchestration.Bindings.ProcessorResolverPrefersOrchestration`
+  - `FlightProject.Orchestration.Bindings.AnchorPreferenceLegality`
+  - `FlightProject.Orchestration.Bindings.AnchorContractLegality`
+  - `FlightProject.Orchestration.Bindings.ProcessorResolverFallback`
+- Anchor legality is now part of the runtime binding baseline:
+  - swarm anchors can author preferred, allowed, denied, and required-contract behavior policy;
+  - orchestration enforces those constraints during per-cohort plan rebuild;
+  - the remaining legality TODO is startup-profile-aware policy layered above anchor/default selection.
+- `FlightProject.Functional.Vex.CompileArtifactReport` remains passing in headless mode.
+- Headless runs still emit `LogFlightGpuBridge: Error: Failed to initialize Vulkan io_uring reactor` during startup in this environment, but that is not currently failing the non-GPU automation phases.
 
 ### Latest GPU/Vulkan Snapshot (2026-03-10)
 - Full GPU-required validation is currently blocked before automation discovery.

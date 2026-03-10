@@ -7,6 +7,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Misc/OutputDeviceRedirector.h"
 #include "Core/FlightReflection.h"
 #include "Core/FlightFunctional.h"
 #include "Core/FlightRowTypes.h"
@@ -117,6 +118,8 @@ public:
      */
     void Log(ELogLevel Level, FName Category, const FString& Message, const FLogContext& Context = {})
     {
+        EnsureDefaultSinks();
+
         if (::Flight::Log::bIsLoggingInternal)
         {
             return;
@@ -191,6 +194,10 @@ public:
 
 private:
     FLogger() = default;
+    void EnsureDefaultSinks();
+
+    TSharedPtr<ILogSink> DefaultInternalSink;
+    TSharedPtr<ILogSink> DefaultUnrealSink;
     TArray<TSharedPtr<ILogSink>> Sinks;
 };
 
@@ -223,12 +230,28 @@ public:
         {
             FinalMessage += Context.Format();
         }
-        
-        // We use a dynamic category lookup here to support any FName category
-        // FMsg::Logf is a reliable way to log with dynamic categories
-        FMsg::Logf(nullptr, 0, Entry.Category, UEVerbosity, TEXT("%s"), *FinalMessage);
+
+        if (GLog)
+        {
+            GLog->Serialize(*FinalMessage, UEVerbosity, Entry.Category);
+        }
     }
 };
+
+inline void FLogger::EnsureDefaultSinks()
+{
+    if (!DefaultInternalSink.IsValid())
+    {
+        DefaultInternalSink = MakeShared<FInternalLogService>();
+        Sinks.Add(DefaultInternalSink);
+    }
+
+    if (!DefaultUnrealSink.IsValid())
+    {
+        DefaultUnrealSink = MakeShared<FUnrealLogSink>();
+        Sinks.Add(DefaultUnrealSink);
+    }
+}
 
 // ============================================================================
 // Functional Extensions for TResult

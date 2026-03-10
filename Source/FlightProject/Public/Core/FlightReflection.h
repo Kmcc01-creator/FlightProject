@@ -816,6 +816,7 @@ struct TAttributedFieldDescriptor
 	using FieldType = TField;
 	using Attributes = TAttrs;
 	static constexpr auto Pointer = MemberPtr;
+	static constexpr bool IsOffsetEligible = std::is_standard_layout_v<TOwner>;
 
 	/** Byte offset of this field from the start of the owner struct. */
 	static int32 GetOffset() { return (int32)(intptr_t)&(((TOwner*)0)->*MemberPtr); }

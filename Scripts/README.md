@@ -24,7 +24,7 @@ When adding new automation, source `env_common.sh` first so every helper shares 
 4. `./Scripts/run_game.sh [options]`  
    Builds (unless `--no-build`), cooks content, stages a Linux build via `RunUAT.sh BuildCookRun -nocompileuat`, and launches the staged `Saved/StagedBuilds/Linux*/FlightProject.sh` wrapper. It auto-cooks the default map when one is not specified and will reuse the staged build on subsequent runs; pass `--no-cook` to skip the staging step if you know the staged artifacts are current. Display helpers such as `--video-backend`, `--gamescope`, `--half-window`, and `--windowed-size WxH` tune the launch before the staged binary spawns. Use `--` to forward extra flags to the game binary (for example `-- -windowed -opengl4` when Vulkan drivers misbehave). The helper also sandbox’s .NET state under `Saved/DotNetCli` so first-run sentinels never touch the global home directory. See `Docs/Troubleshooting.md` for the history behind these safeguards.
 5. `./Scripts/run_tests_phased.sh [options]`  
-   Runs validation in explicit phases: **Phase 1** (complex/generated + spec), **Phase 2** (simple automation), and optional **Phase 3** GPU/system checks (`--with-gpu`). Use `--phase1-only`, `--phase2-only`, or `--phase3-only` for focused triage.
+   Runs validation in explicit phases: **Phase 1** (complex/generated + spec, including the lightweight startup sequencing suite), **Phase 2** (simple automation), and optional **Phase 3** GPU/system checks (`--with-gpu`). Use `--phase1-only`, `--phase2-only`, or `--phase3-only` for focused triage.
 
 ## Test Runner Controls
 

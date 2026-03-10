@@ -16,6 +16,10 @@ AFlightSpawnSwarmAnchor::AFlightSpawnSwarmAnchor()
     EffectivePhaseOffsetDeg = PhaseOffsetDeg;
     EffectivePhaseSpreadDeg = PhaseSpreadDeg;
     EffectiveAutopilotSpeed = AutopilotSpeedOverride;
+    EffectivePreferredBehaviorId = PreferredBehaviorId;
+    EffectiveAllowedBehaviorIds = AllowedBehaviorIds;
+    EffectiveDeniedBehaviorIds = DeniedBehaviorIds;
+    EffectiveRequiredBehaviorContracts = RequiredBehaviorContracts;
 
     NavGraphTags.AddUnique(TEXT("SpawnSwarmAnchor"));
 }
@@ -49,6 +53,10 @@ void AFlightSpawnSwarmAnchor::RefreshAnchor(bool bApplyOverrides)
     EffectivePhaseOffsetDeg = PhaseOffsetDeg;
     EffectivePhaseSpreadDeg = PhaseSpreadDeg;
     EffectiveAutopilotSpeed = AutopilotSpeedOverride;
+    EffectivePreferredBehaviorId = PreferredBehaviorId;
+    EffectiveAllowedBehaviorIds = AllowedBehaviorIds;
+    EffectiveDeniedBehaviorIds = DeniedBehaviorIds;
+    EffectiveRequiredBehaviorContracts = RequiredBehaviorContracts;
 
     if (bApplyOverrides)
     {
@@ -94,6 +102,22 @@ void AFlightSpawnSwarmAnchor::ApplyOverrides(const FFlightProceduralAnchorRow* O
     if (OverrideRow->SwarmAutopilotSpeed >= 0.f)
     {
         EffectiveAutopilotSpeed = OverrideRow->SwarmAutopilotSpeed;
+    }
+    if (OverrideRow->SwarmPreferredBehaviorId >= 0)
+    {
+        EffectivePreferredBehaviorId = OverrideRow->SwarmPreferredBehaviorId;
+    }
+    if (!OverrideRow->SwarmAllowedBehaviorIds.IsEmpty())
+    {
+        EffectiveAllowedBehaviorIds = OverrideRow->SwarmAllowedBehaviorIds;
+    }
+    if (!OverrideRow->SwarmDeniedBehaviorIds.IsEmpty())
+    {
+        EffectiveDeniedBehaviorIds = OverrideRow->SwarmDeniedBehaviorIds;
+    }
+    if (!OverrideRow->SwarmRequiredBehaviorContracts.IsEmpty())
+    {
+        EffectiveRequiredBehaviorContracts = OverrideRow->SwarmRequiredBehaviorContracts;
     }
 }
 

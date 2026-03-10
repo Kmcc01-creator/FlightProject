@@ -21,7 +21,7 @@ FlightProject is an Unreal Engine 5 simulation sandbox for autonomous aircraft a
 
 ## Content & Data
 - **Maps**: `/Game/Maps/PersistentFlightTest` serves as both the primary play space and the current transition map (`TransitionMap=/Game/Maps/PersistentFlightTest`) while we iterate. Plan to add a lightweight `/Game/Maps/Loading` asset later.
-- **CSV Tuning**: Lighting and autopilot settings live in `Content/Data/*.csv`; see `Docs/DataPipeline.md` for schema and pitfalls.
+- **Data Ingress**: Lighting, autopilot, spatial layout, and related tuning currently use `Content/Data/*.csv`, but the architectural direction is typed-contract-first rather than CSV-only; see `Docs/Architecture/DataPipeline.md`.
 - **Spatial Layout**: `FlightSpatialLayout.csv` drives the placement of nav probes, developer-art obstacles, and landmark beacons spawned by `AFlightSpatialLayoutDirector` / `AFlightSpatialTestEntity` to stress avoidance and route planning in nightly conditions.
 - **Mass Config**: `Config/DefaultMass.ini` seeds flight-specific phases (`Flight.PrePhysics`, `Flight.DuringPhysics`, `Flight.PostPhysics`).
 

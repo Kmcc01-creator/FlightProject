@@ -30,10 +30,8 @@ void FFlightProjectModule::StartupModule()
     // Ensure global log capture is active
     Flight::Log::FGlobalLogCapture::Initialize();
 
-    // Register our custom logging sinks
-    using namespace Flight::Logging;
-    FLogger::Get().AddSink(MakeShared<FInternalLogService>());
-    FLogger::Get().AddSink(MakeShared<FUnrealLogSink>());
+    // Touch the logger so its built-in sinks are ready on first use.
+    (void)Flight::Logging::FLogger::Get();
 
     // Register shader directory with virtual path /FlightProject
     // This allows shaders to be referenced as "/FlightProject/Private/ShaderName.usf"

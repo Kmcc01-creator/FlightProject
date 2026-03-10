@@ -2,6 +2,7 @@
 
 #include "FlightProject.h"
 #include "FlightDataSubsystem.h"
+#include "FlightDataResolver.h"
 #include "FlightWorldBootstrapSubsystem.h"
 #include "FlightSpatialLayoutDirector.h"
 #include "FlightProjectDeveloperSettings.h"
@@ -38,6 +39,8 @@
 #include "MassEntityConfigAsset.h"
 #include "MassEntityTraitBase.h"
 #endif
+
+using namespace Flight::Data;
 
 namespace
 {
@@ -564,6 +567,30 @@ int32 UFlightScriptingLibrary::SpawnInitialSwarm(const UObject* WorldContextObje
     return 0;
 }
 
+void UFlightScriptingLibrary::RebuildOrchestration(const UObject* WorldContextObject)
+{
+    if (!WorldContextObject)
+    {
+        return;
+    }
+
+    UWorld* World = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull);
+    if (!World)
+    {
+        return;
+    }
+
+    if (UFlightOrchestrationSubsystem* OrchestrationSubsystem = World->GetSubsystem<UFlightOrchestrationSubsystem>())
+    {
+        OrchestrationSubsystem->Rebuild();
+        UE_LOG(LogFlightProject, Log, TEXT("FlightScriptingLibrary: Orchestration rebuild completed"));
+    }
+    else
+    {
+        UE_LOG(LogFlightProject, Warning, TEXT("FlightScriptingLibrary: UFlightOrchestrationSubsystem not found"));
+    }
+}
+
 void UFlightScriptingLibrary::InitializeGpuSwarm(const UObject* WorldContextObject, int32 EntityCount)
 {
     if (!WorldContextObject)
@@ -747,42 +774,11 @@ TArray<FString> UFlightScriptingLibrary::ValidateDataAssets()
         return Issues;
     }
 
-    // Check Data Table configurations
-    if (Settings->LightingConfigTable.IsNull())
-    {
-        Issues.Add(TEXT("LightingConfigTable is not configured"));
-    }
-    else if (!Settings->LightingConfigTable.LoadSynchronous())
-    {
-        Issues.Add(TEXT("LightingConfigTable failed to load"));
-    }
-
-    if (Settings->AutopilotConfigTable.IsNull())
-    {
-        Issues.Add(TEXT("AutopilotConfigTable is not configured"));
-    }
-    else if (!Settings->AutopilotConfigTable.LoadSynchronous())
-    {
-        Issues.Add(TEXT("AutopilotConfigTable failed to load"));
-    }
-
-    if (Settings->SpatialLayoutTable.IsNull())
-    {
-        Issues.Add(TEXT("SpatialLayoutTable is not configured"));
-    }
-    else if (!Settings->SpatialLayoutTable.LoadSynchronous())
-    {
-        Issues.Add(TEXT("SpatialLayoutTable failed to load"));
-    }
-
-    // ProceduralAnchorTable is optional
-    if (!Settings->ProceduralAnchorTable.IsNull())
-    {
-        if (!Settings->ProceduralAnchorTable.LoadSynchronous())
-        {
-            Issues.Add(TEXT("ProceduralAnchorTable configured but failed to load"));
-        }
-    }
+    ValidateSource(Settings->GetLightingConfigSource(), TEXT("LightingConfigTable"), Issues);
+    ValidateSource(Settings->GetAutopilotConfigSource(), TEXT("AutopilotConfigTable"), Issues);
+    ValidateSource(Settings->GetSpatialLayoutSource(), TEXT("SpatialLayoutTable"), Issues);
+    ValidateSource(Settings->GetProceduralAnchorSource(), TEXT("ProceduralAnchorTable"), Issues, true);
+    ValidateSource(Settings->GetBehaviorCompilePolicySource(), TEXT("BehaviorCompilePolicyTable"), Issues, true);
 
     if (Issues.Num() == 0)
     {
@@ -806,22 +802,11 @@ TArray<FString> UFlightScriptingLibrary::GetConfiguredDataTablePaths()
     const UFlightProjectDeveloperSettings* Settings = GetDefault<UFlightProjectDeveloperSettings>();
     if (Settings)
     {
-        if (!Settings->LightingConfigTable.IsNull())
-        {
-            Paths.Add(Settings->LightingConfigTable.ToString());
-        }
-        if (!Settings->AutopilotConfigTable.IsNull())
-        {
-            Paths.Add(Settings->AutopilotConfigTable.ToString());
-        }
-        if (!Settings->SpatialLayoutTable.IsNull())
-        {
-            Paths.Add(Settings->SpatialLayoutTable.ToString());
-        }
-        if (!Settings->ProceduralAnchorTable.IsNull())
-        {
-            Paths.Add(Settings->ProceduralAnchorTable.ToString());
-        }
+        Settings->GetLightingConfigSource().AppendConfiguredPaths(Paths);
+        Settings->GetAutopilotConfigSource().AppendConfiguredPaths(Paths);
+        Settings->GetSpatialLayoutSource().AppendConfiguredPaths(Paths);
+        Settings->GetProceduralAnchorSource().AppendConfiguredPaths(Paths);
+        Settings->GetBehaviorCompilePolicySource().AppendConfiguredPaths(Paths);
     }
 
     return Paths;
@@ -829,7 +814,7 @@ TArray<FString> UFlightScriptingLibrary::GetConfiguredDataTablePaths()
 
 TArray<FString> UFlightScriptingLibrary::GetConfiguredCSVPaths()
 {
-    // Legacy - now returns Data Table paths
+    // Legacy - now returns the current default data-ingress asset paths.
     return GetConfiguredDataTablePaths();
 }
 
@@ -1657,8 +1642,7 @@ FString UFlightScriptingLibrary::GetOrchestrationReportJson(const UObject* World
 
 	if (bRefresh)
 	{
-		OrchestrationSubsystem->RebuildVisibility();
-		OrchestrationSubsystem->RebuildExecutionPlan();
+		OrchestrationSubsystem->Rebuild();
 	}
 
 	return OrchestrationSubsystem->BuildReportJson();
