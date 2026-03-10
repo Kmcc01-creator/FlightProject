@@ -16,6 +16,7 @@ FlightProject is an Unreal Engine 5 workspace rooted at `FlightProject.uproject`
 ## Build, Test, and Development Commands
 - `./Scripts/generate_project_files.sh -f` regenerates IDE files through `GenerateProjectFiles.sh`.
 - `./Scripts/build_targets.sh Development` compiles C++ targets; pass `Shipping` as needed. In Codex/sandboxed terminals this now auto-applies `-NoUBA`; use `--use-uba` to force UBA or `--no-uba` to force-disable it.
+- `./Scripts/build_targets.sh Development --verify` runs the breaking headless subset after a successful build, using the `triage` preset by default. Override with `--verify-preset <quiet|triage|startup-debug|full-debug>`.
 - `"$UE_ROOT/Engine/Build/BatchFiles/Linux/Build.sh" FlightProjectEditor Linux Development -project="$PWD/FlightProject.uproject" -game -progress -Module=FlightProject -NoUBA` is the deterministic module-only fallback when UBA stalls.
 - `./Scripts/run_editor.sh -Log --wayland` starts UnrealEditor with helpers from `env_common.sh`.
 - `./Scripts/run_game.sh --no-build -- -windowed` stages/cooks via `RunUAT BuildCookRun` and launches the staged Linux binary; omit `--no-build` for a clean rebuild.
@@ -32,20 +33,31 @@ FlightProject is an Unreal Engine 5 workspace rooted at `FlightProject.uproject`
 ## Testing Guidelines
 - Use `./Scripts/run_tests_headless.sh` as the primary automation entrypoint.
 - Baseline full-tree headless run:
-  `./Scripts/run_tests_headless.sh`
+  `TEST_PRESET=triage ./Scripts/run_tests_phased.sh --timestamps`
 - Focused parser bucket:
-  `TEST_FILTER="FlightProject.Schema.Vex.Parser" TEST_LOG_PROFILE=focused TEST_STREAM_FILTER=errors ./Scripts/run_tests_headless.sh`
+  `./Scripts/run_tests_headless.sh --filter="FlightProject.Schema.Vex.Parser" --preset=triage`
 - Extended mixed bucket (schema + Verse + parser + vertical slice):
-  `TEST_FILTER="FlightProject.Integration.SchemaDriven+FlightProject.Schema.Vex.ManifestValidation+FlightProject.Verse.CompileContract+FlightProject.Verse.Subsystem+FlightProject.Schema.Vex.Parser+FlightProject.Integration.Vex.VerticalSlice" TEST_LOG_PROFILE=focused TEST_STREAM_FILTER=errors ./Scripts/run_tests_headless.sh`
+  `./Scripts/run_tests_headless.sh --filter="FlightProject.Integration.SchemaDriven+FlightProject.Schema.Vex.ManifestValidation+FlightProject.Verse.CompileContract+FlightProject.Verse.Subsystem+FlightProject.Schema.Vex.Parser+FlightProject.Integration.Vex.VerticalSlice" --preset=triage`
 - Verse-focused shortcut:
   `./Scripts/run_tests_headless.sh --verse`
 - GPU/offscreen path:
   `TEST_SCOPE=gpu_smoke ./Scripts/run_tests_full.sh`
+- Current test-runner control model:
+  - presets: `quiet`, `triage`, `startup-debug`, `full-debug`
+  - log profiles: `minimal`, `focused`, `python`, `verbose`, `full`
+  - output modes: `errors`, `summary`, `automation`, `all`
+- Recommended default for local triage:
+  `./Scripts/run_tests_headless.sh --preset=triage --filter="..."`
+- Recommended startup/Python debugging path:
+  `./Scripts/run_tests_headless.sh --preset=startup-debug --filter="..."`
 - Discovery rule: tests intended for `UnrealEditor-Cmd`/CI must use `EAutomationTestFlags::EditorContext`; `ClientContext` tests are not discovered in this path.
 - After adding new test source files, run a full build once (`./Scripts/build_targets.sh Development`) to force discovery/index refresh before triage.
 - For cooked validation, run `make FlightProject-Linux-Test` (or call `Build.sh`/`RunUAT` directly with Test config); `run_game.sh` does not currently expose a `--test` flag.
 - Keep current bucket status snapshots in `Docs/Workflow/CurrentBuild.md` and parser-specific coverage details in `Docs/Scripting/VexSchemaValidation.md`.
 - Document manual verification and open issues in `Docs/Environment/Troubleshooting.md` so staged builds stay reproducible.
+- Current suite status to keep in mind:
+  - headless phased run currently has 3 known failing tests
+  - GPU-required suite currently fails before automation because Vulkan device creation does not complete in this environment
 
 ## Commit & Pull Request Guidelines
 - Git history favors short, imperative summaries ("Add testing section to README", "testing flight"); keep the subject <72 characters and mention the subsystem up front.
@@ -100,15 +112,22 @@ This section tracks near-term priorities after functional/reactive/reflection st
 - [ ] Develop **Python Behavior Debugger**: Real-time visualization of VEX execution rates, residency violations, and Verse VM state.
 - [ ] Implement **Transactional Event Bridge**: Bridge Verse `<transacts>` failures to GPU event buffer rollbacks.
 
-### Phase 6: Scalable Concurrency
+### Phase 6: Scalable Concurrency & VM Integration
 - [x] Implement **Task Thunk Generation** for `@job` directives using `UE::Tasks`.
-- [x] Integrate Verse **Leniency/Async** logic for `@async` VEX blocks.
+- [x] Integrate Verse **Leniency/Async** logic for `@async` VEX blocks via `VPlaceholder`.
 - [x] Implement **Affinity Validation** in the VEX parser to prevent off-thread UObject access.
+- [x] Establish **Schema-Driven Native Registry** for dynamic thunk resolution.
 
 ### Phase 7: Verification & Optimization
+- [x] Land **Complex IR Support** (multi-block control flow) in the VVM assembler.
 - [ ] Implement **Concurrency Stress Tests**: Automated tests for high-frequency task churning.
 - [ ] Add **Performance Benchmarking**: Comparative analysis of synchronous vs. `@job` execution for large swarms.
 - [ ] Implement **Task Completion Callback Thunks**: Allowing VEX logic to react to the completion of specific jobs.
+
+### Phase 8: Architectural Refinement
+- [ ] Implement **Module Decoupling**: Split `FlightProject` into `Runtime` and `Dev` modules for the Verse bridge.
+- [ ] Implement **GC-Rooted Closure Migration**: Move all deferred behavior states to `TWriteBarrier`-rooted `VValue` objects.
+- [ ] Expand **Intrinsic Math Library**: Complete parity between VEX IR and Verse/HLSL for all standard vector operations.
 
 ## Linux Wayland Workflow
 - Follow `Docs/Environment/LinuxSetup.md` when launching on CachyOS/Hyprland. Install `sdl2`, `lib32-sdl2`, `gamescope`, and `mangohud` so the wrapper flags work.

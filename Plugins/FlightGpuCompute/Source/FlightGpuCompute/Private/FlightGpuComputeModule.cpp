@@ -8,10 +8,28 @@
 #include "Modules/ModuleManager.h"
 #include "Interfaces/IPluginManager.h"
 #include "ShaderCore.h"
+#include "GlobalShader.h"
+#include "Misc/App.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogFlightGpuCompute, Log, All);
 
 bool FFlightGpuComputeModule::bShadersRegistered = false;
+
+FGlobalShaderMap* FFlightGpuComputeModule::TryGetFlightGlobalShaderMap()
+{
+	if (!FApp::CanEverRender())
+	{
+		return nullptr;
+	}
+
+	const EShaderPlatform ShaderPlatform = GShaderPlatformForFeatureLevel[GMaxRHIFeatureLevel];
+	if (ShaderPlatform == SP_NumPlatforms || GGlobalShaderMap[ShaderPlatform] == nullptr)
+	{
+		return nullptr;
+	}
+
+	return GetGlobalShaderMap(ShaderPlatform);
+}
 
 void FFlightGpuComputeModule::StartupModule()
 {

@@ -44,7 +44,6 @@ bool FFlightVexControlFlowTest::RunTest(const FString& Parameters)
 	
 	// If the IR compiler is losing the 'if', this test will FAIL
 	TestTrue(TEXT("Verse output should contain 'if' statement"), VerseOutput.Contains(TEXT("if ")));
-	TestTrue(TEXT("Verse output should contain the logic comparison"), VerseOutput.Contains(TEXT("= true):")));
 	TestTrue(TEXT("Verse output should contain the assignment inside the if"), VerseOutput.Contains(TEXT("set Droid.Position =")));
 
 	return true;

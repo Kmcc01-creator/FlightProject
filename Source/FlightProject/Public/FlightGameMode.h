@@ -7,7 +7,7 @@
 
 class UFlightStartupProfile;
 
-UENUM(BlueprintType)
+UENUM(BlueprintType, meta = (ScriptName = "FlightStartupProfileType"))
 enum class EFlightStartupProfile : uint8
 {
     DefaultSandbox UMETA(DisplayName = "Default Sandbox"),

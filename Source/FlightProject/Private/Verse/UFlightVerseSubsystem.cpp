@@ -1,6 +1,7 @@
 // Copyright Kelly Rey Wilson. All Rights Reserved.
 
 #include "Verse/UFlightVerseSubsystem.h"
+#include "Vex/FlightCompileArtifacts.h"
 #include "Vex/FlightVexParser.h"
 #include "Vex/FlightVexTypes.h"
 #include "Vex/FlightVexSimdExecutor.h"
@@ -21,6 +22,10 @@
 #include "VerseVM/VVMNativeFunction.h"
 #include "VerseVM/VVMUniqueString.h"
 #include "VerseVM/VVMPlaceholder.h"
+#include "VerseVM/VVMFalse.h"
+#include "Vex/FlightVexVvmAssembler.h"
+#include "Vex/FlightVexNativeRegistry.h"
+#include "Vex/FlightVexSymbolRegistry.h"
 #endif
 
 DEFINE_LOG_CATEGORY_STATIC(LogFlightVerseSubsystem, Log, All);
@@ -188,6 +193,29 @@ namespace
 		}
 
 		return true;
+	}
+
+	FString BuildCompileTargetFingerprint()
+	{
+		return FString::Printf(
+			TEXT("%hs|WITH_VERSE_VM=%d"),
+			FPlatformProperties::IniPlatformName(),
+			WITH_VERSE_VM ? 1 : 0);
+	}
+
+	FString CompileStateToString(const EFlightVerseCompileState CompileState)
+	{
+		switch (CompileState)
+		{
+		case EFlightVerseCompileState::GeneratedOnly:
+			return TEXT("GeneratedOnly");
+		case EFlightVerseCompileState::VmCompiled:
+			return TEXT("VmCompiled");
+		case EFlightVerseCompileState::VmCompileFailed:
+			return TEXT("VmCompileFailed");
+		default:
+			return TEXT("Unknown");
+		}
 	}
 
 	FNativeValue ReadSymbolValue(const FString& SymbolName, const Flight::Swarm::FDroidState& DroidState)
@@ -574,7 +602,8 @@ void UFlightVerseSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	// Build Verse projections for our components
 	RegisterNativeComponents();
 
-	// Register built-in functions
+	// Register VEX @symbols and built-in functions
+	RegisterNativeVerseSymbols();
 	RegisterNativeVerseFunctions();
 }
 
@@ -595,8 +624,63 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 	Behavior.GeneratedVerseCode.Reset();
 	Behavior.LastCompileDiagnostics.Reset();
 	Behavior.SimdCompileDiagnostics.Reset();
+	Behavior.CompileArtifactReport = Flight::Vex::FFlightCompileArtifactReport();
+	Behavior.bHasCompileArtifactReport = false;
 
+	Flight::Vex::FFlightCompileArtifactReport ArtifactReport;
+	ArtifactReport.GeneratedAtUtc = FDateTime::UtcNow();
+	ArtifactReport.BehaviorID = BehaviorID;
+	ArtifactReport.SourceHash = FCrc::StrCrc32(*VexSource);
+	ArtifactReport.TargetFingerprint = BuildCompileTargetFingerprint();
+
+	const double CompileStartTime = FPlatformTime::Seconds();
+	FString BackendPath = TEXT("GeneratedPreviewOnly");
+	FString IrErrors;
+	TSharedPtr<Flight::Vex::FVexIrProgram> IrProgram;
+	double ParseTimeMs = 0.0;
+	double IrCompileTimeMs = 0.0;
+	double VmAssembleTimeMs = 0.0;
+
+	auto FinalizeArtifactReport = [&]()
+	{
+		ArtifactReport.GeneratedAtUtc = FDateTime::UtcNow();
+		ArtifactReport.CompileOutcome = CompileStateToString(Behavior.CompileState);
+		ArtifactReport.BackendPath = BackendPath;
+		ArtifactReport.Diagnostics = Behavior.LastCompileDiagnostics;
+		ArtifactReport.GeneratedVerseCode = Behavior.GeneratedVerseCode;
+		ArtifactReport.IrCompileErrors = IrErrors;
+		ArtifactReport.Tier = Behavior.Tier;
+		ArtifactReport.bAsync = Behavior.bIsAsync;
+		ArtifactReport.bHasIr = IrProgram.IsValid();
+		ArtifactReport.bUsesNativeFallback = Behavior.bUsesNativeFallback;
+		ArtifactReport.bUsesVmEntryPoint = Behavior.bUsesVmEntryPoint;
+		ArtifactReport.AvailableArtifacts.Reset();
+		ArtifactReport.AvailableArtifacts.Add(Flight::Vex::EFlightCompileArtifactKind::CompileTelemetry);
+		if (IrProgram.IsValid())
+		{
+			ArtifactReport.AvailableArtifacts.Add(Flight::Vex::EFlightCompileArtifactKind::IrProgram);
+			ArtifactReport.CodeShapeMetrics = Flight::Vex::AnalyzeIrCodeShape(*IrProgram, Behavior.bIsAsync);
+		}
+#if WITH_VERSE_VM || defined(__INTELLISENSE__)
+		if (Behavior.Procedure.Get())
+		{
+			ArtifactReport.AvailableArtifacts.Add(Flight::Vex::EFlightCompileArtifactKind::VvmBytecode);
+		}
+#endif
+		ArtifactReport.WarmupMetrics.ParseTimeMs = ParseTimeMs;
+		ArtifactReport.WarmupMetrics.IrCompileTimeMs = IrCompileTimeMs;
+		ArtifactReport.WarmupMetrics.VmAssembleTimeMs = VmAssembleTimeMs;
+		ArtifactReport.WarmupMetrics.TotalCompileTimeMs = (FPlatformTime::Seconds() - CompileStartTime) * 1000.0;
+		ArtifactReport.WarmupMetrics.CacheFillCount = Behavior.bHasExecutableProcedure ? 1 : 0;
+		ArtifactReport.WarmupMetrics.RegistryMissCount = Behavior.bUsesVmEntryPoint ? 0 : (Behavior.bUsesNativeFallback ? 1 : 0);
+		Flight::Vex::FinalizeWarmupMetrics(ArtifactReport.WarmupMetrics);
+		Behavior.CompileArtifactReport = ArtifactReport;
+		Behavior.bHasCompileArtifactReport = true;
+	};
+
+	const double ParseStartTime = FPlatformTime::Seconds();
 	const Flight::Vex::FVexParseResult Result = Flight::Vex::ParseAndValidate(VexSource, SymbolDefinitions, false);
+	ParseTimeMs = (FPlatformTime::Seconds() - ParseStartTime) * 1000.0;
 
 	if (Result.Issues.Num() > 0)
 	{
@@ -608,6 +692,8 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 		if (!Result.bSuccess)
 		{
 			Behavior.LastCompileDiagnostics = OutErrors;
+			BackendPath = TEXT("ParseValidationOnly");
+			FinalizeArtifactReport();
 			return false;
 		}
 	}
@@ -635,6 +721,8 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 			TEXT("VEX Contract Error: missing required symbols: %s\n"),
 			*FString::Join(MissingRequiredSymbols, TEXT(", ")));
 		Behavior.LastCompileDiagnostics = OutErrors;
+		BackendPath = TEXT("ContractValidationOnly");
+		FinalizeArtifactReport();
 		return false;
 	}
 
@@ -643,26 +731,21 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 	Behavior.FrameInterval = Result.Program.FrameInterval;
 	Behavior.Tier = Flight::Vex::FVexOptimizer::ClassifyTier(Result.Program, SymbolDefinitions);
 
+	// Always generate IR for VVM assembly if possible
+	const double IrCompileStartTime = FPlatformTime::Seconds();
+	IrProgram = Flight::Vex::FVexIrCompiler::Compile(Result.Program, SymbolDefinitions, IrErrors);
+	IrCompileTimeMs = (FPlatformTime::Seconds() - IrCompileStartTime) * 1000.0;
+
 	if (Behavior.Tier == Flight::Vex::EVexTier::Literal)
 	{
 		FString SimdReason;
 		const bool bSimdEligible = Flight::Vex::FVexSimdExecutor::CanCompileProgram(Result.Program, SymbolDefinitions, &SimdReason);
-		if (bSimdEligible)
+		if (bSimdEligible && IrProgram.IsValid())
 		{
-			FString IrErrors;
-			TSharedPtr<Flight::Vex::FVexIrProgram> IrProgram = Flight::Vex::FVexIrCompiler::Compile(Result.Program, SymbolDefinitions, IrErrors);
-			if (IrProgram.IsValid())
-			{
-				Behavior.SimdPlan = Flight::Vex::FVexSimdExecutor::Compile(IrProgram);
-				Behavior.SimdCompileDiagnostics = Behavior.SimdPlan.IsValid()
-					? FString::Printf(TEXT("SIMD Tier 1 plan compiled successfully via IR. (%d instructions, %d registers)"), IrProgram->Instructions.Num(), IrProgram->MaxRegisters)
-					: TEXT("SIMD Tier 1 IR generation passed, but plan generation failed.");
-			}
-			else
-			{
-				Behavior.SimdPlan.Reset();
-				Behavior.SimdCompileDiagnostics = FString::Printf(TEXT("SIMD IR generation failed: %s"), *IrErrors);
-			}
+			Behavior.SimdPlan = Flight::Vex::FVexSimdExecutor::Compile(IrProgram);
+			Behavior.SimdCompileDiagnostics = Behavior.SimdPlan.IsValid()
+				? FString::Printf(TEXT("SIMD Tier 1 plan compiled successfully via IR. (%d instructions, %d registers)"), IrProgram->Instructions.Num(), IrProgram->MaxRegisters)
+				: TEXT("SIMD Tier 1 IR generation passed, but plan generation failed.");
 		}
 		else
 		{
@@ -689,16 +772,17 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 			Message += Behavior.SimdCompileDiagnostics;
 		}
 	};
-	
+
 	// Check for @async
 	Behavior.bIsAsync = false;
-	for (const auto& S : Result.Program.Statements) 
-	{ 
-			if (S.Kind == Flight::Vex::EVexStatementKind::TargetDirective && S.SourceSpan == TEXT("@async")) 
-			{ 
-				Behavior.bIsAsync = true; break; 
-			} 
+	for (const auto& S : Result.Program.Statements)
+	{
+		if (S.Kind == Flight::Vex::EVexStatementKind::TargetDirective && S.SourceSpan == TEXT("@async"))
+		{
+			Behavior.bIsAsync = true;
+			break;
 		}
+	}
 
 	// Generate the Verse source code from the VEX AST
 	TMap<FString, FString> VerseBySymbol;
@@ -706,7 +790,7 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 	{
 		VerseBySymbol.Add(Def.SymbolName, Def.SymbolName.Mid(1)); // Fallback: just remove '@'
 	}
-	
+
 	const FString VerseCode = Flight::Vex::LowerToVerse(Result.Program, SymbolDefinitions, VerseBySymbol);
 	Behavior.GeneratedVerseCode = VerseCode;
 	Behavior.bHasExecutableProcedure = false;
@@ -720,8 +804,10 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 
 #if WITH_VERSE_VM || defined(__INTELLISENSE__)
 		FString VmDiagnostics;
+		const double VmAssembleStartTime = FPlatformTime::Seconds();
 		const bool bVerseSourceValid = TryValidateVerseSource(VerseCode, VmDiagnostics);
-		const bool bVmProcedureReady = bVerseSourceValid && TryCreateVmProcedure(BehaviorID, Behavior, VmDiagnostics);
+		const bool bVmProcedureReady = bVerseSourceValid && TryCreateVmProcedure(BehaviorID, Behavior, IrProgram, VmDiagnostics);
+		VmAssembleTimeMs += (FPlatformTime::Seconds() - VmAssembleStartTime) * 1000.0;
 		if (bVmProcedureReady)
 		{
 			Behavior.bUsesVmEntryPoint = true;
@@ -739,6 +825,8 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 				BehaviorID, Behavior.ExecutionRateHz, Behavior.FrameInterval, Behavior.bIsAsync ? TEXT("[Async]") : TEXT(""));
 			OutErrors += Behavior.LastCompileDiagnostics + TEXT("\n");
 			OutErrors += TEXT("Generated Verse:\n") + VerseCode;
+			BackendPath = TEXT("VerseVmProcedure+NativeFallback");
+			FinalizeArtifactReport();
 			return true;
 		}
 
@@ -758,20 +846,55 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 			BehaviorID, Behavior.ExecutionRateHz, Behavior.FrameInterval, Behavior.bIsAsync ? TEXT("[Async]") : TEXT(""));
 		OutErrors += Behavior.LastCompileDiagnostics + TEXT("\n");
 		OutErrors += TEXT("Generated Verse:\n") + VerseCode;
+		BackendPath = TEXT("NativeFallback");
+		FinalizeArtifactReport();
 		return true;
 	}
 
 	const FString FallbackPrefix = NativeFallbackReason.IsEmpty() ? FString() : (NativeFallbackReason + TEXT(" "));
 
 #if WITH_VERSE_VM || defined(__INTELLISENSE__)
+	FString VmDiagnostics;
+	const double VmAssembleStartTime = FPlatformTime::Seconds();
+	const bool bVerseSourceValid = TryValidateVerseSource(VerseCode, VmDiagnostics);
+	const bool bVmProcedureReady = bVerseSourceValid && TryCreateVmProcedure(BehaviorID, Behavior, IrProgram, VmDiagnostics);
+	VmAssembleTimeMs += (FPlatformTime::Seconds() - VmAssembleStartTime) * 1000.0;
+	if (bVmProcedureReady)
+	{
+		Behavior.bUsesVmEntryPoint = true;
+		Behavior.bHasExecutableProcedure = true;
+		Behavior.CompileState = EFlightVerseCompileState::VmCompiled;
+		Behavior.LastCompileDiagnostics =
+			TEXT("Compiled to Verse VM procedure via direct IR assembly.");
+		AppendSimdCompileDiagnostics(Behavior.LastCompileDiagnostics);
+		if (!VmDiagnostics.IsEmpty())
+		{
+			Behavior.LastCompileDiagnostics += TEXT("\n") + VmDiagnostics;
+		}
+
+		OutErrors += FString::Printf(TEXT("Behavior %u: @rate(%.1fHz, %u frames) %s\n"),
+			BehaviorID, Behavior.ExecutionRateHz, Behavior.FrameInterval, Behavior.bIsAsync ? TEXT("[Async]") : TEXT(""));
+		OutErrors += Behavior.LastCompileDiagnostics + TEXT("\n");
+		OutErrors += TEXT("Generated Verse (preview):\n") + VerseCode;
+		BackendPath = TEXT("VerseVmProcedure");
+		FinalizeArtifactReport();
+		return true;
+	}
+
 	Behavior.LastCompileDiagnostics = FString::Printf(
-		TEXT("Behavior is not executable: %sVerse VM compile path is not implemented yet; generated Verse is preview-only."),
+		TEXT("Behavior is not executable: %sVerse VM IR assembly failed; generated Verse is preview-only."),
 		*FallbackPrefix);
 	AppendSimdCompileDiagnostics(Behavior.LastCompileDiagnostics);
+	if (!VmDiagnostics.IsEmpty())
+	{
+		Behavior.LastCompileDiagnostics += TEXT("\n") + VmDiagnostics;
+	}
 	OutErrors += FString::Printf(TEXT("Behavior %u: @rate(%.1fHz, %u frames) %s\n"),
 		BehaviorID, Behavior.ExecutionRateHz, Behavior.FrameInterval, Behavior.bIsAsync ? TEXT("[Async]") : TEXT(""));
 	OutErrors += Behavior.LastCompileDiagnostics + TEXT("\n");
 	OutErrors += TEXT("Generated Verse:\n") + VerseCode;
+	BackendPath = TEXT("GeneratedPreviewOnly");
+	FinalizeArtifactReport();
 	return false;
 #else
 	Behavior.LastCompileDiagnostics = FString::Printf(
@@ -782,6 +905,8 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 		BehaviorID, Behavior.ExecutionRateHz, Behavior.FrameInterval, Behavior.bIsAsync ? TEXT("[Async]") : TEXT(""));
 	OutErrors += Behavior.LastCompileDiagnostics + TEXT("\n");
 	OutErrors += TEXT("Generated Verse:\n") + VerseCode;
+	BackendPath = TEXT("GeneratedPreviewOnly");
+	FinalizeArtifactReport();
 	return false;
 #endif
 }
@@ -789,12 +914,7 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 void UFlightVerseSubsystem::ExecuteBehavior(uint32 BehaviorID, Flight::Swarm::FDroidState& DroidState)
 {
 	const FVerseBehavior* Behavior = Behaviors.Find(BehaviorID);
-	if (!Behavior)
-	{
-		return;
-	}
-
-	if (!Behavior->bHasExecutableProcedure)
+	if (!Behavior || !Behavior->bHasExecutableProcedure)
 	{
 		return;
 	}
@@ -802,34 +922,12 @@ void UFlightVerseSubsystem::ExecuteBehavior(uint32 BehaviorID, Flight::Swarm::FD
 #if WITH_VERSE_VM || defined(__INTELLISENSE__)
 	if (Behavior->bUsesVmEntryPoint && Behavior->Procedure.Get())
 	{
-		ActiveVmBehaviorID = BehaviorID;
-		ActiveVmDroidState = &DroidState;
-
-		Verse::FOpResult VmResult(Verse::FOpResult::Error);
 		VerseContext.EnterVM([&]()
 		{
-			Verse::VProcedure* Procedure = Behavior->Procedure.Get();
-			if (!Procedure)
-			{
-				return;
-			}
-
 			Verse::FAllocationContext AllocContext(VerseContext);
-			Verse::VFunction& Function = Verse::VFunction::New(AllocContext, *Procedure, Verse::VValue(this));
-			Verse::VFunction::Args Arguments;
-			VmResult = Function.Invoke(VerseContext, MoveTemp(Arguments));
+			ExecuteBehaviorInContext(BehaviorID, *Behavior, DroidState, AllocContext);
 		});
-
-		ActiveVmDroidState = nullptr;
-		ActiveVmBehaviorID = 0;
-
-		if (VmResult.IsReturn())
-		{
-			return;
-		}
-
-		UE_LOG(LogFlightVerseSubsystem, Warning, TEXT("VM procedure execution failed for behavior %u (result kind=%d); falling back."),
-			BehaviorID, static_cast<int32>(VmResult.Kind));
+		return;
 	}
 #endif
 
@@ -838,17 +936,6 @@ void UFlightVerseSubsystem::ExecuteBehavior(uint32 BehaviorID, Flight::Swarm::FD
 		ExecuteNativeProgram(Behavior->NativeProgram, DroidState);
 		return;
 	}
-
-#if WITH_VERSE_VM || defined(__INTELLISENSE__)
-	/*
-	VerseContext.EnterVM([&]()
-	{
-		// ... Execute Behavior->Procedure ...
-	});
-	*/
-#else
-	UE_LOG(LogFlightVerseSubsystem, Warning, TEXT("ExecuteBehavior called but Verse VM is unavailable in this build."));
-#endif
 }
 
 void UFlightVerseSubsystem::ExecuteBehaviorBulk(uint32 BehaviorID, TArrayView<Flight::Swarm::FDroidState> DroidStates)
@@ -876,11 +963,89 @@ void UFlightVerseSubsystem::ExecuteBehaviorBulk(uint32 BehaviorID, TArrayView<Fl
 		return;
 	}
 
-	// TIER 2/3: Standard dispatch
+	// TIER 2/3: Standard dispatch via Fusion Reduction
+#if WITH_VERSE_VM || defined(__INTELLISENSE__)
+	if (Behavior->bUsesVmEntryPoint && Behavior->Procedure.Get())
+	{
+		VerseContext.EnterVM([&]()
+		{
+			Verse::FAllocationContext AllocContext(VerseContext);
+			for (Flight::Swarm::FDroidState& Droid : DroidStates)
+			{
+				ExecuteBehaviorInContext(BehaviorID, *Behavior, Droid, AllocContext);
+			}
+		});
+		return;
+	}
+#endif
+
+	// Fallback to individual dispatch
 	for (Flight::Swarm::FDroidState& Droid : DroidStates)
 	{
 		ExecuteBehavior(BehaviorID, Droid);
 	}
+}
+
+#if WITH_VERSE_VM || defined(__INTELLISENSE__)
+void UFlightVerseSubsystem::ExecuteBehaviorInContext(uint32 BehaviorID, const FVerseBehavior& Behavior, Flight::Swarm::FDroidState& DroidState, Verse::FAllocationContext& AllocContext)
+{
+	using namespace Verse;
+
+	// Guard against recursion or re-entry if needed, but for bulk execution we assume safe context.
+	ActiveVmBehaviorID = BehaviorID;
+	ActiveVmDroidState = &DroidState;
+
+	VProcedure* Procedure = Behavior.Procedure.Get();
+	if (Procedure)
+	{
+		VFunction& Function = VFunction::New(AllocContext, *Procedure, VValue(this));
+		FOpResult VmResult = Function.Invoke(VerseContext, VFunction::Args());
+
+		if (!VmResult.IsReturn())
+		{
+			UE_LOG(LogFlightVerseSubsystem, Verbose, TEXT("VM execution failed (kind=%d)"), static_cast<int32>(VmResult.Kind));
+		}
+	}
+
+	ActiveVmDroidState = nullptr;
+	ActiveVmBehaviorID = 0;
+}
+#endif
+
+void UFlightVerseSubsystem::DeferBehavior(uint32 BehaviorID, Flight::Swarm::FDroidState& DroidState)
+{
+	DeferredBehaviors.Add({ BehaviorID, &DroidState });
+}
+
+void UFlightVerseSubsystem::FlushDeferredBehaviors()
+{
+	if (DeferredBehaviors.Num() == 0) return;
+
+#if WITH_VERSE_VM || defined(__INTELLISENSE__)
+	VerseContext.EnterVM([&]()
+	{
+		Verse::FAllocationContext AllocContext(VerseContext);
+		for (const auto& Deferred : DeferredBehaviors)
+		{
+			const FVerseBehavior* Behavior = Behaviors.Find(Deferred.BehaviorID);
+			if (Behavior && Behavior->bHasExecutableProcedure && Behavior->bUsesVmEntryPoint)
+			{
+				ExecuteBehaviorInContext(Deferred.BehaviorID, *Behavior, *Deferred.DroidState, AllocContext);
+			}
+			else if (Behavior && Behavior->bUsesNativeFallback)
+			{
+				ExecuteNativeProgram(Behavior->NativeProgram, *Deferred.DroidState);
+			}
+		}
+	});
+#else
+	for (const auto& Deferred : DeferredBehaviors)
+	{
+		ExecuteBehavior(Deferred.BehaviorID, *Deferred.DroidState);
+	}
+#endif
+
+	DeferredBehaviors.Empty();
 }
 
 void UFlightVerseSubsystem::ExecuteBehaviorDirect(
@@ -922,6 +1087,18 @@ FString UFlightVerseSubsystem::GetBehaviorCompileDiagnostics(uint32 BehaviorID) 
 {
 	const FVerseBehavior* Behavior = Behaviors.Find(BehaviorID);
 	return Behavior ? Behavior->LastCompileDiagnostics : FString();
+}
+
+const Flight::Vex::FFlightCompileArtifactReport* UFlightVerseSubsystem::GetBehaviorCompileArtifactReport(uint32 BehaviorID) const
+{
+	const FVerseBehavior* Behavior = Behaviors.Find(BehaviorID);
+	return (Behavior && Behavior->bHasCompileArtifactReport) ? &Behavior->CompileArtifactReport : nullptr;
+}
+
+FString UFlightVerseSubsystem::GetBehaviorCompileArtifactReportJson(uint32 BehaviorID) const
+{
+	const Flight::Vex::FFlightCompileArtifactReport* Report = GetBehaviorCompileArtifactReport(BehaviorID);
+	return Report ? Flight::Vex::BuildCompileArtifactReportJson(*Report) : FString();
 }
 
 #if WITH_VERSE_VM || defined(__INTELLISENSE__)
@@ -971,7 +1148,7 @@ bool UFlightVerseSubsystem::TryValidateVerseSource(const FString& VerseSource, F
 	return true;
 }
 
-bool UFlightVerseSubsystem::TryCreateVmProcedure(uint32 BehaviorID, FVerseBehavior& Behavior, FString& OutDiagnostics)
+bool UFlightVerseSubsystem::TryCreateVmProcedure(uint32 BehaviorID, FVerseBehavior& Behavior, TSharedPtr<Flight::Vex::FVexIrProgram> IrProgram, FString& OutDiagnostics)
 {
 	bool bCreated = false;
 	VerseContext.EnterVM([&]()
@@ -979,14 +1156,30 @@ bool UFlightVerseSubsystem::TryCreateVmProcedure(uint32 BehaviorID, FVerseBehavi
 		using namespace Flight::Verse;
 		Verse::FAllocationContext AllocContext(VerseContext);
 
-		// 1. Clear registry before build to ensure fresh results
+		// 1. Direct IR-to-VVM Assembly (New Path)
+		if (IrProgram.IsValid())
+		{
+			const FString ProcName = FString::Printf(TEXT("Behavior_%u"), BehaviorID);
+			Verse::VProcedure* AssembledProcedure = Flight::Vex::FVexVvmAssembler::Assemble(
+				*IrProgram, AllocContext, ProcName);
+
+			if (AssembledProcedure)
+			{
+				Behavior.Procedure.Set(AllocContext, AssembledProcedure);
+				Behavior.bUsesVmEntryPoint = false;
+				bCreated = true;
+				return;
+			}
+		}
+
+		// 2. Clear registry before build to ensure fresh results
 		FFlightVerseAssemblerPass::ClearRegistry();
 
 		// 2. The Build() call inside TryValidateVerseSource will now trigger the AssemblerPass
 		//    which populates the registry. We need to find the decorated name of the function.
 		//    Pattern: (/FlightProjectGenerated:)Behavior_<ID>
 		const FString DecoratedName = FString::Printf(TEXT("(/FlightProjectGenerated:)Behavior_%u"), BehaviorID);
-		
+
 		// 3. Look for the compiled procedure
 		if (Verse::VProcedure* CompiledProcedure = FFlightVerseAssemblerPass::GetCompiledProcedure(DecoratedName))
 		{
@@ -1089,27 +1282,211 @@ Verse::FOpResult UFlightVerseSubsystem::ExecuteVmEntryThunk(
 	ExecuteNativeProgram(Behavior->NativeProgram, *ActiveVmDroidState);
 	return Verse::FOpResult(Verse::FOpResult::Return, Verse::VValue::FromBool(true));
 }
+
+#include "Vex/FlightVexNativeRegistry.h"
+#include "VerseVM/VVMFalse.h"
+
+namespace
+{
+	/**
+	 * FVexDroidStateAccessor: Handles Get/Set for @symbols via RegistryThunk
+	 */
+	class FVexDroidStateAccessor : public Flight::Vex::IVexNativeFunction
+	{
+	public:
+		explicit FVexDroidStateAccessor(bool bInIsSetter) : bIsSetter(bInIsSetter) {}
+
+		virtual FString GetName() const override { return bIsSetter ? TEXT("SetDroidStateValue") : TEXT("GetDroidStateValue"); }
+		virtual int32 GetNumArgs() const override { return bIsSetter ? 2 : 1; }
+
+		virtual Verse::FOpResult Execute(Verse::FRunningContext Context, Verse::VValue Self, Verse::VNativeFunction::Args Arguments) override
+		{
+			if (Arguments.Num() < GetNumArgs() || !Arguments[0].IsString())
+			{
+				return Verse::FOpResult(Verse::FOpResult::Error);
+			}
+
+			UFlightVerseSubsystem* Subsystem = Cast<UFlightVerseSubsystem>(Self.AsUObject());
+			if (!Subsystem || !Subsystem->ActiveVmDroidState)
+			{
+				return Verse::FOpResult(Verse::FOpResult::Error);
+			}
+
+			FString SymbolName = UTF8_TO_TCHAR(Arguments[0].AsString().AsUTF8());
+			const Flight::Vex::FVexSymbolAccessor* Accessor = Flight::Vex::FVexSymbolRegistry::Get().FindSymbol(SymbolName);
+
+			if (!Accessor)
+			{
+				UE_LOG(LogFlightVerseSubsystem, Warning, TEXT("VEX VM: Accessor not found for symbol '%s'"), *SymbolName);
+				return Verse::FOpResult(Verse::FOpResult::Error);
+			}
+
+			if (bIsSetter)
+			{
+				if (Arguments.Num() < 2 || !Arguments[1].IsFloat()) return Verse::FOpResult(Verse::FOpResult::Error);
+				if (!Accessor->Setter) return Verse::FOpResult(Verse::FOpResult::Error);
+
+				Accessor->Setter(*Subsystem->ActiveVmDroidState, Arguments[1].AsFloat());
+				return Verse::FOpResult(Verse::FOpResult::Return, Verse::VValue::FromBool(true));
+			}
+			else
+			{
+				if (!Accessor->Getter) return Verse::FOpResult(Verse::FOpResult::Error);
+
+				float Result = Accessor->Getter(*Subsystem->ActiveVmDroidState);
+				return Verse::FOpResult(Verse::FOpResult::Return, Verse::VValue::FromFloat(Result));
+			}
+		}
+
+	private:
+		bool bIsSetter = false;
+	};
+}
+
+Verse::FOpResult UFlightVerseSubsystem::RegistryThunk(Verse::FRunningContext Context, Verse::VValue Self, Verse::VNativeFunction::Args Arguments)
+{
+	(void)Context;
+	return Verse::FOpResult(Verse::FOpResult::Error);
+}
+
+namespace
+{
+	/**
+	 * WaitOnGpu_Thunk: VEX/Verse native function to suspend and wait for GPU io_uring signal.
+	 */
+	Verse::FOpResult WaitOnGpu_Thunk(Verse::FRunningContext Context, Verse::VValue Self, Verse::VNativeFunction::Args Arguments)
+	{
+		using namespace Verse;
+		UFlightVerseSubsystem* Subsystem = Cast<UFlightVerseSubsystem>(Self.AsUObject());
+		if (!Subsystem) return FOpResult(FOpResult::Error);
+
+		// 1. Create a placeholder to represent the future value (bool)
+		VPlaceholder& Placeholder = VPlaceholder::New(Context, 0);
+
+		// 2. Register with GPU bridge (Mocking a request ID for now)
+		// In a real system, we'd get this from UFlightGpuPerceptionSubsystem.
+		static int64 MockRequestId = 1000;
+		int64 RequestId = MockRequestId++;
+
+		// Wrap the placeholder in a WriteBarrier to root it for the Garbage Collector
+		Subsystem->PendingReadbacks.Add(RequestId, TWriteBarrier<VPlaceholder>(Context, Placeholder));
+
+		// 3. Suspend current behavior execution
+		return FOpResult(FOpResult::Return, VValue::Placeholder(Placeholder));
+	}
+}
+
+void UFlightVerseSubsystem::CompleteGpuWait(int64 RequestId)
+{
+	if (Verse::TWriteBarrier<Verse::VPlaceholder>* Found = PendingReadbacks.Find(RequestId))
+	{
+		// Copy the barrier to keep it alive during fulfillment just in case
+		Verse::TWriteBarrier<Verse::VPlaceholder> BarrierCopy = *Found;
+		PendingReadbacks.Remove(RequestId);
+
+		VerseContext.EnterVM([&]()
+		{
+			// We use Context to access the pointer inside the barrier
+			Verse::FAllocationContext AllocContext(VerseContext);
+			Verse::VPlaceholder* Placeholder = const_cast<Verse::VPlaceholder*>(&BarrierCopy.Get(VerseContext));
+
+			// Fulfill the placeholder to wake the behavior
+			Placeholder->Fill(VerseContext, Verse::VValue::FromBool(true));
+		});
+
+		// Once the behavior wakes up, it might have registered new deferred behaviors.
+		// We flush them now to complete the "Fusion Reduction" cycle.
+		FlushDeferredBehaviors();
+	}
+}
+
+void UFlightVerseSubsystem::RegisterNativeVerseFunctions()
+{
+	using namespace Flight::Vex;
+	FVexNativeRegistry& Registry = FVexNativeRegistry::Get();
+
+	Registry.RegisterFunction(MakeShared<FVexDroidStateAccessor>(false));
+	Registry.RegisterFunction(MakeShared<FVexDroidStateAccessor>(true));
+
+	// Register built-in VVM thunks
+	VerseContext.EnterVM([&]()
+	{
+		using namespace Verse;
+		FAllocationContext AllocContext(VerseContext);
+
+		VUniqueString& WaitName = VUniqueString::New(AllocContext, "WaitOnGpu");
+		VNativeFunction& WaitFn = VNativeFunction::New(AllocContext, 0, &WaitOnGpu_Thunk, WaitName, GlobalFalse());
+
+		// Note: Mapping in VVM's global namespace for Behaviors is pending.
+	});
+
+	UE_LOG(LogFlightVerseSubsystem, Verbose, TEXT("UFlightVerseSubsystem: Registered native VEX functions and WaitOnGpu thunk."));
+}
+
+void UFlightVerseSubsystem::RegisterNativeVerseSymbols()
+{
+	using namespace Flight::Vex;
+	FVexSymbolRegistry& Registry = FVexSymbolRegistry::Get();
+
+	// @position
+	Registry.RegisterSymbol({
+		TEXT("@position"),
+		[](const Flight::Swarm::FDroidState& State) { return State.Position.X; },
+		nullptr
+	});
+
+	// @shield
+	Registry.RegisterSymbol({
+		TEXT("@shield"),
+		[](const Flight::Swarm::FDroidState& State) { return State.Shield; },
+		[](Flight::Swarm::FDroidState& State, float Value) { State.Shield = Value; State.bIsDirty = true; }
+	});
+
+	// @energy
+	Registry.RegisterSymbol({
+		TEXT("@energy"),
+		[](const Flight::Swarm::FDroidState& State) { return State.Energy; },
+		[](Flight::Swarm::FDroidState& State, float Value) { State.Energy = Value; State.bIsDirty = true; }
+	});
+
+	UE_LOG(LogFlightVerseSubsystem, Verbose, TEXT("UFlightVerseSubsystem: Registered native VEX symbols."));
+}
+
+Verse::FOpResult UFlightVerseSubsystem::GetDroidStateValue(Verse::FRunningContext Context, Verse::VValue Self, Verse::VNativeFunction::Args Arguments)
+{
+	auto Thunk = Flight::Vex::FVexNativeRegistry::Get().FindFunction(TEXT("GetDroidStateValue"));
+	if (Thunk.IsValid()) return Thunk->Execute(Context, Self, Arguments);
+	return Verse::FOpResult(Verse::FOpResult::Error);
+}
+
+Verse::FOpResult UFlightVerseSubsystem::SetDroidStateValue(Verse::FRunningContext Context, Verse::VValue Self, Verse::VNativeFunction::Args Arguments)
+{
+	auto Thunk = Flight::Vex::FVexNativeRegistry::Get().FindFunction(TEXT("SetDroidStateValue"));
+	if (Thunk.IsValid()) return Thunk->Execute(Context, Self, Arguments);
+	return Verse::FOpResult(Verse::FOpResult::Error);
+}
+
+#else
+
+void UFlightVerseSubsystem::RegisterNativeVerseFunctions() {}
+void UFlightVerseSubsystem::RegisterNativeVerseSymbols() {}
+
 #endif
 
 void UFlightVerseSubsystem::RegisterNativeComponents()
 {
 }
 
+void UFlightVerseSubsystem::AddReferencedObjects(UObject* InThis, FReferenceCollector& Collector)
+{
 #if WITH_VERSE_VM || defined(__INTELLISENSE__)
-namespace
-{
-	Verse::FOpResult WaitOnGpu_Thunk(Verse::FRunningContext Context, Verse::VValue Self, Verse::VNativeFunction::Args Arguments)
+	UFlightVerseSubsystem* Subsystem = Cast<UFlightVerseSubsystem>(InThis);
+	if (Subsystem)
 	{
-		using namespace Verse;
-		if (Arguments.Num() < 1) return FOpResult(FOpResult::Error);
-
-		VPlaceholder& Placeholder = VPlaceholder::New(Context, 0);
-		return FOpResult(FOpResult::Return, VValue::Placeholder(Placeholder));
+		for (auto& Pair : Subsystem->PendingReadbacks)
+		{
+			Collector.AddReferencedVerseValue(Pair.Value, Subsystem, nullptr);
+		}
 	}
-}
 #endif
-
-void UFlightVerseSubsystem::RegisterNativeVerseFunctions()
-{
-	UE_LOG(LogFlightVerseSubsystem, Verbose, TEXT("UFlightVerseSubsystem: native Verse registration is pending implementation."));
 }

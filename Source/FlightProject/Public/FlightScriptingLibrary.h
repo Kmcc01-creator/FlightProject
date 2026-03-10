@@ -271,4 +271,19 @@ public:
     /** Returns latest compile diagnostics for a behavior ID, if available. */
     UFUNCTION(BlueprintPure, Category = "Flight|Scripting|Vex", meta = (WorldContext = "WorldContextObject"))
     static FString GetBehaviorCompileDiagnostics(const UObject* WorldContextObject, int32 BehaviorID);
+
+    /** Returns the latest compile artifact report JSON for a behavior ID, if available. */
+    UFUNCTION(BlueprintPure, Category = "Flight|Scripting|Vex", meta = (WorldContext = "WorldContextObject"))
+    static FString GetBehaviorCompileArtifactReportJson(const UObject* WorldContextObject, int32 BehaviorID);
+
+    /**
+     * Export the latest compile artifact report for a behavior to disk.
+     * Relative paths are rooted to the project directory.
+     * Returns absolute output path on success, empty string on failure.
+     */
+    UFUNCTION(BlueprintCallable, Category = "Flight|Scripting|Vex", meta = (WorldContext = "WorldContextObject"))
+    static FString ExportBehaviorCompileArtifactReport(
+        const UObject* WorldContextObject,
+        int32 BehaviorID,
+        const FString& RelativeOutputPath = TEXT("Saved/Flight/CompilerArtifacts/latest/behavior_report.json"));
 };

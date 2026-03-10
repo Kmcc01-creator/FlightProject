@@ -7,8 +7,11 @@
 #include "Schema/FlightRequirementRegistry.h"
 #include "FlightScriptingLibrary.h"
 #include "Swarm/SwarmSimulationTypes.h"
+#include "Dom/JsonObject.h"
 #include "Engine/Engine.h"
 #include "FlightTestUtils.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
 
 namespace
 {
@@ -62,9 +65,9 @@ bool FFlightVexParsingTest::RunTest(const FString& Parameters)
 
 		TMap<FString, FString> SymbolMap;
 		SymbolMap.Add(TEXT("@position"), TEXT("Droid.Position"));
-		
+
 		FString VerseOutput = Flight::Vex::LowerToVerse(Result.Program, Defs, SymbolMap);
-		
+
 		// Check for idiomatic Verse syntax
 		TestTrue(TEXT("Verse output should use 'set' for assignment"), VerseOutput.Contains(TEXT("set Droid.Position =")));
 		TestFalse(TEXT("Verse output should not have semicolons"), VerseOutput.Contains(TEXT(";")));
@@ -129,7 +132,7 @@ bool FFlightVexParsingTest::RunTest(const FString& Parameters)
 		TMap<FString, FString> SymbolMap;
 		SymbolMap.Add(TEXT("@position"), TEXT("Droid.Position"));
 		FString VerseOutput = Flight::Vex::LowerToVerse(Result.Program, TArray<Flight::Vex::FVexSymbolDefinition>(), SymbolMap);
-		
+
 		TestTrue(TEXT("Verse output should include <async> effect"), VerseOutput.Contains(TEXT("<async>")));
 	}
 
@@ -253,6 +256,71 @@ bool FFlightVerseCompileContractTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightCompileArtifactReportTest, "FlightProject.Functional.Vex.CompileArtifactReport", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FFlightCompileArtifactReportTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = FindAutomationWorld();
+	if (!World)
+	{
+		AddError(TEXT("No valid world context available for compile artifact report test"));
+		return false;
+	}
+
+	FString CompileDiagnostics;
+	const FString FullContractSource = TEXT("@gpu { @velocity = @position; @shield = @shield; @status = @status; }");
+	const bool bCompiled = UFlightScriptingLibrary::CompileVex(World, 9100, FullContractSource, CompileDiagnostics);
+	TestTrue(TEXT("Compile should succeed for artifact report generation"), bCompiled);
+
+	const FString ArtifactJson = UFlightScriptingLibrary::GetBehaviorCompileArtifactReportJson(World, 9100);
+	TestTrue(TEXT("Compile artifact report JSON should be available"), !ArtifactJson.IsEmpty());
+
+	TSharedPtr<FJsonObject> RootObject;
+	const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ArtifactJson);
+	const bool bParsed = FJsonSerializer::Deserialize(Reader, RootObject) && RootObject.IsValid();
+	TestTrue(TEXT("Compile artifact JSON should deserialize"), bParsed);
+	if (!bParsed || !RootObject.IsValid())
+	{
+		return false;
+	}
+
+	FString CompileOutcome;
+	TestTrue(TEXT("Compile artifact JSON should contain compileOutcome"), RootObject->TryGetStringField(TEXT("compileOutcome"), CompileOutcome));
+	TestEqual(TEXT("Compile artifact report should record VmCompiled outcome"), CompileOutcome, FString(TEXT("VmCompiled")));
+
+	FString BackendPath;
+	TestTrue(TEXT("Compile artifact JSON should contain backendPath"), RootObject->TryGetStringField(TEXT("backendPath"), BackendPath));
+	TestTrue(TEXT("Compile artifact report should record a non-empty backend path"), !BackendPath.IsEmpty());
+
+	FString TargetFingerprint;
+	TestTrue(TEXT("Compile artifact JSON should contain targetFingerprint"), RootObject->TryGetStringField(TEXT("targetFingerprint"), TargetFingerprint));
+	TestTrue(TEXT("Compile artifact report should record a non-empty target fingerprint"), !TargetFingerprint.IsEmpty());
+
+	const TSharedPtr<FJsonObject>* CodeShapeObject = nullptr;
+	TestTrue(TEXT("Compile artifact JSON should contain codeShapeMetrics"), RootObject->TryGetObjectField(TEXT("codeShapeMetrics"), CodeShapeObject));
+	if (CodeShapeObject && CodeShapeObject->IsValid())
+	{
+		double InstructionCount = 0.0;
+		TestTrue(TEXT("Code shape metrics should include instructionCount"), (*CodeShapeObject)->TryGetNumberField(TEXT("instructionCount"), InstructionCount));
+		TestTrue(TEXT("Code shape metrics should report at least one instruction"), InstructionCount > 0.0);
+
+		FString PressureClass;
+		TestTrue(TEXT("Code shape metrics should include pressureClass"), (*CodeShapeObject)->TryGetStringField(TEXT("pressureClass"), PressureClass));
+		TestTrue(TEXT("Code shape metrics should report a pressure class"), !PressureClass.IsEmpty());
+	}
+
+	const TSharedPtr<FJsonObject>* WarmupObject = nullptr;
+	TestTrue(TEXT("Compile artifact JSON should contain warmupMetrics"), RootObject->TryGetObjectField(TEXT("warmupMetrics"), WarmupObject));
+	if (WarmupObject && WarmupObject->IsValid())
+	{
+		double TotalCompileTimeMs = -1.0;
+		TestTrue(TEXT("Warmup metrics should include totalCompileTimeMs"), (*WarmupObject)->TryGetNumberField(TEXT("totalCompileTimeMs"), TotalCompileTimeMs));
+		TestTrue(TEXT("Warmup metrics should report a non-negative total compile time"), TotalCompileTimeMs >= 0.0);
+	}
+
+	return true;
+}
+
 #include "AutoRTFM.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightAutoRTFMIntegrationTest, "FlightProject.Integration.AutoRTFM", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -275,7 +343,7 @@ bool FFlightAutoRTFMIntegrationTest::RunTest(const FString& Parameters)
 
 		Droid.Position += Droid.Velocity;
 
-		bool bCollisionDetected = true; 
+			bool bCollisionDetected = true;
 
 		if (bCollisionDetected)
 		{
@@ -304,7 +372,7 @@ bool FFlightAutoRTFMIntegrationTest::RunTest(const FString& Parameters)
 		bCommitCalled = false;
 		bAbortCalled = false;
 		AutoRTFM::OnCommit([&]() { bCommitCalled = true; });
-		
+
 		Droid.Position += Droid.Velocity;
 	});
 
@@ -334,7 +402,7 @@ bool FFlightGpuReactiveTest::RunTest(const FString& Parameters)
 
 	int64 TrackingId = 12345;
 	TSharedPtr<TReactiveValue<bool>> Status = Executor->WaitOnGpuWork(TrackingId);
-	
+
 	TestNotNull(TEXT("Status ReactiveValue should be valid"), Status.Get());
 	TestFalse(TEXT("Initially status should be false"), Status->Get());
 

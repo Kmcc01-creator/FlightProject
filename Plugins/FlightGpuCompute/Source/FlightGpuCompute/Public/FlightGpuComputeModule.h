@@ -15,6 +15,9 @@ public:
 	/** Check if compute shaders are available (registered successfully) */
 	static bool AreShadersAvailable() { return bShadersRegistered; }
 
+	/** Shared helper to retrieve the global shader map safely */
+	static class FGlobalShaderMap* TryGetFlightGlobalShaderMap();
+
 private:
 	static bool bShadersRegistered;
 };

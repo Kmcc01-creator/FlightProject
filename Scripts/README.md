@@ -6,6 +6,8 @@ This directory hosts thin wrappers around Unreal's native tooling so we do not h
 - Normalises paths such as `PROJECT_ROOT` and `PROJECT_FILE`.
 - Exports `UE_ROOT`, defaulting to `$HOME/Unreal/UnrealEngine` if the variable is unset.
 - Provides helper guards (`ensure_project_file`, `ensure_file_exists`, `ensure_executable`, `resolve_ue_path`) that each script can reuse.
+- Centralises script output defaults through `FP_SCRIPT_COLOR_MODE`, `FP_SCRIPT_TIMESTAMPS`, `FP_TEST_LOG_PROFILE`, `FP_TEST_OUTPUT_MODE`, and `FP_TEST_EXTRA_LOG_CMDS`.
+- Provides shared helpers for banners, timestamp prefixes, color decisions, and test `-LogCmds` profile construction.
 - Detects SDL2 dynamic libraries via `find_sdl_dynamic_api`, trying common distro locations before respecting a user-defined `FP_SDL_DYNAMIC_API`.
 - Centralises Wayland/X11 environment tweaks with `configure_video_backend` so every launcher shares the same display defaults.
 
@@ -16,12 +18,70 @@ When adding new automation, source `env_common.sh` first so every helper shares 
    Regenerates IDE and project files via `GenerateProjectFiles.sh`. Use `-f` to pass Unreal's `-Force` flag.
 2. `./Scripts/build_targets.sh [Configuration] [--no-uba|--use-uba]`  
    Compiles C++ modules through `Build.sh` (default `Development`). In Codex/sandboxed terminals it auto-applies `-NoUBA` to avoid write failures under `~/.epic/UnrealBuildAccelerator`; use `--use-uba` to override if your environment allows it.
+   When combined with `--verify`, it now runs the headless breaking subset with the `triage` preset by default; override via `--verify-preset <quiet|triage|startup-debug|full-debug>` or `FP_TEST_PRESET`.
 3. `./Scripts/run_editor.sh [Extra UnrealEditor args]`  
    Launches `UnrealEditor` with the project descriptor, forwards additional arguments (e.g. `-Log`, `-NoRayTracing`), and honours our Wayland helpers (`--video-backend`, `--wayland`, `--x11`, `--gamescope`, `--no-gamescope`, `--gamescope-arg`).
 4. `./Scripts/run_game.sh [options]`  
    Builds (unless `--no-build`), cooks content, stages a Linux build via `RunUAT.sh BuildCookRun -nocompileuat`, and launches the staged `Saved/StagedBuilds/Linux*/FlightProject.sh` wrapper. It auto-cooks the default map when one is not specified and will reuse the staged build on subsequent runs; pass `--no-cook` to skip the staging step if you know the staged artifacts are current. Display helpers such as `--video-backend`, `--gamescope`, `--half-window`, and `--windowed-size WxH` tune the launch before the staged binary spawns. Use `--` to forward extra flags to the game binary (for example `-- -windowed -opengl4` when Vulkan drivers misbehave). The helper also sandbox’s .NET state under `Saved/DotNetCli` so first-run sentinels never touch the global home directory. See `Docs/Troubleshooting.md` for the history behind these safeguards.
 5. `./Scripts/run_tests_phased.sh [options]`  
    Runs validation in explicit phases: **Phase 1** (complex/generated + spec), **Phase 2** (simple automation), and optional **Phase 3** GPU/system checks (`--with-gpu`). Use `--phase1-only`, `--phase2-only`, or `--phase3-only` for focused triage.
+
+## Test Runner Controls
+
+`run_tests_headless.sh` now separates two concerns:
+- **Log profile**: which Unreal log categories are enabled via `-LogCmds`
+- **Output mode**: which lines the shell runner prints to the terminal
+
+Useful headless options:
+- `--preset <quiet|triage|startup-debug|full-debug>`
+- `--profile <minimal|focused|python|verbose|full>`
+- `--output <errors|summary|automation|all>`
+- `--automation-only`
+- `--summary`
+- `--errors-only`
+- `--show-python`
+- `--show-startup`
+- `--extra-log-cmds "LogCategory verbosity,..."`
+
+Matching environment variables:
+- `FP_TEST_PRESET`
+- `FP_TEST_LOG_PROFILE`
+- `FP_TEST_OUTPUT_MODE`
+- `FP_TEST_EXTRA_LOG_CMDS`
+- `TEST_INCLUDE_PYTHON_LOGS=1`
+- `TEST_INCLUDE_STARTUP_LOGS=1`
+
+Preset meanings:
+- `quiet`: minimal log categories and summary-only terminal output
+- `triage`: focused log categories and errors-only terminal output
+- `startup-debug`: Python-enabled log profile with automation output plus startup/Python visibility
+- `full-debug`: verbose Unreal logs and full terminal output
+
+Examples:
+
+```bash
+./Scripts/run_tests_headless.sh --filter="FlightProject.Functional.Vex.CompileArtifactReport" --automation-only
+```
+
+```bash
+./Scripts/run_tests_headless.sh --filter="FlightProject.Functional.Vex.CompileArtifactReport" --preset=triage
+```
+
+```bash
+./Scripts/run_tests_headless.sh --filter="FlightProject.Functional.Vex.CompileArtifactReport" --profile=python --output=summary --show-python
+```
+
+```bash
+FP_TEST_LOG_PROFILE=minimal FP_TEST_OUTPUT_MODE=automation ./Scripts/run_tests_phased.sh --phase2-only
+```
+
+```bash
+FP_TEST_PRESET=startup-debug ./Scripts/run_tests_phased.sh --phase1-only
+```
+
+```bash
+./Scripts/build_targets.sh Development --no-uba --verify --verify-preset=triage
+```
 
 ## Wayland / Hyprland Experiments
 - Both `run_editor.sh` and `run_game.sh` accept `--video-backend <auto|wayland|x11>` (with `--wayland`/`--x11` shortcuts) so you can force SDL to pick a display backend without touching your shell environment.

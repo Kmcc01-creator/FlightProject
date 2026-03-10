@@ -15,6 +15,8 @@ enum class EVexTokenKind : uint8
 	Number,
 	KeywordIf,
 	KeywordElse,
+	KeywordWhile,
+	KeywordFor,
 	Operator,
 	LParen,
 	RParen,

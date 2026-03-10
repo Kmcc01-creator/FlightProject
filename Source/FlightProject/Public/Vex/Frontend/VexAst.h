@@ -25,6 +25,9 @@ enum class EVexStatementKind : uint8
 	Expression,
 	Assignment,
 	IfHeader,
+	Else,
+	WhileHeader,
+	ForHeader,
 	BlockOpen,
 	BlockClose,
 	TargetDirective

@@ -24,8 +24,13 @@ RUN_PHASE1=1
 RUN_PHASE2=1
 RUN_PHASE3=0
 ENABLE_TIMESTAMPS=1
-TEST_STREAM_FILTER_VALUE="${TEST_STREAM_FILTER:-errors}"
+TEST_OUTPUT_MODE_VALUE="${TEST_OUTPUT_MODE:-${TEST_STREAM_FILTER:-errors}}"
 TEST_COLOR_MODE_VALUE="${TEST_COLOR_MODE:-auto}"
+TEST_LOG_PROFILE_VALUE="${TEST_LOG_PROFILE:-focused}"
+TEST_EXTRA_LOG_CMDS_VALUE="${TEST_EXTRA_LOG_CMDS:-}"
+TEST_INCLUDE_PYTHON_LOGS_VALUE="${TEST_INCLUDE_PYTHON_LOGS:-0}"
+TEST_INCLUDE_STARTUP_LOGS_VALUE="${TEST_INCLUDE_STARTUP_LOGS:-0}"
+TEST_PRESET_VALUE="${TEST_PRESET:-$FP_TEST_PRESET}"
 GPU_SCOPE="${TEST_SCOPE:-all}"
 
 usage() {
@@ -41,7 +46,13 @@ Options:
   --skip-phase1           Skip Phase 1.
   --skip-phase2           Skip Phase 2.
   --skip-phase3           Skip Phase 3.
-  --stream <mode>         Log stream mode for child scripts (errors|all). Default: errors.
+  --stream <mode>         Compatibility alias for --output.
+  --output <mode>         Output mode for child scripts (errors|summary|automation|all). Default: errors.
+  --profile <profile>     Log profile for child scripts (minimal|focused|python|verbose|full). Default: focused.
+  --preset <name>         Named child-runner preset (quiet|triage|startup-debug|full-debug).
+  --show-python           Include LogPython lines in child output/log categories.
+  --show-startup          Include pre-automation startup lines in automation output mode.
+  --extra-log-cmds <csv>  Append extra Unreal -LogCmds entries for child runs.
   --timestamps            Enable timestamps in child scripts (default).
   --no-timestamps         Disable timestamps in child scripts.
   -h, --help              Show this help text.
@@ -94,10 +105,66 @@ while [[ $# -gt 0 ]]; do
             ;;
         --stream)
             if [[ $# -lt 2 ]]; then
-                error "--stream expects a value (errors|all)"
+                error "--stream expects a value"
                 exit 1
             fi
-            TEST_STREAM_FILTER_VALUE="$2"
+            TEST_OUTPUT_MODE_VALUE="$2"
+            shift 2
+            ;;
+        --output=*)
+            TEST_OUTPUT_MODE_VALUE="${1#*=}"
+            shift
+            ;;
+        --preset=*)
+            TEST_PRESET_VALUE="${1#*=}"
+            shift
+            ;;
+        --output)
+            if [[ $# -lt 2 ]]; then
+                error "--output expects a value (errors|summary|automation|all)"
+                exit 1
+            fi
+            TEST_OUTPUT_MODE_VALUE="$2"
+            shift 2
+            ;;
+        --preset)
+            if [[ $# -lt 2 ]]; then
+                error "--preset expects a value (quiet|triage|startup-debug|full-debug)"
+                exit 1
+            fi
+            TEST_PRESET_VALUE="$2"
+            shift 2
+            ;;
+        --profile=*)
+            TEST_LOG_PROFILE_VALUE="${1#*=}"
+            shift
+            ;;
+        --profile)
+            if [[ $# -lt 2 ]]; then
+                error "--profile expects a value (minimal|focused|python|verbose|full)"
+                exit 1
+            fi
+            TEST_LOG_PROFILE_VALUE="$2"
+            shift 2
+            ;;
+        --show-python)
+            TEST_INCLUDE_PYTHON_LOGS_VALUE=1
+            shift
+            ;;
+        --show-startup)
+            TEST_INCLUDE_STARTUP_LOGS_VALUE=1
+            shift
+            ;;
+        --extra-log-cmds=*)
+            TEST_EXTRA_LOG_CMDS_VALUE=$(append_csv_value "$TEST_EXTRA_LOG_CMDS_VALUE" "${1#*=}")
+            shift
+            ;;
+        --extra-log-cmds)
+            if [[ $# -lt 2 ]]; then
+                error "--extra-log-cmds expects a comma-separated value"
+                exit 1
+            fi
+            TEST_EXTRA_LOG_CMDS_VALUE=$(append_csv_value "$TEST_EXTRA_LOG_CMDS_VALUE" "$2")
             shift 2
             ;;
         --timestamps)
@@ -120,6 +187,17 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+if [[ -n "$TEST_PRESET_VALUE" ]]; then
+    IFS=$'\t' read -r TEST_LOG_PROFILE_VALUE TEST_OUTPUT_MODE_VALUE TEST_INCLUDE_PYTHON_LOGS_VALUE TEST_INCLUDE_STARTUP_LOGS_VALUE ENABLE_TIMESTAMPS TEST_EXTRA_LOG_CMDS_VALUE <<< "$(apply_test_preset_overrides \
+        "$TEST_PRESET_VALUE" \
+        "$TEST_LOG_PROFILE_VALUE" \
+        "$TEST_OUTPUT_MODE_VALUE" \
+        "$TEST_INCLUDE_PYTHON_LOGS_VALUE" \
+        "$TEST_INCLUDE_STARTUP_LOGS_VALUE" \
+        "$ENABLE_TIMESTAMPS" \
+        "$TEST_EXTRA_LOG_CMDS_VALUE")"
+fi
+
 if [[ "$RUN_PHASE1" -eq 0 && "$RUN_PHASE2" -eq 0 && "$RUN_PHASE3" -eq 0 ]]; then
     error "No phases selected."
     usage
@@ -140,7 +218,9 @@ run_headless_phase() {
     local phase_filter="$2"
     log_info "Starting ${phase_name}"
     set +e
-    TEST_STREAM_FILTER="$TEST_STREAM_FILTER_VALUE" TEST_COLOR_MODE="$TEST_COLOR_MODE_VALUE" \
+    TEST_OUTPUT_MODE="$TEST_OUTPUT_MODE_VALUE" TEST_COLOR_MODE="$TEST_COLOR_MODE_VALUE" \
+        TEST_LOG_PROFILE="$TEST_LOG_PROFILE_VALUE" TEST_EXTRA_LOG_CMDS="$TEST_EXTRA_LOG_CMDS_VALUE" \
+        TEST_INCLUDE_PYTHON_LOGS="$TEST_INCLUDE_PYTHON_LOGS_VALUE" TEST_INCLUDE_STARTUP_LOGS="$TEST_INCLUDE_STARTUP_LOGS_VALUE" \
         "$HEADLESS_RUNNER" "${TS_ARGS[@]}" --filter="$phase_filter"
     local status=$?
     set -e
@@ -174,7 +254,11 @@ echo "${c_blue}================================================================$
 log_info "Phase 1 enabled: $( [[ "$RUN_PHASE1" -eq 1 ]] && echo yes || echo no )"
 log_info "Phase 2 enabled: $( [[ "$RUN_PHASE2" -eq 1 ]] && echo yes || echo no )"
 log_info "Phase 3 enabled: $( [[ "$RUN_PHASE3" -eq 1 ]] && echo yes || echo no )"
-log_info "Stream filter:    ${TEST_STREAM_FILTER_VALUE}"
+log_info "Output mode:      ${TEST_OUTPUT_MODE_VALUE}"
+log_info "Log profile:      ${TEST_LOG_PROFILE_VALUE}"
+if [[ -n "$TEST_PRESET_VALUE" ]]; then
+    log_info "Preset:           ${TEST_PRESET_VALUE}"
+fi
 echo "${c_blue}----------------------------------------------------------------${c_reset}"
 echo
 
@@ -223,4 +307,3 @@ if [[ "$PHASE1_STATUS" -ne 0 || "$PHASE2_STATUS" -ne 0 || "$PHASE3_STATUS" -ne 0
 fi
 
 exit 0
-

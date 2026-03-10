@@ -34,23 +34,45 @@ namespace
 		};
 		for (int32 i = 0; i < Tokens.Num(); ++i) {
 			const auto& T = Tokens[i]; if (T.Kind == EVexTokenKind::EndOfFile) break;
-			if (T.Kind == EVexTokenKind::TargetDirective && StatementStart == INDEX_NONE && ParenDepth == 0 && BraceDepth == 0) {
+			if (T.Kind == EVexTokenKind::TargetDirective && ParenDepth == 0 && BraceDepth == 0) {
+				if (StatementStart != INDEX_NONE) { EmitStatement(i - 1); StatementStart = INDEX_NONE; }
 				FVexStatementAst D; D.Kind = EVexStatementKind::TargetDirective; D.StartTokenIndex = i; D.EndTokenIndex = i;
 				if (T.Lexeme == TEXT("@rate") && i + 1 < Tokens.Num() && Tokens[i + 1].Kind == EVexTokenKind::LParen) {
 					int32 Dp = 0; for (int32 c = i + 1; c < Tokens.Num(); ++c) { if (Tokens[c].Kind == EVexTokenKind::LParen) ++Dp; else if (Tokens[c].Kind == EVexTokenKind::RParen) { --Dp; if (Dp == 0) { D.EndTokenIndex = c; i = c; break; } } }
 				}
 				D.SourceSpan = BuildSpanText(Tokens, D.StartTokenIndex, D.EndTokenIndex); OutStatements.Add(MoveTemp(D)); continue;
 			}
+			if (T.Kind == EVexTokenKind::LBrace && StatementStart == INDEX_NONE && ParenDepth == 0 && BraceDepth == 0) {
+				FVexStatementAst B; B.Kind = EVexStatementKind::BlockOpen; B.StartTokenIndex = i; B.EndTokenIndex = i; B.SourceSpan = TEXT("{"); OutStatements.Add(MoveTemp(B));
+				continue;
+			}
 			if (T.Kind == EVexTokenKind::KeywordIf && StatementStart == INDEX_NONE && ParenDepth == 0 && BraceDepth == 0) {
 				if (i + 1 >= Tokens.Num() || Tokens[i + 1].Kind != EVexTokenKind::LParen) { AddIssue(OutIssues, EVexIssueSeverity::Error, TEXT("`if` must be followed by '('."), T.Line, T.Column); continue; }
 				int32 Dp = 0; for (int32 c = i + 1; c < Tokens.Num(); ++c) { if (Tokens[c].Kind == EVexTokenKind::LParen) ++Dp; else if (Tokens[c].Kind == EVexTokenKind::RParen) { --Dp; if (Dp == 0) { FVexStatementAst H; H.Kind = EVexStatementKind::IfHeader; H.StartTokenIndex = i; H.EndTokenIndex = c; H.SourceSpan = BuildSpanText(Tokens, i, c); OutStatements.Add(MoveTemp(H)); i = c; break; } } }
 				continue;
 			}
+			if (T.Kind == EVexTokenKind::KeywordElse && StatementStart == INDEX_NONE && ParenDepth == 0 && BraceDepth == 0) {
+				FVexStatementAst E; E.Kind = EVexStatementKind::Else; E.StartTokenIndex = i; E.EndTokenIndex = i; E.SourceSpan = TEXT("else"); OutStatements.Add(MoveTemp(E));
+				continue;
+			}
+			if (T.Kind == EVexTokenKind::KeywordWhile && StatementStart == INDEX_NONE && ParenDepth == 0 && BraceDepth == 0) {
+				if (i + 1 >= Tokens.Num() || Tokens[i + 1].Kind != EVexTokenKind::LParen) { AddIssue(OutIssues, EVexIssueSeverity::Error, TEXT("`while` must be followed by '('."), T.Line, T.Column); continue; }
+				int32 Dp = 0; for (int32 c = i + 1; c < Tokens.Num(); ++c) { if (Tokens[c].Kind == EVexTokenKind::LParen) ++Dp; else if (Tokens[c].Kind == EVexTokenKind::RParen) { --Dp; if (Dp == 0) { FVexStatementAst H; H.Kind = EVexStatementKind::WhileHeader; H.StartTokenIndex = i; H.EndTokenIndex = c; H.SourceSpan = BuildSpanText(Tokens, i, c); OutStatements.Add(MoveTemp(H)); i = c; break; } } }
+				continue;
+			}
+			if (T.Kind == EVexTokenKind::KeywordFor && StatementStart == INDEX_NONE && ParenDepth == 0 && BraceDepth == 0) {
+				if (i + 1 >= Tokens.Num() || Tokens[i + 1].Kind != EVexTokenKind::LParen) { AddIssue(OutIssues, EVexIssueSeverity::Error, TEXT("`for` must be followed by '('."), T.Line, T.Column); continue; }
+				int32 Dp = 0; for (int32 c = i + 1; c < Tokens.Num(); ++c) { if (Tokens[c].Kind == EVexTokenKind::LParen) ++Dp; else if (Tokens[c].Kind == EVexTokenKind::RParen) { --Dp; if (Dp == 0) { FVexStatementAst H; H.Kind = EVexStatementKind::ForHeader; H.StartTokenIndex = i; H.EndTokenIndex = c; H.SourceSpan = BuildSpanText(Tokens, i, c); OutStatements.Add(MoveTemp(H)); i = c; break; } } }
+				continue;
+			}
 			if (T.Kind == EVexTokenKind::LParen) { if (StatementStart == INDEX_NONE) StatementStart = i; ++ParenDepth; continue; }
 			if (T.Kind == EVexTokenKind::RParen) { if (ParenDepth > 0) --ParenDepth; continue; }
 			if (T.Kind == EVexTokenKind::LBrace) {
-				if (StatementStart == INDEX_NONE && ParenDepth == 0 && BraceDepth == 0) { FVexStatementAst B; B.Kind = EVexStatementKind::BlockOpen; B.StartTokenIndex = i; B.EndTokenIndex = i; B.SourceSpan = TEXT("{"); OutStatements.Add(MoveTemp(B)); }
-				else { if (StatementStart == INDEX_NONE) StatementStart = i; ++BraceDepth; }
+				if (StatementStart == INDEX_NONE && ParenDepth == 0 && BraceDepth == 0) {
+					// Top-level block (e.g. after a directive), already handled above
+					continue;
+				}
+				if (StatementStart == INDEX_NONE) StatementStart = i; ++BraceDepth;
 				continue;
 			}
 			if (T.Kind == EVexTokenKind::RBrace) {
@@ -158,8 +180,8 @@ namespace
 					if (const auto* D = Syms.Find(Tokens[i].Lexeme))
 					{
 						if (Task) { bool W = (S.Kind == EVexStatementKind::Assignment && i == S.StartTokenIndex); if (W) { Task->WriteSymbols.Add(D->SymbolName); if (!D->bWritable) AddIssue(Issues, EVexIssueSeverity::Error, FString::Printf(TEXT("read-only symbol '%s'"), *D->SymbolName), Tokens[i].Line, Tokens[i].Column); } else Task->ReadSymbols.Add(D->SymbolName); }
-						if (D->Residency != EFlightVexSymbolResidency::Shared && Context != EFlightVexSymbolResidency::Shared) if (D->Residency != Context) AddIssue(Issues, EVexIssueSeverity::Error, FString::Printf(TEXT("Symbol '%s' residency error"), *D->SymbolName), Tokens[i].Line, Tokens[i].Column);
-						if (D->Affinity == EFlightVexSymbolAffinity::GameThread && Affinity == EFlightVexSymbolAffinity::WorkerThread) AddIssue(Issues, EVexIssueSeverity::Error, FString::Printf(TEXT("Symbol '%s' affinity error"), *D->SymbolName), Tokens[i].Line, Tokens[i].Column);
+						if (D->Residency != EFlightVexSymbolResidency::Shared && Context != EFlightVexSymbolResidency::Shared) if (D->Residency != Context) AddIssue(Issues, EVexIssueSeverity::Error, FString::Printf(TEXT("Symbol '%s' residency error: cannot be used in %s context."), *D->SymbolName, (Context == EFlightVexSymbolResidency::CpuOnly ? TEXT("@cpu") : TEXT("@gpu"))), Tokens[i].Line, Tokens[i].Column);
+						if (D->Affinity == EFlightVexSymbolAffinity::GameThread && Affinity == EFlightVexSymbolAffinity::WorkerThread) AddIssue(Issues, EVexIssueSeverity::Error, FString::Printf(TEXT("Symbol '%s' affinity error: Game Thread symbols cannot be used in a @job context."), *D->SymbolName), Tokens[i].Line, Tokens[i].Column);
 						if (Context == EFlightVexSymbolResidency::GpuOnly && !D->bGpuTier1Allowed) AddIssue(Issues, EVexIssueSeverity::Warning, FString::Printf(TEXT("Symbol '%s' is not officially supported in GPU Tier 1 kernels."), *D->SymbolName), Tokens[i].Line, Tokens[i].Column);
 						bool W = (S.Kind == EVexStatementKind::Assignment && i == S.StartTokenIndex);
 						if (W) { if (!D->bSimdWriteAllowed) AddIssue(Issues, EVexIssueSeverity::Warning, FString::Printf(TEXT("Symbol '%s' does not allow SIMD-accelerated writes; may trigger scalar fallback."), *D->SymbolName), Tokens[i].Line, Tokens[i].Column); } 
@@ -183,7 +205,7 @@ namespace
 				}
 			}
 		}
-		for (const auto& S : Program.Statements) if (S.Kind == EVexStatementKind::IfHeader && S.ExpressionNodeIndex != INDEX_NONE) if (InferExpressionTypeFromAst(S.ExpressionNodeIndex, Program.Expressions, Syms, Locs) != EVexValueType::Bool) AddIssue(Issues, EVexIssueSeverity::Error, TEXT("condition must be bool-like"), Tokens.IsValidIndex(S.StartTokenIndex) ? Tokens[S.StartTokenIndex].Line : 1, Tokens.IsValidIndex(S.StartTokenIndex) ? Tokens[S.StartTokenIndex].Column : 1);
+		for (const auto& S : Program.Statements) if ((S.Kind == EVexStatementKind::IfHeader || S.Kind == EVexStatementKind::WhileHeader) && S.ExpressionNodeIndex != INDEX_NONE) if (InferExpressionTypeFromAst(S.ExpressionNodeIndex, Program.Expressions, Syms, Locs) != EVexValueType::Bool) AddIssue(Issues, EVexIssueSeverity::Error, TEXT("condition must be bool-like"), Tokens.IsValidIndex(S.StartTokenIndex) ? Tokens[S.StartTokenIndex].Line : 1, Tokens.IsValidIndex(S.StartTokenIndex) ? Tokens[S.StartTokenIndex].Column : 1);
 		AnnotateInferredTypes(Program, Syms, Locs);
 	}
 
@@ -243,7 +265,7 @@ namespace
 
 	void ValidateExpressionShapes(const TArray<FVexToken>& T, const FVexProgramAst& P, TArray<FVexIssue>& Issues) {
 		for (const auto& S : P.Statements) {
-			if (S.Kind != EVexStatementKind::Expression && S.Kind != EVexStatementKind::Assignment && S.Kind != EVexStatementKind::IfHeader) continue;
+			if (S.Kind != EVexStatementKind::Expression && S.Kind != EVexStatementKind::Assignment && S.Kind != EVexStatementKind::IfHeader && S.Kind != EVexStatementKind::WhileHeader) continue;
 			if (S.ExpressionNodeIndex == INDEX_NONE) { AddIssue(Issues, EVexIssueSeverity::Error, TEXT("Malformed expression"), T.IsValidIndex(S.StartTokenIndex) ? T[S.StartTokenIndex].Line : 1, T.IsValidIndex(S.StartTokenIndex) ? T[S.StartTokenIndex].Column : 1); continue; }
 			TSet<int32> V; TArray<int32> Stk; Stk.Add(S.ExpressionNodeIndex);
 			while (Stk.Num() > 0) {
@@ -267,10 +289,10 @@ FVexParseResult ParseAndValidate(const FString& Src, const TArray<FVexSymbolDefi
 	TMap<FString, FVexSymbolDefinition> Syms; for (const auto& D : SymbolDefs) Syms.Add(D.SymbolName, D);
 	TSet<FString> Known; for (const auto& D : SymbolDefs) Known.Add(D.SymbolName);
 	for (auto& S : R.Program.Statements) {
-		if (S.Kind != EVexStatementKind::Expression && S.Kind != EVexStatementKind::Assignment && S.Kind != EVexStatementKind::IfHeader) continue;
+		if (S.Kind != EVexStatementKind::Expression && S.Kind != EVexStatementKind::Assignment && S.Kind != EVexStatementKind::IfHeader && S.Kind != EVexStatementKind::WhileHeader) continue;
 		int32 ES = S.StartTokenIndex, EE = S.EndTokenIndex;
 		if (S.Kind == EVexStatementKind::Assignment) { for (int32 i = S.StartTokenIndex; i <= S.EndTokenIndex; ++i) if (R.Program.Tokens[i].Kind == EVexTokenKind::Operator && IsAssignmentOperator(R.Program.Tokens[i].Lexeme)) { ES = i + 1; break; } }
-		else if (S.Kind == EVexStatementKind::IfHeader) { int32 L = INDEX_NONE, RP = INDEX_NONE; for (int32 i = S.StartTokenIndex; i <= S.EndTokenIndex; ++i) if (R.Program.Tokens[i].Kind == EVexTokenKind::LParen && L == INDEX_NONE) L = i; else if (R.Program.Tokens[i].Kind == EVexTokenKind::RParen) RP = i; if (L != INDEX_NONE && RP != INDEX_NONE && RP > L) { ES = L + 1; EE = RP - 1; } }
+		else if (S.Kind == EVexStatementKind::IfHeader || S.Kind == EVexStatementKind::WhileHeader) { int32 L = INDEX_NONE, RP = INDEX_NONE; for (int32 i = S.StartTokenIndex; i <= S.EndTokenIndex; ++i) if (R.Program.Tokens[i].Kind == EVexTokenKind::LParen && L == INDEX_NONE) L = i; else if (R.Program.Tokens[i].Kind == EVexTokenKind::RParen) RP = i; if (L != INDEX_NONE && RP != INDEX_NONE && RP > L) { ES = L + 1; EE = RP - 1; } }
 		int32 Cr = ES; S.ExpressionNodeIndex = BuildExpressionAst(R.Program.Tokens, ES, EE, R.Program.Expressions, &Cr);
 		if (Cr <= EE && R.Program.Tokens.IsValidIndex(Cr)) AddIssue(R.Issues, EVexIssueSeverity::Error, TEXT("Unexpected token"), R.Program.Tokens[Cr].Line, R.Program.Tokens[Cr].Column);
 	}

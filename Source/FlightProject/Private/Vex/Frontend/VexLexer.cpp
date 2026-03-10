@@ -47,6 +47,8 @@ TArray<FVexToken> FVexLexer::Tokenize(const FString& Source, TArray<FVexIssue>& 
 			FVexToken T; T.Lexeme = Lex; T.Line = TLine; T.Column = TCol;
 			if (Lex == TEXT("if")) T.Kind = EVexTokenKind::KeywordIf;
 			else if (Lex == TEXT("else")) T.Kind = EVexTokenKind::KeywordElse;
+			else if (Lex == TEXT("while")) T.Kind = EVexTokenKind::KeywordWhile;
+			else if (Lex == TEXT("for")) T.Kind = EVexTokenKind::KeywordFor;
 			else T.Kind = EVexTokenKind::Identifier;
 			Tokens.Add(MoveTemp(T)); Col += End - Index; Index = End;
 			continue;

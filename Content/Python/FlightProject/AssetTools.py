@@ -10,23 +10,58 @@ STARTUP_PROFILE_ASSET_PATHS = {
     "gauntlet_gpu_swarm": "/Game/Data/StartupProfiles/DA_FlightStartup_GauntletGpuSwarm",
 }
 
+STARTUP_PROFILE_SPECS = {
+    "DEFAULT_SANDBOX": {
+        "ordinal": 0,
+        "candidates": ["DefaultSandbox", "DEFAULT_SANDBOX", "Default_Sandbox"],
+    },
+    "GAUNTLET_GPU_SWARM": {
+        "ordinal": 1,
+        "candidates": ["GauntletGpuSwarm", "GAUNTLET_GPU_SWARM", "Gauntlet_GPU_Swarm"],
+    },
+    "LEGACY_AUTO": {
+        "ordinal": 2,
+        "candidates": ["LegacyAuto", "LEGACY_AUTO", "Legacy_Auto"],
+    },
+}
+
 
 def resolve_startup_profile_enum(enum_name: str):
     """
-    Resolve Flight startup profile enum values safely across Unreal Python enum naming styles.
+    Resolve Flight startup profile values safely across Unreal Python enum naming styles.
+    Falls back to the raw enum ordinal when the reflected enum type is unavailable.
     """
-    enum_type = unreal.EFlightStartupProfile
-    candidates = [
-        enum_name,
-        enum_name.upper(),
-        enum_name.replace(" ", "_").upper(),
-    ]
+    normalized_name = enum_name.replace(" ", "_").upper()
+    spec = STARTUP_PROFILE_SPECS.get(normalized_name)
+    if spec is None:
+        raise AttributeError(f"Unknown Flight startup profile '{enum_name}'")
 
-    for candidate in candidates:
-        if hasattr(enum_type, candidate):
-            return getattr(enum_type, candidate)
+    enum_type = getattr(unreal, "FlightStartupProfileType", None)
+    if enum_type is None:
+        enum_type = getattr(unreal, "EFlightStartupProfile", None)
+    candidates = list(spec["candidates"])
+    candidates.extend(
+        [
+            enum_name,
+            normalized_name,
+            enum_name.replace(" ", "_"),
+        ]
+    )
 
-    raise AttributeError(f"Could not resolve EFlightStartupProfile value for '{enum_name}'")
+    if enum_type is not None:
+        for candidate in candidates:
+            if hasattr(enum_type, candidate):
+                return getattr(enum_type, candidate)
+
+        unreal.log_warning(
+            f"EFlightStartupProfile is reflected but '{enum_name}' was not found; using raw ordinal {spec['ordinal']}"
+        )
+    else:
+        unreal.log_warning(
+            f"EFlightStartupProfile is not exposed to Unreal Python; using raw ordinal {spec['ordinal']} for '{enum_name}'"
+        )
+
+    return spec["ordinal"]
 
 
 def ensure_mass_entity_config_traits(asset_path: str, trait_class_paths: list[str]) -> list[str]:

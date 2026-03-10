@@ -17,7 +17,10 @@ def on_editor_startup():
     # 1. Ensure required assets exist before validation.
     from FlightProject import AssetTools
     AssetTools.ensure_swarm_encounter_assets()
-    AssetTools.ensure_flight_startup_profiles()
+    try:
+        AssetTools.ensure_flight_startup_profiles()
+    except Exception as e:
+        unreal.log_warning(f"Failed to ensure startup profile assets: {e}")
 
     # 2. Validate data files
     from FlightProject import Validation

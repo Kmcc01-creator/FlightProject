@@ -5,8 +5,9 @@ This document outlines the build system configuration, test execution patterns, 
 ## 1. Test Execution & Discovery
 This section captures the most recent observed build/test outcomes and commands used for repeatable triage.
 
-### Latest Build Snapshot (2026-03-09)
-- `./Scripts/build_targets.sh Development` succeeded for `FlightProjectEditor` on Linux.
+### Latest Build Snapshot (2026-03-10)
+- `./Scripts/build_targets.sh Development --no-uba` succeeded for `FlightProjectEditor` on Linux.
+- `./Scripts/build_targets.sh Development --no-uba --verify` also succeeded; verify now uses the `triage` preset by default.
 - Recent non-parser hardening compiled cleanly:
   - schema-driven command handling fix (`INVALID_AFFINITY` + fail-fast unknown types)
   - `uint32` -> VEX `Int` mapping for schema symbol generation
@@ -22,47 +23,26 @@ This section captures the most recent observed build/test outcomes and commands 
   - parser-side required-symbol enforcement path (`bRequireAllRequiredSymbols`)
   - mega-kernel hoisting/local alias generation aligned with parser tests
 
-### Latest Headless Automation Snapshot (2026-03-09)
-- Phase-2 focused regression gate now passes (`2/2`):
-  - `FlightProject.AutoRTFM.Integration`
-  - `FlightProject.Vex.Simd.Parity`
-  - evidence: `Saved/Logs/FlightProject-backup-2026.03.09-04.32.45.log:101,110`
-- Full phase-2 filter now passes (`63` tests, `EXIT CODE: 0`):
-  - evidence: `Saved/Logs/FlightProject.log:105,297`
-- Root-cause fixes applied for this phase-2 recovery:
-  - AutoRTFM test now validates both transactional and fallback runtime semantics.
-  - VEX IR lowering now handles member access (`@position.x`) and unsupported-op reporting correctly.
-  - SIMD executor now resolves operand kinds safely (register/constant) and correctly broadcasts scalar constants across lanes.
-- Focused hardening bucket now passes:
-  - `FlightProject.Integration.SchemaDriven`
-  - `FlightProject.Schema.Vex.ManifestValidation`
-  - `FlightProject.Verse.CompileContract`
-  - `FlightProject.Verse.Subsystem`
-- Step 2/3 validation bucket passes:
-  - `FlightProject.Integration.Concurrency`
-  - `FlightProject.Verse.CompileContract`
-  - `FlightProject.Verse.Subsystem`
-- Parser bucket now passes:
-  - `FlightProject.Schema.Vex.Parser` (`17/17`)
-- Mixed schema/Verse/parser bucket now passes:
-  - `FlightProject.Integration.SchemaDriven`
-  - `FlightProject.Schema.Vex.ManifestValidation`
-  - `FlightProject.Verse.CompileContract`
-  - `FlightProject.Verse.Subsystem`
-  - `FlightProject.Schema.Vex.Parser` (parser-inclusive focused bucket remains green after operator suite expansion)
-- Extended mixed bucket with vertical-slice now passes:
-  - `FlightProject.Integration.Vex.VerticalSlice`
-  - combined focused result: `32/32`
-- Parser/operator diagnostics now covered in headless runs:
-  - `FlightProject.Schema.Vex.Parser.Diagnostics.InvalidExtractOperator`
-  - `FlightProject.Schema.Vex.Parser.Diagnostics.InvalidSingleAmpersand`
-- Verse online focused bucket passes (`10/10`):
-  - `FlightProject.Verse.CompileContract`
-  - `FlightProject.Verse.Subsystem`
-  - `FlightProject.Integration.Vex.VerticalSlice`
-  - `FlightProject.Integration.Concurrency`
-- GPU-oriented tests still expected to skip in `NullRHI` contexts.
-- Vulkan/GPU system-phase status remains environment-dependent. A prior full-GPU attempt exited before automation due to Vulkan device enumeration failure (`VK_ERROR_INITIALIZATION_FAILED`, `0` devices), so GPU-phase validation should be executed on a confirmed Vulkan-capable runtime.
+### Latest Headless Automation Snapshot (2026-03-10)
+- Full phased headless validation is currently **not green**.
+- Phase 1 (`24` tests) has `1` failing spec:
+  - `FlightProject.Vex.Parser.Spec.Verse Lowering.should generate idiomatic Verse code`
+  - evidence: `Saved/Logs/FlightProject-backup-2026.03.10-00.57.49.log:177-178`
+- Phase 2 (`45` tests) has `2` failing logging-boundary tests:
+  - `FlightProject.Logging.Boundaries.DualSinkNoDuplication`
+  - `FlightProject.Logging.Boundaries.UnrealOutputBridge`
+  - evidence: `Saved/Logs/FlightProject-backup-2026.03.10-00.57.59.log:181-193`
+- The new VEX artifact-report automation is passing in headless mode:
+  - `FlightProject.Functional.Vex.CompileArtifactReport`
+- The current recommended headless command is:
+  - `TEST_PRESET=triage ./Scripts/run_tests_phased.sh --timestamps`
+
+### Latest GPU/Vulkan Snapshot (2026-03-10)
+- Full GPU-required validation is currently blocked before automation discovery.
+- `TEST_SCOPE=all ./Scripts/run_tests_full.sh` exits during Vulkan startup with:
+  - `Forced Vulkan device could not be created at the project's supported feature levels`
+  - evidence: `Saved/Logs/FlightProject.log:83`
+- Treat current GPU validation as environment-blocked until Vulkan/device creation succeeds on the runner.
 
 ### Key Learning: Discovery Context
 Tests defined with `EAutomationTestFlags::ClientContext` are **not** discovered when running via `UnrealEditor-Cmd`. To enable discovery in commandlet/CI environments, tests must use:
@@ -81,27 +61,28 @@ export UE_ROOT=/home/kelly/Unreal/UnrealEngine
 ./Scripts/run_tests_headless.sh
 ```
 *Note: `quit` ensures immediate exit. The script uses `-DDC=NoZenLocalFallback` with a local cache path to avoid Zen startup stalls while keeping DDC valid for commandlet execution.*
-*Optional log filtering: set `TEST_LOG_PROFILE=focused|verbose|full` (default `full`) or provide explicit `LOG_CMDS` (which overrides profile selection).*
-*Optional stream shaping: set `TEST_COLOR_MODE=auto|always|never` and `TEST_STREAM_FILTER=all|errors`.*
+*Recommended local preset: `--preset=triage` for compact failure-focused output.*
+*Named presets: `quiet`, `triage`, `startup-debug`, `full-debug`.*
+*Advanced controls: `--profile`, `--output`, `--show-python`, `--show-startup`, and `--extra-log-cmds`.*
 
 **Phased Validation Command (recommended default):**
 ```bash
 export UE_ROOT=/home/kelly/Unreal/UnrealEngine
-TEST_STREAM_FILTER=errors ./Scripts/run_tests_phased.sh
+TEST_PRESET=triage ./Scripts/run_tests_phased.sh --timestamps
 ```
 *Use `--with-gpu --gpu-scope all` only when Vulkan/device availability is confirmed on the runner.*
 
 **Persistence Triage Command (SCSL field mode breadcrumbs):**
 ```bash
 export UE_ROOT=/home/kelly/Unreal/UnrealEngine
-TEST_LOG_PROFILE=focused TEST_STREAM_FILTER=all ./Scripts/run_tests_headless.sh
+./Scripts/run_tests_headless.sh --preset=startup-debug --show-startup
 ```
 Expected marker (focused logs):
 - `LogFlightSwarm: Display: Swarm persistence mode: Requested=... Applied=... LatticeValid=... LatticeMatch=... CloudValid=... CloudMatch=...`
 Error-focused example:
 ```bash
 export UE_ROOT=/home/kelly/Unreal/UnrealEngine
-TEST_LOG_PROFILE=focused TEST_COLOR_MODE=always TEST_STREAM_FILTER=errors ./Scripts/run_tests_headless.sh
+./Scripts/run_tests_headless.sh --preset=triage
 ```
 
 **Headless GPU/Vulkan Benchmark Path:**
@@ -110,7 +91,7 @@ export UE_ROOT=/home/kelly/Unreal/UnrealEngine
 ./Scripts/run_tests_full.sh
 ```
 *Optional scope: set `TEST_SCOPE=benchmark|gpu_smoke|all` (default `benchmark`).*
-*Optional log filtering: same `TEST_LOG_PROFILE` / `LOG_CMDS` behavior is supported for this path.*
+*Optional log filtering: same `TEST_LOG_PROFILE` / `LOG_CMDS` behavior is supported for this path; current GPU runs are still blocked by Vulkan device creation in this environment.*
 
 **Schema Manifest Export (Code-First Contract):**
 ```python
@@ -133,41 +114,41 @@ stdbuf -oL -eL "$UE_ROOT/Engine/Binaries/Linux/UnrealEditor-Cmd" \
 **Non-Parser Hardening Bucket (Schema + Verse Compile Contract):**
 ```bash
 export UE_ROOT=/home/kelly/Unreal/UnrealEngine
-TEST_FILTER="FlightProject.Integration.SchemaDriven+FlightProject.Schema.Vex.ManifestValidation+FlightProject.Verse.CompileContract+FlightProject.Verse.Subsystem" \
-TEST_LOG_PROFILE=focused TEST_STREAM_FILTER=errors \
-./Scripts/run_tests_headless.sh
+./Scripts/run_tests_headless.sh \
+  --preset=triage \
+  --filter="FlightProject.Integration.SchemaDriven+FlightProject.Schema.Vex.ManifestValidation+FlightProject.Verse.CompileContract+FlightProject.Verse.Subsystem"
 ```
 
 **Assembler Scaffold Smoke Test:**
 ```bash
 export UE_ROOT=/home/kelly/Unreal/UnrealEngine
-TEST_FILTER="FlightProject.Verse.AssemblerScaffold" \
-TEST_LOG_PROFILE=focused TEST_STREAM_FILTER=errors \
-./Scripts/run_tests_headless.sh
+./Scripts/run_tests_headless.sh \
+  --preset=triage \
+  --filter="FlightProject.Verse.AssemblerScaffold"
 ```
 
 **Parser Bucket (Focused):**
 ```bash
 export UE_ROOT=/home/kelly/Unreal/UnrealEngine
-TEST_FILTER="FlightProject.Schema.Vex.Parser" \
-TEST_LOG_PROFILE=focused TEST_STREAM_FILTER=errors \
-./Scripts/run_tests_headless.sh
+./Scripts/run_tests_headless.sh \
+  --preset=triage \
+  --filter="FlightProject.Schema.Vex.Parser"
 ```
 
 **Mixed Bucket (Schema + Verse + Parser):**
 ```bash
 export UE_ROOT=/home/kelly/Unreal/UnrealEngine
-TEST_FILTER="FlightProject.Integration.SchemaDriven+FlightProject.Schema.Vex.ManifestValidation+FlightProject.Verse.CompileContract+FlightProject.Verse.Subsystem+FlightProject.Schema.Vex.Parser" \
-TEST_LOG_PROFILE=focused TEST_STREAM_FILTER=errors \
-./Scripts/run_tests_headless.sh
+./Scripts/run_tests_headless.sh \
+  --preset=triage \
+  --filter="FlightProject.Integration.SchemaDriven+FlightProject.Schema.Vex.ManifestValidation+FlightProject.Verse.CompileContract+FlightProject.Verse.Subsystem+FlightProject.Schema.Vex.Parser"
 ```
 
 **Extended Mixed Bucket (Schema + Verse + Parser + Vertical Slice):**
 ```bash
 export UE_ROOT=/home/kelly/Unreal/UnrealEngine
-TEST_FILTER="FlightProject.Integration.SchemaDriven+FlightProject.Schema.Vex.ManifestValidation+FlightProject.Verse.CompileContract+FlightProject.Verse.Subsystem+FlightProject.Schema.Vex.Parser+FlightProject.Integration.Vex.VerticalSlice" \
-TEST_LOG_PROFILE=focused TEST_STREAM_FILTER=errors \
-./Scripts/run_tests_headless.sh
+./Scripts/run_tests_headless.sh \
+  --preset=triage \
+  --filter="FlightProject.Integration.SchemaDriven+FlightProject.Schema.Vex.ManifestValidation+FlightProject.Verse.CompileContract+FlightProject.Verse.Subsystem+FlightProject.Schema.Vex.Parser+FlightProject.Integration.Vex.VerticalSlice"
 ```
 
 **Swarm Persistence Bucket (new deterministic tests):**

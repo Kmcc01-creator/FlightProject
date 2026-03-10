@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Subsystems/WorldSubsystem.h"
+#include "Vex/FlightCompileArtifacts.h"
 #include "Vex/FlightVexParser.h"
 #include "Vex/FlightVexOptics.h"
 
@@ -14,6 +15,7 @@
 #include "VerseVM/VVMFunction.h"
 #include "VerseVM/VVMNativeFunction.h"
 #include "VerseVM/VVMVerseNativeTypeDesc.h"
+#include "VerseVM/VVMWriteBarrier.h"
 #endif
 
 #include "UFlightVerseSubsystem.generated.h"
@@ -32,7 +34,7 @@ enum class EFlightVerseCompileState : uint8
 
 /**
  * UFlightVerseSubsystem
- * 
+ *
  * Bridges the VEX frontend with the Unreal Verse VM.
  * Handles live-compilation and execution of VEX-generated Verse code.
  */
@@ -44,6 +46,9 @@ class FLIGHTPROJECT_API UFlightVerseSubsystem : public UWorldSubsystem
 public:
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
+
+	/** Garbage Collection integration for Verse VM closures */
+	static void AddReferencedObjects(UObject* InThis, FReferenceCollector& Collector);
 
 	/**
 	 * Compiles VEX source for a specific behavior ID.
@@ -81,6 +86,12 @@ public:
 	/** Returns the most recent compile diagnostics string for a behavior ID. */
 	FString GetBehaviorCompileDiagnostics(uint32 BehaviorID) const;
 
+	/** Returns the latest compile artifact report for a behavior ID, if available. */
+	const Flight::Vex::FFlightCompileArtifactReport* GetBehaviorCompileArtifactReport(uint32 BehaviorID) const;
+
+	/** Returns the latest compile artifact report as JSON for a behavior ID, if available. */
+	FString GetBehaviorCompileArtifactReportJson(uint32 BehaviorID) const;
+
 	struct FVerseBehavior
 	{
 #if WITH_VERSE_VM || defined(__INTELLISENSE__)
@@ -99,6 +110,8 @@ public:
 		Flight::Vex::FVexProgramAst NativeProgram;
 		FString GeneratedVerseCode;
 		FString LastCompileDiagnostics;
+		Flight::Vex::FFlightCompileArtifactReport CompileArtifactReport;
+		bool bHasCompileArtifactReport = false;
 #if WITH_VERSE_VM || defined(__INTELLISENSE__)
 		TWriteBarrier<Verse::VNativeFunction> VmEntryPoint;
 #endif
@@ -114,11 +127,42 @@ private:
 	/** Registers built-in VEX functions as native Verse functions */
 	void RegisterNativeVerseFunctions();
 
+	/** Registers VEX @symbols to C++ FDroidState fields */
+	void RegisterNativeVerseSymbols();
+
+#if WITH_VERSE_VM || defined(__INTELLISENSE__)
+	/** Core execution logic that assumes the caller has already called EnterVM() */
+	void ExecuteBehaviorInContext(uint32 BehaviorID, const FVerseBehavior& Behavior, Flight::Swarm::FDroidState& DroidState, Verse::FAllocationContext& AllocContext);
+#endif
+
+	/** A deferred closure representing a behavior execution pending async completion. */
+	struct FVexDeferredBehavior
+	{
+		uint32 BehaviorID;
+		Flight::Swarm::FDroidState* DroidState;
+	};
+
+	/** Registers a behavior for deferred batch execution (Async Fusion). */
+	void DeferBehavior(uint32 BehaviorID, Flight::Swarm::FDroidState& DroidState);
+
+	/** Flushes all deferred behaviors in a single fused VVM transaction. */
+	void FlushDeferredBehaviors();
+
 #if WITH_VERSE_VM || defined(__INTELLISENSE__)
 	bool TryValidateVerseSource(const FString& VerseSource, FString& OutDiagnostics) const;
-	bool TryCreateVmProcedure(uint32 BehaviorID, FVerseBehavior& Behavior, FString& OutDiagnostics);
+	bool TryCreateVmProcedure(uint32 BehaviorID, FVerseBehavior& Behavior, TSharedPtr<Flight::Vex::FVexIrProgram> IrProgram, FString& OutDiagnostics);
 	static Verse::FOpResult VmBehaviorEntryThunk(Verse::FRunningContext Context, Verse::VValue Self, Verse::VNativeFunction::Args Arguments);
 	Verse::FOpResult ExecuteVmEntryThunk(Verse::FRunningContext Context, Verse::VNativeFunction::Args Arguments);
+
+	// VEX IR -> VVM Native Thunks
+	static Verse::FOpResult GetDroidStateValue(Verse::FRunningContext Context, Verse::VValue Self, Verse::VNativeFunction::Args Arguments);
+	static Verse::FOpResult SetDroidStateValue(Verse::FRunningContext Context, Verse::VValue Self, Verse::VNativeFunction::Args Arguments);
+
+	/** Generic dispatcher for registered native thunks */
+	static Verse::FOpResult RegistryThunk(Verse::FRunningContext Context, Verse::VValue Self, Verse::VNativeFunction::Args Arguments);
+
+	/** Async completion entrypoint for io_uring bridge */
+	void CompleteGpuWait(int64 RequestId);
 
 	// Active execution payload consumed by VM thunk invocation.
 	uint32 ActiveVmBehaviorID = 0;
@@ -129,12 +173,16 @@ private:
 	/** Map of reflected type name to its Verse Native Descriptor */
 	TMap<FString, FVniTypeDesc> NativeTypeDescriptors;
 
-	/** Pending GPU readbacks waiting for fulfillment */
-	TMap<int64, Verse::VPlaceholder*> PendingReadbacks;
+	/** Pending GPU readbacks waiting for fulfillment (GC Rooted) */
+	TMap<int64, Verse::TWriteBarrier<Verse::VPlaceholder>> PendingReadbacks;
 
 	/** The Verse VM context for this world */
 	Verse::FRunningContext VerseContext;
 #endif
 	/** Cached symbol definitions from the schema manifest */
 	TArray<Flight::Vex::FVexSymbolDefinition> SymbolDefinitions;
+
+private:
+	/** Collection of behaviors pending fused batch reduction */
+	TArray<FVexDeferredBehavior> DeferredBehaviors;
 };

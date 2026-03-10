@@ -5,6 +5,7 @@
 #include "VerseVM/VVMUniqueString.h"
 #include "VerseVM/VVMContext.h"
 #include "VerseVM/VVMValue.h"
+#include "VerseVM/VVMFalse.h"
 #include "uLang/Semantics/SemanticProgram.h"
 #include "uLang/Semantics/SemanticFunction.h"
 #include "uLang/Semantics/Expression.h"
@@ -43,7 +44,7 @@ namespace
 
 		Verse::FValueOperand EmitExpression(const uLang::CExpressionBase* Expression)
 		{
-			if (!Expression) return Verse::FValueOperand(Emitter.AllocateConstant(Verse::VValue::GlobalFalse()));
+			if (!Expression) return Verse::FValueOperand(Emitter.AllocateConstant(Verse::GlobalFalse()));
 
 			const uLang::EAstNodeType Type = Expression->GetNodeType();
 
@@ -54,7 +55,7 @@ namespace
 				const uLang::CTypeBase* ValueType = Literal->GetValueType();
 				const uLang::ETypeKind Kind = ValueType->GetKind();
 
-				Verse::VValue Value = Verse::VValue::GlobalFalse();
+				Verse::VValue Value = Verse::GlobalFalse();
 				if (Kind == uLang::ETypeKind::Int)
 				{
 					Value = Verse::VValue::FromInt32(static_cast<int32>(Literal->GetValueAsInt().GetSafeValue()));
@@ -75,7 +76,7 @@ namespace
 			if (Type == uLang::EAstNodeType::Expression_Block)
 			{
 				const auto* Block = static_cast<const uLang::CExprBlock*>(Expression);
-				Verse::FValueOperand LastOperand = Verse::FValueOperand(Emitter.AllocateConstant(Verse::VValue::GlobalFalse()));
+				Verse::FValueOperand LastOperand = Verse::FValueOperand(Emitter.AllocateConstant(Verse::GlobalFalse()));
 				for (const uLang::TSRef<uLang::CExpressionBase>& Element : Block->Elements())
 				{
 					LastOperand = EmitExpression(&Element.Get());
@@ -84,7 +85,7 @@ namespace
 			}
 
 			// Unsupported fallback
-			return Verse::FValueOperand(Emitter.AllocateConstant(Verse::VValue::GlobalFalse()));
+			return Verse::FValueOperand(Emitter.AllocateConstant(Verse::GlobalFalse()));
 		}
 	};
 }

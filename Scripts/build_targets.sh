@@ -12,6 +12,7 @@ source "$SCRIPT_DIR/env_common.sh"
 CONFIGURATION="Development"
 SHOULD_VERIFY=0
 FORCE_USE_UBA=0
+VERIFY_TEST_PRESET="${VERIFY_TEST_PRESET:-${FP_TEST_PRESET:-triage}}"
 EXTRA_ARGS=()
 
 while [[ $# -gt 0 ]]; do
@@ -19,6 +20,18 @@ while [[ $# -gt 0 ]]; do
         --verify)
             SHOULD_VERIFY=1
             shift
+            ;;
+        --verify-preset=*)
+            VERIFY_TEST_PRESET="${1#*=}"
+            shift
+            ;;
+        --verify-preset)
+            if [[ $# -lt 2 ]]; then
+                error "--verify-preset expects a value (quiet|triage|startup-debug|full-debug)"
+                exit 1
+            fi
+            VERIFY_TEST_PRESET="$2"
+            shift 2
             ;;
         --no-uba)
             EXTRA_ARGS+=("-NoUBA")
@@ -94,6 +107,9 @@ echo "${c_blue}================================================================$
 log_info "Target:        ${c_cyan}FlightProjectEditor${c_reset}"
 log_info "Configuration: ${c_cyan}${CONFIGURATION}${c_reset}"
 log_info "Auto-Verify:   $( (( SHOULD_VERIFY )) && echo -e "${c_green}ON${c_reset}" || echo -e "${c_yellow}OFF${c_reset}" )"
+if (( SHOULD_VERIFY )); then
+    log_info "Verify Preset: ${c_cyan}${VERIFY_TEST_PRESET}${c_reset}"
+fi
 if (( AUTO_DISABLE_UBA )); then
     log_info "Build Accel:   ${c_yellow}NoUBA (sandbox-safe mode)${c_reset}"
 elif (( FORCE_USE_UBA )); then
@@ -107,7 +123,7 @@ echo
 if (( SHOULD_VERIFY )); then
     echo
     log_info "Build successful. Initiating integrity verification..."
-    "$SCRIPT_DIR/run_tests_headless.sh" --breaking --timestamps
+    TEST_PRESET="$VERIFY_TEST_PRESET" "$SCRIPT_DIR/run_tests_headless.sh" --breaking --timestamps
 fi
 
 echo

@@ -187,39 +187,103 @@ TSharedPtr<FVexIrProgram> FVexIrCompiler::Compile(const FVexProgramAst& Program,
 		}
 	};
 
-	TArray<int32> JumpPatchStack;
+	struct FControlFrame
+	{
+		EVexStatementKind Kind;
+		int32 StartInstIdx; // Index of instruction that marks the header/entry
+		TArray<int32> ExitJumpsToPatch; // List of Jump instructions that need to point to the end of the block
+	};
+	TArray<FControlFrame> ControlStack;
 
 	for (int32 StmtIdx = 0; StmtIdx < Program.Statements.Num(); ++StmtIdx)
 	{
 		const auto& Stmt = Program.Statements[StmtIdx];
+		UE_LOG(LogTemp, Warning, TEXT("IR Compiling Stmt %d: Kind=%d, Span='%s'"), StmtIdx, (int)Stmt.Kind, *Stmt.SourceSpan);
 		
+		if (Stmt.Kind == EVexStatementKind::TargetDirective)
+		{
+			// Skip top-level directives during IR logic lowering (already handled by tiering)
+			continue;
+		}
+
 		if (Stmt.Kind == EVexStatementKind::IfHeader)
 		{
 			FVexIrValue Cond = CompileExpr(Stmt.ExpressionNodeIndex);
 			if (Cond.Index == INDEX_NONE) continue;
 
-			// Emit JumpIf (inverted) to skip the block if condition is false
+			// JumpIf (inverted) to skip the block if condition is FALSE
 			FVexIrInstruction JumpInst;
 			JumpInst.Op = EVexIrOp::JumpIf;
 			JumpInst.Args.Add(Cond);
-			
-			// We'll patch the target index (Args[1]) later
-			FVexIrValue TargetPlaceholder;
-			TargetPlaceholder.Kind = FVexIrValue::EKind::Constant;
-			TargetPlaceholder.Index = INDEX_NONE; 
-			JumpInst.Args.Add(TargetPlaceholder);
+			JumpInst.Args.Add({FVexIrValue::EKind::Constant, EVexValueType::Int, INDEX_NONE}); // Target placeholder
 			
 			int32 InstIdx = Ir->Instructions.Add(JumpInst);
-			JumpPatchStack.Push(InstIdx);
+			ControlStack.Push({EVexStatementKind::IfHeader, InstIdx, {InstIdx}});
+		}
+		else if (Stmt.Kind == EVexStatementKind::Else)
+		{
+			if (ControlStack.Num() > 0 && ControlStack.Last().Kind == EVexStatementKind::IfHeader)
+			{
+				FControlFrame IfFrame = ControlStack.Pop();
+				
+				// Emit unconditional jump to skip the else block when the if block completes
+				FVexIrInstruction JumpExit;
+				JumpExit.Op = EVexIrOp::Jump;
+				JumpExit.Args.Add({FVexIrValue::EKind::Constant, EVexValueType::Int, INDEX_NONE}); // Target placeholder
+				int32 JumpExitIdx = Ir->Instructions.Add(JumpExit);
+				
+				// Patch the IF's jump-on-false to point to this ELSE block start
+				Ir->Instructions[IfFrame.StartInstIdx].Args[1].Index = Ir->Instructions.Num();
+				
+				// Start new ELSE frame
+				ControlStack.Push({EVexStatementKind::Else, INDEX_NONE, {JumpExitIdx}});
+				// If the IF had other exits (unlikely in current IR), carry them over
+				ControlStack.Last().ExitJumpsToPatch.Append(IfFrame.ExitJumpsToPatch);
+				// Remove the header jump from patch list since we just patched it
+				ControlStack.Last().ExitJumpsToPatch.Remove(IfFrame.StartInstIdx);
+			}
+		}
+		else if (Stmt.Kind == EVexStatementKind::WhileHeader)
+		{
+			int32 LoopStartIdx = Ir->Instructions.Num();
+			FVexIrValue Cond = CompileExpr(Stmt.ExpressionNodeIndex);
+			
+			// JumpIf (inverted) to exit loop if condition is FALSE
+			FVexIrInstruction JumpExit;
+			JumpExit.Op = EVexIrOp::JumpIf;
+			JumpExit.Args.Add(Cond);
+			JumpExit.Args.Add({FVexIrValue::EKind::Constant, EVexValueType::Int, INDEX_NONE}); // Target placeholder
+			
+			int32 JumpExitIdx = Ir->Instructions.Add(JumpExit);
+			ControlStack.Push({EVexStatementKind::WhileHeader, LoopStartIdx, {JumpExitIdx}});
 		}
 		else if (Stmt.Kind == EVexStatementKind::BlockClose)
 		{
-			if (JumpPatchStack.Num() > 0)
+			if (ControlStack.Num() > 0)
 			{
-				int32 JumpInstIdx = JumpPatchStack.Pop();
-				// Patch the jump target to the instruction immediately following this block
-				// In our IR, this means the current number of instructions
-				Ir->Instructions[JumpInstIdx].Args[1].Index = Ir->Instructions.Num();
+				FControlFrame Frame = ControlStack.Pop();
+				
+				if (Frame.Kind == EVexStatementKind::WhileHeader)
+				{
+					// Jump back to the header to re-evaluate condition
+					FVexIrInstruction JumpBack;
+					JumpBack.Op = EVexIrOp::Jump;
+					JumpBack.Args.Add({FVexIrValue::EKind::Constant, EVexValueType::Int, Frame.StartInstIdx});
+					Ir->Instructions.Add(JumpBack);
+				}
+
+				// Patch all pending exits to point here
+				for (int32 JumpIdx : Frame.ExitJumpsToPatch)
+				{
+					if (Ir->Instructions[JumpIdx].Op == EVexIrOp::JumpIf)
+					{
+						Ir->Instructions[JumpIdx].Args[1].Index = Ir->Instructions.Num();
+					}
+					else
+					{
+						Ir->Instructions[JumpIdx].Args[0].Index = Ir->Instructions.Num();
+					}
+				}
 			}
 		}
 		else if (Stmt.Kind == EVexStatementKind::Assignment)
@@ -230,10 +294,16 @@ TSharedPtr<FVexIrProgram> FVexIrCompiler::Compile(const FVexProgramAst& Program,
 			}
 
 			int32 TargetTokenIndex = Stmt.StartTokenIndex;
-			if (Program.Tokens.IsValidIndex(Stmt.StartTokenIndex + 1))
+			// Skip @cpu, @gpu, etc. if it's the first token of this statement
+			while (Program.Tokens.IsValidIndex(TargetTokenIndex) && Program.Tokens[TargetTokenIndex].Kind == EVexTokenKind::TargetDirective)
 			{
-				const FVexToken& MaybeTypeToken = Program.Tokens[Stmt.StartTokenIndex];
-				const FVexToken& MaybeNameToken = Program.Tokens[Stmt.StartTokenIndex + 1];
+				TargetTokenIndex++;
+			}
+
+			if (Program.Tokens.IsValidIndex(TargetTokenIndex + 1))
+			{
+				const FVexToken& MaybeTypeToken = Program.Tokens[TargetTokenIndex];
+				const FVexToken& MaybeNameToken = Program.Tokens[TargetTokenIndex + 1];
 				if (MaybeTypeToken.Kind == EVexTokenKind::Identifier
 					&& MaybeNameToken.Kind == EVexTokenKind::Identifier
 					&& (MaybeTypeToken.Lexeme == TEXT("float")
@@ -243,7 +313,7 @@ TSharedPtr<FVexIrProgram> FVexIrCompiler::Compile(const FVexProgramAst& Program,
 						|| MaybeTypeToken.Lexeme == TEXT("int")
 						|| MaybeTypeToken.Lexeme == TEXT("bool")))
 				{
-					TargetTokenIndex = Stmt.StartTokenIndex + 1;
+					TargetTokenIndex++;
 				}
 			}
 
@@ -256,13 +326,56 @@ TSharedPtr<FVexIrProgram> FVexIrCompiler::Compile(const FVexProgramAst& Program,
 
 			if (TargetToken.Kind == EVexTokenKind::Symbol)
 			{
-				FVexIrInstruction Store;
-				Store.Op = EVexIrOp::StoreSymbol;
-				Store.Args.Add(Rhs);
-				Store.Dest.Kind = FVexIrValue::EKind::Symbol;
-				Store.Dest.Index = GetSymbolIndex(TargetToken.Lexeme);
-				Store.SourceTokenIndex = TargetTokenIndex;
-				Ir->Instructions.Add(Store);
+				FVexIrValue SymbolVal;
+				SymbolVal.Kind = FVexIrValue::EKind::Symbol;
+				SymbolVal.Index = GetSymbolIndex(TargetToken.Lexeme);
+				SymbolVal.Type = Rhs.Type;
+
+				// Handle compound assignments (@sym += ...)
+				if (Stmt.SourceSpan.Contains(TEXT("+=")) || Stmt.SourceSpan.Contains(TEXT("-=")) || Stmt.SourceSpan.Contains(TEXT("*=")) || Stmt.SourceSpan.Contains(TEXT("/=")))
+				{
+					// Load current to temp register
+					FVexIrInstruction Load;
+					Load.Op = EVexIrOp::LoadSymbol;
+					Load.Dest.Kind = FVexIrValue::EKind::Register;
+					Load.Dest.Index = NextReg++;
+					Load.Dest.Type = SymbolVal.Type;
+					Load.Args.Add(SymbolVal);
+					Load.SourceTokenIndex = TargetTokenIndex;
+					Ir->Instructions.Add(Load);
+
+					// Perform op
+					FVexIrInstruction Op;
+					if (Stmt.SourceSpan.Contains(TEXT("+="))) Op.Op = EVexIrOp::Add;
+					else if (Stmt.SourceSpan.Contains(TEXT("-="))) Op.Op = EVexIrOp::Sub;
+					else if (Stmt.SourceSpan.Contains(TEXT("*="))) Op.Op = EVexIrOp::Mul;
+					else Op.Op = EVexIrOp::Div;
+
+					Op.Dest.Kind = FVexIrValue::EKind::Register;
+					Op.Dest.Index = NextReg++;
+					Op.Dest.Type = SymbolVal.Type;
+					Op.Args.Add(Load.Dest);
+					Op.Args.Add(Rhs);
+					Op.SourceTokenIndex = TargetTokenIndex;
+					Ir->Instructions.Add(Op);
+
+					// Store back
+					FVexIrInstruction Store;
+					Store.Op = EVexIrOp::StoreSymbol;
+					Store.Dest = SymbolVal;
+					Store.Args.Add(Op.Dest);
+					Store.SourceTokenIndex = TargetTokenIndex;
+					Ir->Instructions.Add(Store);
+				}
+				else
+				{
+					FVexIrInstruction Store;
+					Store.Op = EVexIrOp::StoreSymbol;
+					Store.Dest = SymbolVal;
+					Store.Args.Add(Rhs);
+					Store.SourceTokenIndex = TargetTokenIndex;
+					Ir->Instructions.Add(Store);
+				}
 			}
 			else if (TargetToken.Kind == EVexTokenKind::Identifier)
 			{
@@ -369,6 +482,9 @@ FString FVexIrCompiler::LowerToHLSL(const FVexIrProgram& Program, const TMap<FSt
 			// inverted jump for block-skipping
 			Source += FString::Printf(TEXT("if (!(%s)) goto Label%d;\n"), *GetVal(Inst.Args[0]), Inst.Args[1].Index);
 			break;
+		case EVexIrOp::Jump:
+			Source += FString::Printf(TEXT("goto Label%d;\n"), Inst.Args[0].Index);
+			break;
 		default: break;
 		}
 
@@ -379,6 +495,10 @@ FString FVexIrCompiler::LowerToHLSL(const FVexIrProgram& Program, const TMap<FSt
 			if (TargetInst.Op == EVexIrOp::JumpIf && TargetInst.Args[1].Index == i + 1)
 			{
 				Source += FString::Printf(TEXT("Label%d: ;\n"), TargetInst.Args[1].Index);
+			}
+			else if (TargetInst.Op == EVexIrOp::Jump && TargetInst.Args[0].Index == i + 1)
+			{
+				Source += FString::Printf(TEXT("Label%d: ;\n"), TargetInst.Args[0].Index);
 			}
 		}
 	}
@@ -424,9 +544,21 @@ FString FVexIrCompiler::LowerToVerse(const FVexIrProgram& Program, const TMap<FS
 			Source += FString::Printf(TEXT("%sset %s = %s\n"), *GetIndent(), *GetVal(Inst.Dest), *GetVal(Inst.Args[0]));
 			break;
 		case EVexIrOp::JumpIf:
-			Source += FString::Printf(TEXT("%sif (%s = true):\n"), *GetIndent(), *GetVal(Inst.Args[0]));
+			Source += FString::Printf(TEXT("%sif (%s):\n"), *GetIndent(), *GetVal(Inst.Args[0]));
 			PendingEnds.Add(Inst.Args[1].Index);
 			++Indent;
+			break;
+		case EVexIrOp::Jump:
+			// Verse doesn't have goto. Loop and Else are handled structurally in high-level lowering.
+			// For low-level IR-to-Verse, we'll emit a comment or a loop break if applicable.
+			if (Inst.Args[0].Index < InstIdx)
+			{
+				Source += FString::Printf(TEXT("%s# Jump back to Label%d (Loop)\n"), *GetIndent(), Inst.Args[0].Index);
+			}
+			else
+			{
+				Source += FString::Printf(TEXT("%s# Jump forward to Label%d\n"), *GetIndent(), Inst.Args[0].Index);
+			}
 			break;
 		case EVexIrOp::Add:
 			Source += FString::Printf(TEXT("%svar Var%d:%s = %s + %s\n"), *GetIndent(), Inst.Dest.Index, *DestType, *GetVal(Inst.Args[0]), *GetVal(Inst.Args[1]));

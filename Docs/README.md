@@ -33,6 +33,9 @@ Technical architecture, engine integration, and system design.
 | [PluginArchitecture.md](Architecture/PluginArchitecture.md) | Plugin types and usage patterns |
 | [RowEvolutionDesignReview.md](Architecture/RowEvolutionDesignReview.md) | Row-type evolution strategy, reactive/reflection integration, and phased operations plan |
 | [SCSL_FieldResidencySchemaContract.md](Architecture/SCSL_FieldResidencySchemaContract.md) | Draft schema contract for SCSL field residency, page IDs, and persistence semantics |
+| [AssemblyInspectionModels.md](Architecture/AssemblyInspectionModels.md) | Register-pressure, spill, cache, warmup, and compression models for artifact and assembly inspection |
+| [CompilerArtifactTesting.md](Architecture/CompilerArtifactTesting.md) | Artifact-driven compiler and assembly-oriented automation testing for VEX, VVM, SIMD, and GPU backends |
+| [TargetCapabilitySchema.md](Architecture/TargetCapabilitySchema.md) | Host/device capability normalization, compilation policy derivation, and register-pressure guidance |
 
 ### [Workflow/](Workflow/) - Development Process
 

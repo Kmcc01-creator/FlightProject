@@ -1761,3 +1761,52 @@ FString UFlightScriptingLibrary::GetBehaviorCompileDiagnostics(const UObject* Wo
         ? VerseSubsystem->GetBehaviorCompileDiagnostics(static_cast<uint32>(BehaviorID))
         : FString();
 }
+
+FString UFlightScriptingLibrary::GetBehaviorCompileArtifactReportJson(const UObject* WorldContextObject, int32 BehaviorID)
+{
+    UWorld* World = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull);
+    UFlightVerseSubsystem* VerseSubsystem = World ? World->GetSubsystem<UFlightVerseSubsystem>() : nullptr;
+    return VerseSubsystem
+        ? VerseSubsystem->GetBehaviorCompileArtifactReportJson(static_cast<uint32>(BehaviorID))
+        : FString();
+}
+
+FString UFlightScriptingLibrary::ExportBehaviorCompileArtifactReport(
+    const UObject* WorldContextObject,
+    int32 BehaviorID,
+    const FString& RelativeOutputPath)
+{
+    const FString ReportJson = GetBehaviorCompileArtifactReportJson(WorldContextObject, BehaviorID);
+    if (ReportJson.IsEmpty())
+    {
+        return FString();
+    }
+
+    FString AbsolutePath = RelativeOutputPath;
+    if (FPaths::IsRelative(AbsolutePath))
+    {
+        AbsolutePath = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir(), AbsolutePath);
+    }
+
+    if (FPaths::GetCleanFilename(AbsolutePath).Equals(TEXT("behavior_report.json"), ESearchCase::CaseSensitive))
+    {
+        AbsolutePath = FPaths::Combine(
+            FPaths::GetPath(AbsolutePath),
+            FString::Printf(TEXT("behavior_%d_report.json"), BehaviorID));
+    }
+
+    const FString DirectoryPath = FPaths::GetPath(AbsolutePath);
+    if (!DirectoryPath.IsEmpty())
+    {
+        IFileManager::Get().MakeDirectory(*DirectoryPath, true);
+    }
+
+    if (!FFileHelper::SaveStringToFile(ReportJson, *AbsolutePath))
+    {
+        UE_LOG(LogFlightProject, Error, TEXT("FlightScriptingLibrary: Failed to write compile artifact report '%s'"), *AbsolutePath);
+        return FString();
+    }
+
+    UE_LOG(LogFlightProject, Log, TEXT("FlightScriptingLibrary: Exported compile artifact report for behavior %d to '%s'"), BehaviorID, *AbsolutePath);
+    return AbsolutePath;
+}

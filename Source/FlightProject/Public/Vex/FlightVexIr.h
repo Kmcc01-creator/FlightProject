@@ -22,7 +22,8 @@ enum class EVexIrOp : uint8
 	Normalize,
 	Sin, Cos, Log, Exp, Pow,
 	VectorCompose, // compose vec2/3/4
-	JumpIf,        // For future Tier 2/3 IR support
+	Jump,          // Unconditional jump: Args[0].Index = target
+	JumpIf,        // Conditional jump: Args[0] = condition, Args[1].Index = target (if condition is FALSE)
 	Return
 };
 

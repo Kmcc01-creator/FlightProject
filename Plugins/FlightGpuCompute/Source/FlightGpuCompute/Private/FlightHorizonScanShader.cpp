@@ -2,6 +2,7 @@
 // FlightProject - GPU horizon scan shader implementation
 
 #include "FlightHorizonScanShader.h"
+#include "FlightGpuComputeModule.h"
 #include "RenderGraphBuilder.h"
 #include "RenderGraphUtils.h"
 #include "GlobalShader.h"
@@ -10,26 +11,6 @@
 #if WITH_FLIGHT_COMPUTE_SHADERS
 
 DEFINE_LOG_CATEGORY_STATIC(LogFlightHorizonScan, Log, All);
-
-namespace
-{
-	inline FGlobalShaderMap* TryGetFlightGlobalShaderMap()
-
-	{
-		if (!FApp::CanEverRender())
-		{
-			return nullptr;
-		}
-
-		const EShaderPlatform ShaderPlatform = GShaderPlatformForFeatureLevel[GMaxRHIFeatureLevel];
-		if (ShaderPlatform == SP_NumPlatforms || GGlobalShaderMap[ShaderPlatform] == nullptr)
-		{
-			return nullptr;
-		}
-
-		return GetGlobalShaderMap(ShaderPlatform);
-	}
-}
 
 // ============================================================================
 // Shader Registration
@@ -123,7 +104,7 @@ void DispatchFlightObstacleCount(
 	}
 
 	// Get shader map
-	FGlobalShaderMap* GlobalShaderMap = TryGetFlightGlobalShaderMap();
+	FGlobalShaderMap* GlobalShaderMap = FFlightGpuComputeModule::TryGetFlightGlobalShaderMap();
 	if (!GlobalShaderMap || !GlobalShaderMap->HasShader(&FFlightObstacleCountShader::GetStaticType(), 0))
 	{
 		UE_LOG(LogFlightHorizonScan, Error,
@@ -177,7 +158,7 @@ bool AreFlightHorizonScanShadersReady()
 		return false;
 	}
 
-	FGlobalShaderMap* GlobalShaderMap = TryGetFlightGlobalShaderMap();
+	FGlobalShaderMap* GlobalShaderMap = FFlightGpuComputeModule::TryGetFlightGlobalShaderMap();
 	if (!GlobalShaderMap)
 	{
 		return false;
