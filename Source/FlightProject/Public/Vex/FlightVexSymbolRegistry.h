@@ -13,6 +13,28 @@
 namespace Flight::Vex
 {
 
+enum class EVexSchemaResolutionStatus : uint8
+{
+	ResolvedExisting,
+	ResolvedAfterProvider,
+	NotVexCapable,
+	MissingProvider,
+	ProviderFailed,
+	ProviderReturnedNoSchema,
+};
+
+struct FVexSchemaResolutionResult
+{
+	const FVexTypeSchema* Schema = nullptr;
+	EVexSchemaResolutionStatus Status = EVexSchemaResolutionStatus::ResolvedExisting;
+	FString Diagnostic;
+
+	bool IsSuccess() const
+	{
+		return Schema != nullptr;
+	}
+};
+
 /**
  * FVexSymbolRegistry: Manages the mapping of VEX @symbols to reflected C++ fields.
  * Now formalized via FVexTypeSchema.
@@ -37,6 +59,12 @@ public:
 	/** Find an existing schema using its reflected native struct bridge. */
 	const FVexTypeSchema* GetSchemaByNativeStruct(const UScriptStruct* NativeStruct) const;
 
+	/** Resolve a schema from reflected type metadata and report how it was obtained. */
+	FVexSchemaResolutionResult ResolveSchemaForReflectedType(const Flight::Reflection::FTypeRegistry::FTypeInfo& TypeInfo);
+
+	/** Resolve a schema from reflected type metadata, building it on demand when possible. */
+	const FVexTypeSchema* GetSchemaForReflectedType(const Flight::Reflection::FTypeRegistry::FTypeInfo& TypeInfo);
+
 	/** Register or replace a complete schema. */
 	void RegisterSchema(FVexTypeSchema Schema);
 
@@ -49,19 +77,18 @@ private:
  * TTypeVexRegistry: Template helper to automatically register all VEX-tagged fields
  * for a reflectable C++ type.
  */
-template<Flight::Reflection::CReflectable T>
-struct TTypeVexRegistry
+template<typename T>
+inline const void* TTypeVexRegistry<T>::GetTypeKey()
 {
-	static const void* GetTypeKey()
-	{
-		static uint8 TypeKeyMarker = 0;
-		return &TypeKeyMarker;
-	}
+	static_assert(Flight::Reflection::CReflectable<T>, "TTypeVexRegistry requires a reflectable type.");
+	return Flight::Reflection::GetRuntimeTypeKey<T>();
+}
 
-	static void Register()
-	{
-		FVexSymbolRegistry::Get().RegisterSchema(FVexSchemaOrchestrator::BuildSchemaFromReflection<T>(GetTypeKey()));
-	}
-};
+template<typename T>
+inline void TTypeVexRegistry<T>::Register()
+{
+	static_assert(Flight::Reflection::CReflectable<T>, "TTypeVexRegistry requires a reflectable type.");
+	FVexSymbolRegistry::Get().RegisterSchema(FVexSchemaOrchestrator::BuildSchemaFromReflection<T>(GetTypeKey()));
+}
 
 } // namespace Flight::Vex

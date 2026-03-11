@@ -10,6 +10,7 @@
 #include "Vex/FlightVexSymbolRegistry.h"
 #include "Vex/FlightVexIr.h"
 #include "Schema/FlightRequirementRegistry.h"
+#include "Mass/FlightMassFragments.h"
 #include "Swarm/SwarmSimulationTypes.h"
 #include "Orchestration/FlightOrchestrationSubsystem.h"
 #include "Engine/World.h"
@@ -185,6 +186,269 @@ namespace
 		else if (SymbolName == TEXT("@velocity")) DroidState.Velocity = AsVec3(Value);
 		else if (SymbolName == TEXT("@shield")) DroidState.Shield = AsFloat(Value);
 		else if (SymbolName == TEXT("@status")) DroidState.Status = static_cast<uint32>(FMath::Max(0, AsInt(Value)));
+	}
+
+	struct FMassEntityExecutionView
+	{
+		FFlightTransformFragment* Transform = nullptr;
+		FFlightDroidStateFragment* DroidState = nullptr;
+	};
+
+	const void* ResolveMassFragmentViewConst(const FMassEntityExecutionView& View, const FName FragmentType)
+	{
+		if (FragmentType == TEXT("FFlightTransformFragment"))
+		{
+			return View.Transform;
+		}
+		if (FragmentType == TEXT("FFlightDroidStateFragment"))
+		{
+			return View.DroidState;
+		}
+		return nullptr;
+	}
+
+	void* ResolveMassFragmentViewMutable(const FMassEntityExecutionView& View, const FName FragmentType)
+	{
+		if (FragmentType == TEXT("FFlightTransformFragment"))
+		{
+			return View.Transform;
+		}
+		if (FragmentType == TEXT("FFlightDroidStateFragment"))
+		{
+			return View.DroidState;
+		}
+		return nullptr;
+	}
+
+	uint32 ResolveStorageStride(const Flight::Vex::FVexSymbolRecord& Symbol)
+	{
+		if (Symbol.Storage.ElementStride != 0)
+		{
+			return Symbol.Storage.ElementStride;
+		}
+
+		switch (Symbol.ValueType)
+		{
+		case Flight::Vex::EVexValueType::Float:
+			return sizeof(float);
+		case Flight::Vex::EVexValueType::Float2:
+			return sizeof(FVector2f);
+		case Flight::Vex::EVexValueType::Float3:
+			return sizeof(FVector3f);
+		case Flight::Vex::EVexValueType::Float4:
+			return sizeof(FVector4f);
+		case Flight::Vex::EVexValueType::Int:
+			return sizeof(int32);
+		case Flight::Vex::EVexValueType::Bool:
+			return sizeof(bool);
+		default:
+			return 0;
+		}
+	}
+
+	FNativeValue ReadRuntimeValueFromAddress(
+		const uint8* Bytes,
+		const Flight::Vex::EVexValueType ValueType,
+		const uint32 ElementStride)
+	{
+		switch (ValueType)
+		{
+		case Flight::Vex::EVexValueType::Float:
+			return MakeFloat(*reinterpret_cast<const float*>(Bytes));
+		case Flight::Vex::EVexValueType::Int:
+		{
+			if (ElementStride == sizeof(uint32))
+			{
+				return MakeInt(static_cast<int32>(*reinterpret_cast<const uint32*>(Bytes)));
+			}
+			return MakeInt(*reinterpret_cast<const int32*>(Bytes));
+		}
+		case Flight::Vex::EVexValueType::Bool:
+			return MakeBool(*reinterpret_cast<const bool*>(Bytes));
+		case Flight::Vex::EVexValueType::Float2:
+		{
+			if (ElementStride == sizeof(FVector2D))
+			{
+				const FVector2D& Value = *reinterpret_cast<const FVector2D*>(Bytes);
+				return Flight::Vex::FVexRuntimeValue::FromVec2(FVector2f(Value));
+			}
+			return Flight::Vex::FVexRuntimeValue::FromVec2(*reinterpret_cast<const FVector2f*>(Bytes));
+		}
+		case Flight::Vex::EVexValueType::Float3:
+		{
+			if (ElementStride == sizeof(FVector))
+			{
+				const FVector& Value = *reinterpret_cast<const FVector*>(Bytes);
+				return MakeVec3(FVector3f(Value));
+			}
+			return MakeVec3(*reinterpret_cast<const FVector3f*>(Bytes));
+		}
+		case Flight::Vex::EVexValueType::Float4:
+		{
+			if (ElementStride == sizeof(FVector4))
+			{
+				const FVector4& Value = *reinterpret_cast<const FVector4*>(Bytes);
+				return Flight::Vex::FVexRuntimeValue::FromVec4(FVector4f(Value));
+			}
+			return Flight::Vex::FVexRuntimeValue::FromVec4(*reinterpret_cast<const FVector4f*>(Bytes));
+		}
+		default:
+			return FNativeValue();
+		}
+	}
+
+	bool WriteRuntimeValueToAddress(
+		uint8* Bytes,
+		const Flight::Vex::EVexValueType ValueType,
+		const uint32 ElementStride,
+		const FNativeValue& Value)
+	{
+		switch (ValueType)
+		{
+		case Flight::Vex::EVexValueType::Float:
+			*reinterpret_cast<float*>(Bytes) = AsFloat(Value);
+			return true;
+		case Flight::Vex::EVexValueType::Int:
+			if (ElementStride == sizeof(uint32))
+			{
+				*reinterpret_cast<uint32*>(Bytes) = static_cast<uint32>(FMath::Max(0, AsInt(Value)));
+				return true;
+			}
+			*reinterpret_cast<int32*>(Bytes) = AsInt(Value);
+			return true;
+		case Flight::Vex::EVexValueType::Bool:
+			*reinterpret_cast<bool*>(Bytes) = AsBool(Value);
+			return true;
+		case Flight::Vex::EVexValueType::Float2:
+			if (ElementStride == sizeof(FVector2D))
+			{
+				const FVector2f Vec2Value = Value.AsVec2();
+				*reinterpret_cast<FVector2D*>(Bytes) = FVector2D(Vec2Value.X, Vec2Value.Y);
+				return true;
+			}
+			*reinterpret_cast<FVector2f*>(Bytes) = Value.AsVec2();
+			return true;
+		case Flight::Vex::EVexValueType::Float3:
+			if (ElementStride == sizeof(FVector))
+			{
+				const FVector3f Vec3Value = AsVec3(Value);
+				*reinterpret_cast<FVector*>(Bytes) = FVector(Vec3Value.X, Vec3Value.Y, Vec3Value.Z);
+				return true;
+			}
+			*reinterpret_cast<FVector3f*>(Bytes) = AsVec3(Value);
+			return true;
+		case Flight::Vex::EVexValueType::Float4:
+			if (ElementStride == sizeof(FVector4))
+			{
+				const FVector4f Vec4Value = Value.AsVec4();
+				*reinterpret_cast<FVector4*>(Bytes) = FVector4(Vec4Value.X, Vec4Value.Y, Vec4Value.Z, Vec4Value.W);
+				return true;
+			}
+			*reinterpret_cast<FVector4f*>(Bytes) = Value.AsVec4();
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	FNativeValue ReadMassFragmentSymbolValue(
+		const FMassEntityExecutionView& View,
+		const Flight::Vex::FVexSymbolRecord& Symbol)
+	{
+		const void* FragmentPtr = ResolveMassFragmentViewConst(View, Symbol.Storage.FragmentType);
+		if (!FragmentPtr)
+		{
+			return FNativeValue();
+		}
+
+		if (Symbol.Storage.MemberOffset == INDEX_NONE)
+		{
+			return FNativeValue();
+		}
+
+		const uint32 ElementStride = ResolveStorageStride(Symbol);
+		const uint8* Bytes = reinterpret_cast<const uint8*>(FragmentPtr) + Symbol.Storage.MemberOffset;
+		return ReadRuntimeValueFromAddress(Bytes, Symbol.ValueType, ElementStride);
+	}
+
+	bool WriteMassFragmentSymbolValue(
+		const FMassEntityExecutionView& View,
+		const Flight::Vex::FVexSymbolRecord& Symbol,
+		const FNativeValue& Value)
+	{
+		void* FragmentPtr = ResolveMassFragmentViewMutable(View, Symbol.Storage.FragmentType);
+		if (!FragmentPtr)
+		{
+			return false;
+		}
+
+		if (Symbol.Storage.MemberOffset == INDEX_NONE)
+		{
+			return false;
+		}
+
+		const uint32 ElementStride = ResolveStorageStride(Symbol);
+		uint8* Bytes = reinterpret_cast<uint8*>(FragmentPtr) + Symbol.Storage.MemberOffset;
+		if (!WriteRuntimeValueToAddress(Bytes, Symbol.ValueType, ElementStride, Value))
+		{
+			return false;
+		}
+
+		if (Symbol.Storage.FragmentType == TEXT("FFlightDroidStateFragment") && View.DroidState)
+		{
+			View.DroidState->bIsDirty = true;
+		}
+		return true;
+	}
+
+	bool BuildMassRuntimeSchema(
+		const Flight::Vex::FVexTypeSchema& BaseSchema,
+		const Flight::Vex::FVexSchemaBindingResult& Binding,
+		const FMassEntityExecutionView& View,
+		Flight::Vex::FVexTypeSchema& OutSchema)
+	{
+		OutSchema = BaseSchema;
+		OutSchema.SymbolRecords.Reset();
+
+		for (const TPair<FString, Flight::Vex::FVexSymbolRecord>& Pair : BaseSchema.SymbolRecords)
+		{
+			const Flight::Vex::FVexSymbolRecord& SourceRecord = Pair.Value;
+			if (SourceRecord.Storage.Kind != Flight::Vex::EVexStorageKind::MassFragmentField)
+			{
+				return false;
+			}
+
+			const Flight::Vex::FVexSchemaBoundSymbol* BoundSymbol = Binding.FindBoundSymbolByName(Pair.Key);
+			if (!BoundSymbol)
+			{
+				return false;
+			}
+
+			const Flight::Vex::FVexSchemaFragmentBinding* FragmentBinding =
+				Binding.FindFragmentBindingByType(BoundSymbol->LogicalSymbol.Storage.FragmentType);
+			if (!FragmentBinding || FragmentBinding->StorageKind != Flight::Vex::EVexStorageKind::MassFragmentField)
+			{
+				return false;
+			}
+
+			Flight::Vex::FVexSymbolRecord RuntimeRecord = SourceRecord;
+			RuntimeRecord.Storage.FragmentType = FragmentBinding->FragmentType;
+			const Flight::Vex::FVexSymbolRecord AdaptedRecord = RuntimeRecord;
+			RuntimeRecord.ReadValue = [View, AdaptedRecord](const void*) -> Flight::Vex::FVexRuntimeValue
+			{
+				return ReadMassFragmentSymbolValue(View, AdaptedRecord);
+			};
+			RuntimeRecord.WriteValue = [View, AdaptedRecord](void*, const Flight::Vex::FVexRuntimeValue& Value) -> bool
+			{
+				return WriteMassFragmentSymbolValue(View, AdaptedRecord, Value);
+			};
+			RuntimeRecord.Getter = {};
+			RuntimeRecord.Setter = {};
+			OutSchema.SymbolRecords.Add(Pair.Key, MoveTemp(RuntimeRecord));
+		}
+
+		OutSchema.RebuildLegacyViews();
+		return true;
 	}
 
 	FNativeValue ApplyArithmetic(const FString& OperatorLexeme, const FNativeValue& Left, const FNativeValue& Right)
@@ -560,6 +824,198 @@ void UFlightVerseSubsystem::Deinitialize()
 	Super::Deinitialize();
 }
 
+UFlightVerseSubsystem::FResolvedStorageHost UFlightVerseSubsystem::ResolveStorageHost(
+	const FVerseBehavior& Behavior,
+	const void* RequestedTypeKey) const
+{
+	FResolvedStorageHost Host;
+	Host.TypeKey = RequestedTypeKey ? RequestedTypeKey : Behavior.BoundTypeKey;
+	Host.TypeName = Behavior.BoundTypeStableName;
+
+	if (Host.TypeKey)
+	{
+		Host.Schema = Flight::Vex::FVexSymbolRegistry::Get().GetSchema(Host.TypeKey);
+	}
+
+	if (Host.Schema)
+	{
+		if (!Behavior.SchemaBinding.IsSet())
+		{
+			Host.Kind = EStorageHostKind::SchemaAccessor;
+			return Host;
+		}
+
+		bool bUsesAos = false;
+		bool bUsesAccessor = false;
+		bool bUsesMass = false;
+		bool bUsesGpu = false;
+		for (const Flight::Vex::FVexSchemaSymbolUse& Use : Behavior.SchemaBinding->SymbolUses)
+		{
+			if (!Behavior.SchemaBinding->BoundSymbols.IsValidIndex(Use.BoundSymbolIndex))
+			{
+				continue;
+			}
+
+			const Flight::Vex::FVexSchemaBoundSymbol& BoundSymbol = Behavior.SchemaBinding->BoundSymbols[Use.BoundSymbolIndex];
+			const Flight::Vex::FVexStorageBinding& Storage = BoundSymbol.LogicalSymbol.Storage;
+			switch (Storage.Kind)
+			{
+			case Flight::Vex::EVexStorageKind::AosOffset:
+				bUsesAos = true;
+				break;
+			case Flight::Vex::EVexStorageKind::Accessor:
+			case Flight::Vex::EVexStorageKind::ExternalProvider:
+			case Flight::Vex::EVexStorageKind::None:
+				bUsesAccessor = true;
+				break;
+			case Flight::Vex::EVexStorageKind::MassFragmentField:
+				bUsesMass = true;
+				break;
+			case Flight::Vex::EVexStorageKind::SoaColumn:
+			case Flight::Vex::EVexStorageKind::GpuBufferElement:
+				bUsesGpu = true;
+				break;
+			default:
+				return Host;
+			}
+		}
+
+		if (bUsesGpu)
+		{
+			Host.Kind = EStorageHostKind::GpuBuffer;
+		}
+		else if (bUsesMass)
+		{
+			Host.Kind = EStorageHostKind::MassFragments;
+		}
+		else if (bUsesAccessor || !bUsesAos)
+		{
+			Host.Kind = EStorageHostKind::SchemaAccessor;
+		}
+		else
+		{
+			Host.Kind = EStorageHostKind::SchemaAos;
+		}
+		return Host;
+	}
+
+	if (Host.TypeKey == GetDroidStateTypeKey())
+	{
+		Host.Kind = EStorageHostKind::LegacyDroidState;
+	}
+
+	return Host;
+}
+
+bool UFlightVerseSubsystem::ExecuteResolvedStorageHost(
+	const FResolvedStorageHost& Host,
+	const FVerseBehavior& Behavior,
+	void* StructPtr)
+{
+	switch (Host.Kind)
+	{
+	case EStorageHostKind::SchemaAos:
+		check(Host.Schema);
+		ExecuteOnAosSchemaHost(Behavior.NativeProgram, StructPtr, *Host.Schema);
+		return true;
+	case EStorageHostKind::SchemaAccessor:
+		check(Host.Schema);
+		ExecuteOnAccessorSchemaHost(Behavior.NativeProgram, StructPtr, *Host.Schema);
+		return true;
+	case EStorageHostKind::LegacyDroidState:
+		ExecuteNativeProgram(Behavior.NativeProgram, *static_cast<Flight::Swarm::FDroidState*>(StructPtr));
+		return true;
+	default:
+		return false;
+	}
+}
+
+bool UFlightVerseSubsystem::ExecuteResolvedDirectStorageHost(
+	const FResolvedStorageHost& Host,
+	const FVerseBehavior& Behavior,
+	TArrayView<FFlightTransformFragment> Transforms,
+	TArrayView<FFlightDroidStateFragment> DroidStates)
+{
+	switch (Host.Kind)
+	{
+	case EStorageHostKind::MassFragments:
+		return ExecuteOnMassSchemaHost(Behavior, Transforms, DroidStates);
+	case EStorageHostKind::GpuBuffer:
+		return ExecuteOnGpuSchemaHost(Behavior);
+	default:
+		return false;
+	}
+}
+
+void UFlightVerseSubsystem::ExecuteOnAosSchemaHost(
+	const Flight::Vex::FVexProgramAst& Program,
+	void* StructPtr,
+	const Flight::Vex::FVexTypeSchema& Schema)
+{
+	ExecuteOnSchema(Program, StructPtr, Schema);
+}
+
+void UFlightVerseSubsystem::ExecuteOnAccessorSchemaHost(
+	const Flight::Vex::FVexProgramAst& Program,
+	void* StructPtr,
+	const Flight::Vex::FVexTypeSchema& Schema)
+{
+	ExecuteOnSchema(Program, StructPtr, Schema);
+}
+
+bool UFlightVerseSubsystem::ExecuteOnMassSchemaHost(
+	const FVerseBehavior& Behavior,
+	TArrayView<FFlightTransformFragment> Transforms,
+	TArrayView<FFlightDroidStateFragment> DroidStates)
+{
+	if (!Behavior.SchemaBinding.IsSet())
+	{
+		return false;
+	}
+
+	const Flight::Vex::FVexTypeSchema* BaseSchema = Behavior.BoundTypeKey
+		? Flight::Vex::FVexSymbolRegistry::Get().GetSchema(Behavior.BoundTypeKey)
+		: nullptr;
+	if (!BaseSchema)
+	{
+		return false;
+	}
+
+	if (Behavior.Tier == Flight::Vex::EVexTier::Literal && Behavior.SimdPlan.IsValid())
+	{
+		Behavior.SimdPlan->ExecuteDirect(Transforms, DroidStates);
+		return true;
+	}
+
+	const int32 NumEntities = FMath::Min(Transforms.Num(), DroidStates.Num());
+	for (int32 Index = 0; Index < NumEntities; ++Index)
+	{
+		FMassEntityExecutionView View;
+		View.Transform = &Transforms[Index];
+		View.DroidState = &DroidStates[Index];
+
+		Flight::Vex::FVexTypeSchema RuntimeSchema;
+		if (!BuildMassRuntimeSchema(*BaseSchema, *Behavior.SchemaBinding, View, RuntimeSchema))
+		{
+			return false;
+		}
+
+		ExecuteOnSchema(Behavior.NativeProgram, &View, RuntimeSchema);
+	}
+
+	return true;
+}
+
+bool UFlightVerseSubsystem::ExecuteOnGpuSchemaHost(const FVerseBehavior& Behavior)
+{
+	UE_LOG(
+		LogFlightVerseSubsystem,
+		Verbose,
+		TEXT("Behavior %u resolved to explicit GPU storage hosting, but no runtime GPU host is available yet."),
+		Behavior.CompileArtifactReport.BehaviorID);
+	return false;
+}
+
 bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSource, FString& OutErrors, UScriptStruct* TargetStruct)
 {
 	const Flight::Vex::FVexTypeSchema* Schema = nullptr;
@@ -584,6 +1040,10 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 	Behavior.bUsesNativeFallback = false;
 	Behavior.bUsesVmEntryPoint = false;
 	Behavior.NativeProgram = Flight::Vex::FVexProgramAst();
+	Behavior.BoundTypeKey = nullptr;
+	Behavior.BoundTypeStableName = NAME_None;
+	Behavior.BoundSchemaLayoutHash = 0;
+	Behavior.SchemaBinding.Reset();
 	Behavior.GeneratedVerseCode.Reset();
 	Behavior.LastCompileDiagnostics.Reset();
 	Behavior.SimdCompileDiagnostics.Reset();
@@ -607,7 +1067,7 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 
 	auto FinalizeArtifactReport = [&]()
 	{
-		const FString LegacySelectedBackend = Behavior.bUsesVmEntryPoint
+		const FString LegacyCommittedBackend = Behavior.bUsesVmEntryPoint
 			? Flight::Vex::VexBackendKindToString(Flight::Vex::EVexBackendKind::VerseVm)
 			: (Behavior.bUsesNativeFallback
 				? Flight::Vex::VexBackendKindToString(Flight::Vex::EVexBackendKind::NativeScalar)
@@ -616,9 +1076,14 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 		ArtifactReport.GeneratedAtUtc = FDateTime::UtcNow();
 		ArtifactReport.CompileOutcome = CompileStateToString(Behavior.CompileState);
 		ArtifactReport.BackendPath = BackendPath;
+		ArtifactReport.BoundTypeName = Behavior.BoundTypeStableName.IsNone()
+			? FString()
+			: Behavior.BoundTypeStableName.ToString();
+		ArtifactReport.SchemaLayoutHash = Behavior.BoundSchemaLayoutHash;
 		ArtifactReport.SelectedBackend = BackendSelection.IsSet()
 			? Flight::Vex::VexBackendKindToString(BackendSelection->ChosenBackend)
-			: LegacySelectedBackend;
+			: LegacyCommittedBackend;
+		ArtifactReport.CommittedBackend = LegacyCommittedBackend;
 		ArtifactReport.Diagnostics = Behavior.LastCompileDiagnostics;
 		ArtifactReport.GeneratedVerseCode = Behavior.GeneratedVerseCode;
 		ArtifactReport.IrCompileErrors = IrErrors;
@@ -629,7 +1094,34 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 		ArtifactReport.bUsesVmEntryPoint = Behavior.bUsesVmEntryPoint;
 		ArtifactReport.AvailableArtifacts.Reset();
 		ArtifactReport.BackendReports.Reset();
+		ArtifactReport.ReadSymbols.Reset();
+		ArtifactReport.WrittenSymbols.Reset();
+		ArtifactReport.ReferencedStorageKinds.Reset();
 		ArtifactReport.AvailableArtifacts.Add(Flight::Vex::EFlightCompileArtifactKind::CompileTelemetry);
+
+		if (Behavior.SchemaBinding.IsSet())
+		{
+			ArtifactReport.ReadSymbols = Behavior.SchemaBinding->ReadSymbols.Array();
+			ArtifactReport.ReadSymbols.Sort();
+			ArtifactReport.WrittenSymbols = Behavior.SchemaBinding->WrittenSymbols.Array();
+			ArtifactReport.WrittenSymbols.Sort();
+
+			TSet<FString> ReferencedStorageKinds;
+			for (const Flight::Vex::FVexSchemaSymbolUse& Use : Behavior.SchemaBinding->SymbolUses)
+			{
+				if (!Behavior.SchemaBinding->BoundSymbols.IsValidIndex(Use.BoundSymbolIndex))
+				{
+					continue;
+				}
+
+				const Flight::Vex::FVexSchemaBoundSymbol& BoundSymbol = Behavior.SchemaBinding->BoundSymbols[Use.BoundSymbolIndex];
+				ReferencedStorageKinds.Add(Flight::Vex::VexStorageKindToString(BoundSymbol.LogicalSymbol.Storage.Kind));
+			}
+
+			ArtifactReport.ReferencedStorageKinds = ReferencedStorageKinds.Array();
+			ArtifactReport.ReferencedStorageKinds.Sort();
+		}
+
 		if (BackendSelection.IsSet())
 		{
 			for (const TPair<Flight::Vex::EVexBackendKind, Flight::Vex::FVexBackendCompatibilityReport>& Pair : BackendSelection->Reports)
@@ -681,6 +1173,14 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 	const Flight::Vex::FVexTypeSchema* CompileSchema = TypeKey
 		? Flight::Vex::FVexSymbolRegistry::Get().GetSchema(TypeKey)
 		: nullptr;
+	if (CompileSchema)
+	{
+		Behavior.BoundTypeKey = CompileSchema->TypeId.RuntimeKey ? CompileSchema->TypeId.RuntimeKey : TypeKey;
+		Behavior.BoundTypeStableName = CompileSchema->TypeId.StableName.IsNone()
+			? FName(*CompileSchema->TypeName)
+			: CompileSchema->TypeId.StableName;
+		Behavior.BoundSchemaLayoutHash = CompileSchema->LayoutHash;
+	}
 	TArray<Flight::Vex::FVexSymbolDefinition> LocalDefinitions = CompileSchema
 		? Flight::Vex::FVexSchemaBinder::BuildSymbolDefinitions(*CompileSchema, SymbolDefinitions)
 		: SymbolDefinitions;
@@ -790,6 +1290,8 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 				Diagnostic.Reason = SymbolResult.Reason;
 			}
 		}
+
+		Behavior.SchemaBinding = *SchemaBinding;
 	}
 
 	// Always generate IR for VVM assembly if possible
@@ -979,13 +1481,14 @@ void UFlightVerseSubsystem::ExecuteBehaviorOnStruct(uint32 BehaviorID, void* Str
 		return;
 	}
 
+	const FResolvedStorageHost Host = ResolveStorageHost(*Behavior, TypeKey);
+
 #if WITH_VERSE_VM || defined(__INTELLISENSE__)
 	// Zero-cost Tier 1 path (Literal scripts)
 	if (Behavior->Tier == Flight::Vex::EVexTier::Literal)
 	{
-		if (const Flight::Vex::FVexTypeSchema* Schema = Flight::Vex::FVexSymbolRegistry::Get().GetSchema(TypeKey))
+		if (ExecuteResolvedStorageHost(Host, *Behavior, StructPtr))
 		{
-			ExecuteOnSchema(Behavior->NativeProgram, StructPtr, *Schema);
 			return;
 		}
 	}
@@ -996,7 +1499,7 @@ void UFlightVerseSubsystem::ExecuteBehaviorOnStruct(uint32 BehaviorID, void* Str
 		VerseContext.EnterVM([&]()
 		{
 			Verse::FAllocationContext AllocContext(VerseContext);
-			ExecuteBehaviorInContext(BehaviorID, *Behavior, StructPtr, TypeKey, AllocContext);
+			ExecuteBehaviorInContext(BehaviorID, *Behavior, StructPtr, Host.TypeKey, AllocContext);
 		});
 		return;
 	}
@@ -1004,17 +1507,14 @@ void UFlightVerseSubsystem::ExecuteBehaviorOnStruct(uint32 BehaviorID, void* Str
 
 	if (Behavior->bUsesNativeFallback)
 	{
-		// First try schema-based execution if not already handled
-		if (const Flight::Vex::FVexTypeSchema* Schema = Flight::Vex::FVexSymbolRegistry::Get().GetSchema(TypeKey))
+		if (!ExecuteResolvedStorageHost(Host, *Behavior, StructPtr))
 		{
-			ExecuteOnSchema(Behavior->NativeProgram, StructPtr, *Schema);
-			return;
-		}
-
-		// Fallback to legacy hardcoded path for FDroidState
-		if (TypeKey == GetDroidStateTypeKey())
-		{
-			ExecuteNativeProgram(Behavior->NativeProgram, *static_cast<Flight::Swarm::FDroidState*>(StructPtr));
+			UE_LOG(
+				LogFlightVerseSubsystem,
+				Warning,
+				TEXT("Behavior %u has no compatible storage host for type '%s'."),
+				BehaviorID,
+				Host.TypeName.IsNone() ? TEXT("<unknown>") : *Host.TypeName.ToString());
 		}
 		return;
 	}
@@ -1169,9 +1669,10 @@ void UFlightVerseSubsystem::ExecuteBehaviorBulk(uint32 BehaviorID, TArrayView<Fl
 		}
 
 		// Fallback to loop if plan compilation failed
+		const FResolvedStorageHost DroidHost = ResolveStorageHost(*Behavior, GetDroidStateTypeKey());
 		for (Flight::Swarm::FDroidState& Droid : DroidStates)
 		{
-			ExecuteNativeProgram(Behavior->NativeProgram, Droid);
+			(void)ExecuteResolvedStorageHost(DroidHost, *Behavior, &Droid);
 		}
 		return;
 	}
@@ -1245,14 +1746,17 @@ void UFlightVerseSubsystem::FlushDeferredBehaviors()
 			const FVerseBehavior* Behavior = Behaviors.Find(Deferred.BehaviorID);
 			if (Behavior && Behavior->bHasExecutableProcedure && Behavior->bUsesVmEntryPoint)
 			{
-				ExecuteBehaviorInContext(Deferred.BehaviorID, *Behavior, Deferred.StatePtr, Deferred.TypeKey, AllocContext);
+				ExecuteBehaviorInContext(
+					Deferred.BehaviorID,
+					*Behavior,
+					Deferred.StatePtr,
+					ResolveStorageHost(*Behavior, Deferred.TypeKey).TypeKey,
+					AllocContext);
 			}
 			else if (Behavior && Behavior->bUsesNativeFallback)
 			{
-				if (Deferred.TypeKey == GetDroidStateTypeKey())
-				{
-					ExecuteNativeProgram(Behavior->NativeProgram, *static_cast<Flight::Swarm::FDroidState*>(Deferred.StatePtr));
-				}
+				const FResolvedStorageHost DeferredHost = ResolveStorageHost(*Behavior, Deferred.TypeKey);
+				(void)ExecuteResolvedStorageHost(DeferredHost, *Behavior, Deferred.StatePtr);
 			}
 		}
 	});
@@ -1284,9 +1788,38 @@ void UFlightVerseSubsystem::ExecuteBehaviorDirect(
 		return;
 	}
 
-	// Fallback: If not eligible for direct SIMD, we must gather/scatter (Existing path)
-	// For now, we don't have a direct-scalar-fallback, so we'll just not execute or log.
-	// In a real system, we'd gather to FDroidState and use ExecuteBehaviorBulk.
+	const FResolvedStorageHost Host = ResolveStorageHost(*Behavior, Behavior->BoundTypeKey);
+	if (!ExecuteResolvedDirectStorageHost(Host, *Behavior, Transforms, DroidStates))
+	{
+		const TCHAR* HostName = TEXT("None");
+		switch (Host.Kind)
+		{
+		case EStorageHostKind::SchemaAos:
+			HostName = TEXT("SchemaAos");
+			break;
+		case EStorageHostKind::SchemaAccessor:
+			HostName = TEXT("SchemaAccessor");
+			break;
+		case EStorageHostKind::MassFragments:
+			HostName = TEXT("MassFragments");
+			break;
+		case EStorageHostKind::GpuBuffer:
+			HostName = TEXT("GpuBuffer");
+			break;
+		case EStorageHostKind::LegacyDroidState:
+			HostName = TEXT("LegacyDroidState");
+			break;
+		default:
+			break;
+		}
+
+		UE_LOG(
+			LogFlightVerseSubsystem,
+			Verbose,
+			TEXT("Behavior %u direct execution resolved to storage host '%s', but no direct runtime host executed it."),
+			BehaviorID,
+			HostName);
+	}
 }
 
 EFlightVerseCompileState UFlightVerseSubsystem::GetBehaviorCompileState(uint32 BehaviorID) const
@@ -1317,6 +1850,31 @@ FString UFlightVerseSubsystem::GetBehaviorCompileArtifactReportJson(uint32 Behav
 {
 	const Flight::Vex::FFlightCompileArtifactReport* Report = GetBehaviorCompileArtifactReport(BehaviorID);
 	return Report ? Flight::Vex::BuildCompileArtifactReportJson(*Report) : FString();
+}
+
+FString UFlightVerseSubsystem::DescribeResolvedStorageHost(uint32 BehaviorID, const void* TypeKey) const
+{
+	const FVerseBehavior* Behavior = Behaviors.Find(BehaviorID);
+	if (!Behavior)
+	{
+		return TEXT("None");
+	}
+
+	switch (ResolveStorageHost(*Behavior, TypeKey).Kind)
+	{
+	case EStorageHostKind::SchemaAos:
+		return TEXT("SchemaAos");
+	case EStorageHostKind::SchemaAccessor:
+		return TEXT("SchemaAccessor");
+	case EStorageHostKind::MassFragments:
+		return TEXT("MassFragments");
+	case EStorageHostKind::GpuBuffer:
+		return TEXT("GpuBuffer");
+	case EStorageHostKind::LegacyDroidState:
+		return TEXT("LegacyDroidState");
+	default:
+		return TEXT("None");
+	}
 }
 
 #if WITH_VERSE_VM || defined(__INTELLISENSE__)

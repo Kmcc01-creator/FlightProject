@@ -1,5 +1,13 @@
 # Editor Tools & Automation Guide
 
+Status: practical reference for editor utility workflows.
+
+For the current scripting/tooling context, also see:
+
+- [../Scripting/README.md](../Scripting/README.md)
+- [PythonReflectionGuide.md](PythonReflectionGuide.md)
+- [CurrentExtensionDirections.md](CurrentExtensionDirections.md)
+
 ## 1. Creating an Editor Utility Widget (EUW)
 
 An Editor Utility Widget allows you to create custom UI panels in the Unreal Editor to run your scripts.

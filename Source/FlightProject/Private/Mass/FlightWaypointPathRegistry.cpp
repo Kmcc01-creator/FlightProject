@@ -121,6 +121,28 @@ FGuid UFlightWaypointPathRegistry::RegisterPath(AFlightWaypointPath* Path, float
     return PathId;
 }
 
+FGuid UFlightWaypointPathRegistry::RegisterSyntheticPath(
+    const TArray<FVector>& ControlPoints,
+    const bool bClosedLoop,
+    const float SampleInterval,
+    const FGuid& PreferredPathId)
+{
+    if (ControlPoints.Num() < 2)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("FlightWaypointPathRegistry: Attempted to register synthetic path with fewer than two control points"));
+        return FGuid();
+    }
+
+    const FGuid PathId = PreferredPathId.IsValid() ? PreferredPathId : FGuid::NewGuid();
+    FFlightPathData& PathData = PathRegistry.FindOrAdd(PathId);
+    BuildSyntheticPathLUT(PathData, ControlPoints, bClosedLoop, SampleInterval);
+
+    UE_LOG(LogTemp, Verbose, TEXT("FlightWaypointPathRegistry: Registered synthetic path %s with %d samples (length: %.1f)"),
+        *PathId.ToString(), PathData.SampledLocations.Num(), PathData.TotalLength);
+
+    return PathId;
+}
+
 void UFlightWaypointPathRegistry::UnregisterPath(const FGuid& PathId)
 {
     if (PathRegistry.Remove(PathId) > 0)
@@ -190,5 +212,96 @@ void UFlightWaypointPathRegistry::BuildPathLUT(FFlightPathData& OutData, AFlight
         OutData.SampledLocations.Add(Location);
         OutData.SampledRotations.Add(Rotation);
         OutData.SampledTangents.Add(Tangent);
+    }
+}
+
+void UFlightWaypointPathRegistry::BuildSyntheticPathLUT(
+    FFlightPathData& OutData,
+    const TArray<FVector>& ControlPoints,
+    const bool bClosedLoop,
+    const float SampleInterval)
+{
+    OutData.SampledLocations.Reset();
+    OutData.SampledRotations.Reset();
+    OutData.SampledTangents.Reset();
+    OutData.SampleInterval = FMath::Max(SampleInterval, 1.f);
+    OutData.bClosedLoop = bClosedLoop;
+    OutData.TotalLength = 0.0f;
+
+    if (ControlPoints.Num() < 2)
+    {
+        return;
+    }
+
+    TArray<float> SegmentLengths;
+    SegmentLengths.Reserve(ControlPoints.Num());
+
+    TArray<float> CumulativeLengths;
+    CumulativeLengths.Reserve(ControlPoints.Num() + 1);
+    CumulativeLengths.Add(0.0f);
+
+    for (int32 Index = 1; Index < ControlPoints.Num(); ++Index)
+    {
+        const float Length = FVector::Dist(ControlPoints[Index - 1], ControlPoints[Index]);
+        SegmentLengths.Add(Length);
+        OutData.TotalLength += Length;
+        CumulativeLengths.Add(OutData.TotalLength);
+    }
+
+    if (bClosedLoop)
+    {
+        const float ClosingLength = FVector::Dist(ControlPoints.Last(), ControlPoints[0]);
+        SegmentLengths.Add(ClosingLength);
+        OutData.TotalLength += ClosingLength;
+        CumulativeLengths.Add(OutData.TotalLength);
+    }
+
+    if (OutData.TotalLength <= KINDA_SMALL_NUMBER)
+    {
+        return;
+    }
+
+    const int32 NumSamples = FMath::CeilToInt32(OutData.TotalLength / OutData.SampleInterval) + 1;
+    OutData.SampledLocations.Reserve(NumSamples);
+    OutData.SampledRotations.Reserve(NumSamples);
+    OutData.SampledTangents.Reserve(NumSamples);
+
+    auto SamplePolylineAtDistance = [&ControlPoints, &SegmentLengths, &CumulativeLengths, bClosedLoop](const float Distance, FVector& OutLocation, FVector& OutTangent)
+    {
+        const float ClampedDistance = FMath::Max(Distance, 0.0f);
+        for (int32 SegmentIndex = 0; SegmentIndex < SegmentLengths.Num(); ++SegmentIndex)
+        {
+            const float SegmentStart = CumulativeLengths[SegmentIndex];
+            const float SegmentEnd = CumulativeLengths[SegmentIndex + 1];
+            if (ClampedDistance > SegmentEnd && SegmentIndex != SegmentLengths.Num() - 1)
+            {
+                continue;
+            }
+
+            const FVector SegmentStartPoint = ControlPoints[SegmentIndex];
+            const FVector SegmentEndPoint =
+                (SegmentIndex + 1 < ControlPoints.Num()) ? ControlPoints[SegmentIndex + 1] : (bClosedLoop ? ControlPoints[0] : ControlPoints.Last());
+            const float SegmentLength = FMath::Max(SegmentEnd - SegmentStart, KINDA_SMALL_NUMBER);
+            const float Alpha = FMath::Clamp((ClampedDistance - SegmentStart) / SegmentLength, 0.0f, 1.0f);
+            OutLocation = FMath::Lerp(SegmentStartPoint, SegmentEndPoint, Alpha);
+            OutTangent = (SegmentEndPoint - SegmentStartPoint).GetSafeNormal();
+            return;
+        }
+
+        OutLocation = ControlPoints.Last();
+        const FVector FallbackStart = ControlPoints.Num() > 1 ? ControlPoints[ControlPoints.Num() - 2] : ControlPoints.Last();
+        OutTangent = (ControlPoints.Last() - FallbackStart).GetSafeNormal();
+    };
+
+    for (int32 SampleIndex = 0; SampleIndex < NumSamples; ++SampleIndex)
+    {
+        const float Distance = FMath::Min(static_cast<float>(SampleIndex) * OutData.SampleInterval, OutData.TotalLength);
+        FVector Location = FVector::ZeroVector;
+        FVector Tangent = FVector::ForwardVector;
+        SamplePolylineAtDistance(Distance, Location, Tangent);
+
+        OutData.SampledLocations.Add(Location);
+        OutData.SampledTangents.Add(Tangent);
+        OutData.SampledRotations.Add(Tangent.ToOrientationQuat());
     }
 }

@@ -5,6 +5,34 @@
 namespace Flight::Vex
 {
 
+namespace
+{
+
+const FVexTypeSchema* FindSchemaForReflectedType(
+	FVexSymbolRegistry& Registry,
+	const Flight::Reflection::FTypeRegistry::FTypeInfo& TypeInfo)
+{
+	if (TypeInfo.RuntimeKey)
+	{
+		if (const FVexTypeSchema* Schema = Registry.GetSchema(TypeInfo.RuntimeKey))
+		{
+			return Schema;
+		}
+	}
+
+	if (const UScriptStruct* NativeStruct = TypeInfo.GetNativeStruct())
+	{
+		if (const FVexTypeSchema* Schema = Registry.GetSchemaByNativeStruct(NativeStruct))
+		{
+			return Schema;
+		}
+	}
+
+	return nullptr;
+}
+
+} // namespace
+
 FVexSymbolRegistry& FVexSymbolRegistry::Get()
 {
 	static FVexSymbolRegistry Instance;
@@ -52,6 +80,45 @@ const FVexTypeSchema* FVexSymbolRegistry::GetSchemaByNativeStruct(const UScriptS
 	}
 
 	return nullptr;
+}
+
+FVexSchemaResolutionResult FVexSymbolRegistry::ResolveSchemaForReflectedType(const Flight::Reflection::FTypeRegistry::FTypeInfo& TypeInfo)
+{
+	if (const FVexTypeSchema* ExistingSchema = FindSchemaForReflectedType(*this, TypeInfo))
+	{
+		return { ExistingSchema, EVexSchemaResolutionStatus::ResolvedExisting, FString() };
+	}
+
+	if (TypeInfo.VexCapability == Flight::Reflection::EVexCapability::NotVexCapable)
+	{
+		return { nullptr, EVexSchemaResolutionStatus::NotVexCapable, TEXT("Reflected type is not VEX-capable.") };
+	}
+
+	if (!TypeInfo.ProvideVexSchemaFn)
+	{
+		return { nullptr, EVexSchemaResolutionStatus::MissingProvider, TEXT("No reflected VEX schema provider is registered for this type.") };
+	}
+
+	const Flight::Reflection::FVexSchemaProviderResult ProviderResult = TypeInfo.ProvideVexSchemaFn();
+	if (!ProviderResult.bSuccess)
+	{
+		return { nullptr, EVexSchemaResolutionStatus::ProviderFailed, ProviderResult.Diagnostic };
+	}
+
+	if (const FVexTypeSchema* ProvidedSchema = FindSchemaForReflectedType(*this, TypeInfo))
+	{
+		return { ProvidedSchema, EVexSchemaResolutionStatus::ResolvedAfterProvider, ProviderResult.Diagnostic };
+	}
+
+	const FString Diagnostic = ProviderResult.Diagnostic.IsEmpty()
+		? FString(TEXT("VEX schema provider returned success, but no schema was registered."))
+		: ProviderResult.Diagnostic;
+	return { nullptr, EVexSchemaResolutionStatus::ProviderReturnedNoSchema, Diagnostic };
+}
+
+const FVexTypeSchema* FVexSymbolRegistry::GetSchemaForReflectedType(const Flight::Reflection::FTypeRegistry::FTypeInfo& TypeInfo)
+{
+	return ResolveSchemaForReflectedType(TypeInfo).Schema;
 }
 
 const FVexSymbolAccessor* FVexSymbolRegistry::FindSymbol(const void* TypeKey, const FString& Name) const

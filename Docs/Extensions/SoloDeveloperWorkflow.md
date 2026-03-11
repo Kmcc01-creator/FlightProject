@@ -1,5 +1,13 @@
 # The Solo Flight Framework: Ergonomic Development in UE5
 
+Status: broader solo-developer workflow reference, not the canonical architecture guide.
+
+For the current project direction, prefer:
+
+- [../Architecture/CurrentProjectVision.md](../Architecture/CurrentProjectVision.md)
+- [../Workflow/GameplaySystems.md](../Workflow/GameplaySystems.md)
+- [CurrentExtensionDirections.md](CurrentExtensionDirections.md)
+
 As a solo developer, efficiency is paramount. This framework leverages the strengths of C++, Blueprints, and Python to create a workflow that minimizes friction and context switching.
 
 ## 1. The Triad Roles

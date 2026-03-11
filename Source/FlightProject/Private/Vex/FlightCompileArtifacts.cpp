@@ -141,6 +141,16 @@ void AddArtifactKindArrayToJson(const TArray<EFlightCompileArtifactKind>& Kinds,
 	Object->SetArrayField(FieldName, Values);
 }
 
+void AddStringArrayToJson(const TArray<FString>& Strings, const TCHAR* FieldName, TSharedRef<FJsonObject> Object)
+{
+	TArray<TSharedPtr<FJsonValue>> Values;
+	for (const FString& Value : Strings)
+	{
+		Values.Add(MakeShared<FJsonValueString>(Value));
+	}
+	Object->SetArrayField(FieldName, Values);
+}
+
 void AddBackendReportsToJson(const TArray<FFlightCompileBackendReport>& Reports, const TCHAR* FieldName, TSharedRef<FJsonObject> Object)
 {
 	TArray<TSharedPtr<FJsonValue>> Values;
@@ -263,6 +273,29 @@ FString VexTierToString(const EVexTier Tier)
 		return TEXT("DFA");
 	case EVexTier::Full:
 		return TEXT("Full");
+	default:
+		return TEXT("Unknown");
+	}
+}
+
+FString VexStorageKindToString(const EVexStorageKind Kind)
+{
+	switch (Kind)
+	{
+	case EVexStorageKind::None:
+		return TEXT("None");
+	case EVexStorageKind::AosOffset:
+		return TEXT("AosOffset");
+	case EVexStorageKind::Accessor:
+		return TEXT("Accessor");
+	case EVexStorageKind::MassFragmentField:
+		return TEXT("MassFragmentField");
+	case EVexStorageKind::SoaColumn:
+		return TEXT("SoaColumn");
+	case EVexStorageKind::GpuBufferElement:
+		return TEXT("GpuBufferElement");
+	case EVexStorageKind::ExternalProvider:
+		return TEXT("ExternalProvider");
 	default:
 		return TEXT("Unknown");
 	}
@@ -419,9 +452,12 @@ FString BuildCompileArtifactReportJson(const FFlightCompileArtifactReport& Repor
 	Root->SetNumberField(TEXT("behaviorId"), static_cast<double>(Report.BehaviorID));
 	Root->SetNumberField(TEXT("sourceHash"), static_cast<double>(Report.SourceHash));
 	Root->SetStringField(TEXT("targetFingerprint"), Report.TargetFingerprint);
+	Root->SetStringField(TEXT("boundTypeName"), Report.BoundTypeName);
+	Root->SetNumberField(TEXT("schemaLayoutHash"), static_cast<double>(Report.SchemaLayoutHash));
 	Root->SetStringField(TEXT("compileOutcome"), Report.CompileOutcome);
 	Root->SetStringField(TEXT("backendPath"), Report.BackendPath);
 	Root->SetStringField(TEXT("selectedBackend"), Report.SelectedBackend);
+	Root->SetStringField(TEXT("committedBackend"), Report.CommittedBackend);
 	Root->SetStringField(TEXT("tier"), VexTierToString(Report.Tier));
 	Root->SetBoolField(TEXT("async"), Report.bAsync);
 	Root->SetBoolField(TEXT("hasIr"), Report.bHasIr);
@@ -432,6 +468,9 @@ FString BuildCompileArtifactReportJson(const FFlightCompileArtifactReport& Repor
 	Root->SetStringField(TEXT("irCompileErrors"), Report.IrCompileErrors);
 	AddArtifactKindArrayToJson(Report.AvailableArtifacts, TEXT("availableArtifacts"), Root);
 	AddBackendReportsToJson(Report.BackendReports, TEXT("backendReports"), Root);
+	AddStringArrayToJson(Report.ReadSymbols, TEXT("readSymbols"), Root);
+	AddStringArrayToJson(Report.WrittenSymbols, TEXT("writtenSymbols"), Root);
+	AddStringArrayToJson(Report.ReferencedStorageKinds, TEXT("referencedStorageKinds"), Root);
 
 	TSharedRef<FJsonObject> CodeShapeObject = MakeShared<FJsonObject>();
 	CodeShapeObject->SetNumberField(TEXT("instructionCount"), Report.CodeShapeMetrics.InstructionCount);

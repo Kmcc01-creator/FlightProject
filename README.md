@@ -1,76 +1,134 @@
-# FlightProject: High-Scale Field Simulation & Stylized Rendering
+# FlightProject
 
-FlightProject is a C++23 "Shadow Engine" built within Unreal Engine 5.7, focusing on massive-scale GPU simulation and avant-garde, field-theoretic rendering.
+FlightProject is a C++23 Unreal Engine 5.7 project converging on a schema-bound execution architecture.
 
-## 🚀 Core Architecture: SCSL
-The engine is built on the **SCSL** paradigm, treating the world as a unified set of interacting data fields rather than discrete actors.
+The current project center is not best described as only:
 
-*   **Structures (S)**: Physical constraints via Signed Distance Fields (SDF).
-*   **Clouds (C)**: Persistent volumetric density fields for trails and atmosphere.
-*   **Swarms (S)**: Discrete Lagrangian agents (2M+ entities) performing GPU logic.
-*   **Light (L)**: 3D Radiance Lattice with cellular energy propagation.
+- a flight sandbox
+- a swarm renderer
+- a VEX compiler experiment
+- an ECS-only gameplay project
 
-[Read the SCSL Engine Specification](./Docs/Architecture/SCSL_Engine.md)
+The better description is:
 
-## 🎨 Field-Theoretic Stylization
-We reject standard PBR in favor of a **LERP-based NPR (Non-Photorealistic Rendering)** pipeline. By resolving simulation data into an **F-Buffer**, we enable anime-style shading, custom depth falloffs, and unified motion/lighting governed by **Gradient Descent**.
+- authored intent becomes a typed contract
+- contracts bind against reflected schemas and world context
+- orchestration selects legal executable paths for cohorts and services
+- runtime systems lower those decisions into Mass, native, Verse, or GPU-facing execution
+- reports and diagnostics preserve what was chosen and why
 
-[Read the Stylization & F-Buffer Paradigm](./Docs/Architecture/FieldTheoreticStylization.md)
+For the current architectural source of truth, start with [Docs/README.md](Docs/README.md).
 
-## 🛠️ Unifying hallmark: VEX DSL
-Behaviors and visuals are authored via a bespoke, Houdini-inspired **VEX DSL**.
-*   **Functional Piping**: Advanced stream transforms using the `|` operator.
-*   **Compile-Time Optimization**: Iterative AST folding, constant propagation, and identity simplification.
-*   **Safety**: A **Phantom Capability Algebra** ensures scripts never outrun their GPU resource dependencies.
-*   **Reactive UI Scaffold**: VEX-authored Slate panels for live diagnostics and list-driven tooling.
-*   **Verse/Solaris Bridge**: Experimental `IAssemblerPass` scaffolding for eventual source-to-`VProcedure` emission.
+## Current System Center
 
-[Read the Verse Assembler Scaffold Plan](./Docs/Scripting/VerseAssemblerScaffold.md)
-[Read the VEX UI Scaffold Plan](./Docs/Scripting/VexUiScaffold.md)
+The strongest active seams are:
 
-## 🛰️ Massive Multi-Agent Orchestration
-Scaling beyond singletons, the engine supports distributed execution and dynamic events.
-*   **Sparse Fields**: Multi-instance Lattices and Clouds managed via `Texture3DArray`.
-*   **Behavior Classes**: Data-driven multi-dispatch using VEX-generated Mega-Kernels.
-*   **Event Topology**: Sub-millisecond reaction to dynamic C++/Verse events via transient GPU buffers.
+- `UFlightOrchestrationSubsystem` as the world-scoped coordination surface
+- `FVexTypeSchema`, SchemaIR, and `FVexSchemaOrchestrator` as the contract/binding surface
+- `UFlightVerseSubsystem` as the compile/execute service for VEX-derived behavior
+- actor adapters as the bridge from Unreal-authored content into project-owned runtime data
+- Mass fragments, registries, and shared fragments as the hot-loop execution truth
 
-[Read the Instanced Orchestration Specification](./Docs/Architecture/InstancedVexOrchestration.md)
-[Read the Concurrency & Task Orchestration Specification](./Docs/Architecture/VexConcurrencyModel.md)
+The most important recurring pattern in the codebase is:
 
-## 🏗️ Engineering Standards
-*   **C++23 Traits**: Zero-UHT compile-time reflection for CPU/GPU data parity.
-*   **Monadic RDG**: 12-pass simulation orchestrated via type-safe functional chains.
-*   **Linux/Vulkan**: Optimized for `io_uring` and high-performance asynchronous execution.
-*   **Code Standards Baseline**: Initial findings, policy, and vertical-slice validation plan.
+```text
+Description
+    -> Contract
+        -> Binding
+            -> Lowering
+                -> Execution
+                    -> Report
+```
 
-[Read the Code Standards Baseline](./CodeStandards.md)
+## Current Vertical Slices
 
-## ✅ Testing Quickstart
-Use the headless runner as the default validation path:
+These are the clearest implemented examples of the current direction:
+
+- schema-driven VEX binding and backend capability reporting
+- orchestration-issued behavior bindings for Mass cohorts
+- navigation candidate promotion, legality, ranking, and execution-plan selection
+- actor-adapter lowering from authored anchors and waypoint paths into cohorts, candidates, and batch spawn plans
+- navigation commit products that preserve selected route meaning across spawn/runtime boundaries
+
+## Repository Layout
+
+- `Source/FlightProject`
+  Main runtime/editor module code.
+- `Plugins/GameFeatures/SwarmEncounter`
+  Swarm spawning and encounter-specific runtime logic.
+- `Docs/Architecture`
+  Canonical subsystem and runtime model docs.
+- `Docs/Workflow`
+  Current implementation status, plans, and migration notes.
+- `Docs/Environment`
+  Build, setup, and troubleshooting guidance.
+- `Docs/Scripting`
+  VEX, Verse, and validation-focused material.
+- `Scripts`
+  Build, launch, and automation entrypoints.
+
+## Start Here
+
+If you need:
+
+- current documentation map:
+  [Docs/README.md](Docs/README.md)
+- high-level project orientation:
+  [Docs/Architecture/Overview.md](Docs/Architecture/Overview.md)
+- current architectural frame:
+  [Docs/Architecture/CurrentProjectVision.md](Docs/Architecture/CurrentProjectVision.md)
+- world/runtime ownership:
+  [Docs/Architecture/WorldExecutionModel.md](Docs/Architecture/WorldExecutionModel.md)
+- orchestration:
+  [Docs/Architecture/OrchestrationSubsystem.md](Docs/Architecture/OrchestrationSubsystem.md)
+- navigation and actor-adapter flow:
+  [Docs/Architecture/Navigation.md](Docs/Architecture/Navigation.md)
+  [Docs/Architecture/ActorAdapters.md](Docs/Architecture/ActorAdapters.md)
+- active implementation status:
+  [Docs/Workflow/CurrentFocus.md](Docs/Workflow/CurrentFocus.md)
+  [Docs/Workflow/CurrentBuild.md](Docs/Workflow/CurrentBuild.md)
+
+## Build And Test Quickstart
+
+Set the engine path first if needed:
 
 ```bash
 export UE_ROOT=/home/kelly/Unreal/UnrealEngine
+```
 
-# 1) Full headless baseline
+Common commands:
+
+```bash
+# Regenerate project files
+./Scripts/generate_project_files.sh -f
+
+# Build the main editor target
+./Scripts/build_targets.sh Development
+
+# Build and run the default verification bucket
+./Scripts/build_targets.sh Development --verify
+
+# Headless automation
 ./Scripts/run_tests_headless.sh
 
-# 2) Parser bucket
-TEST_FILTER="FlightProject.Schema.Vex.Parser" \
-TEST_LOG_PROFILE=focused TEST_STREAM_FILTER=errors \
-./Scripts/run_tests_headless.sh
+# Focused headless bucket
+./Scripts/run_tests_headless.sh --preset=triage --filter="FlightProject.Navigation.VerticalSlice.Contracts"
 
-# 3) Extended mixed bucket (schema + Verse + parser + vertical slice)
-TEST_FILTER="FlightProject.Integration.SchemaDriven+FlightProject.Schema.Vex.ManifestValidation+FlightProject.Verse.CompileContract+FlightProject.Verse.Subsystem+FlightProject.Schema.Vex.Parser+FlightProject.Integration.Vex.VerticalSlice" \
-TEST_LOG_PROFILE=focused TEST_STREAM_FILTER=errors \
-./Scripts/run_tests_headless.sh
-
-# 4) GPU smoke/offscreen path
+# GPU/offscreen automation
 TEST_SCOPE=gpu_smoke ./Scripts/run_tests_full.sh
 ```
 
-Current test snapshot and filters:
-- [Current Build & Test Baseline](./Docs/Workflow/CurrentBuild.md)
-- [VEX Schema/Parser Validation](./Docs/Scripting/VexSchemaValidation.md)
+Use these for current status and troubleshooting:
 
----
-*Built with passion for data-oriented design and artistic opinion.*
+- [Docs/Workflow/CurrentBuild.md](Docs/Workflow/CurrentBuild.md)
+- [Docs/Environment/Configuration.md](Docs/Environment/Configuration.md)
+- [Docs/Environment/Troubleshooting.md](Docs/Environment/Troubleshooting.md)
+
+## Documentation Policy
+
+Use this file as a short current orientation layer.
+
+- keep deep architectural detail in `Docs/Architecture`
+- keep dated status and rollout notes in `Docs/Workflow`
+- keep build/setup details in `Docs/Environment`
+- prefer linking to canonical docs instead of repeating old project pitches here

@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Mass/FlightMassLoweringAdapter.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "Orchestration/FlightOrchestrationReport.h"
 #include "FlightOrchestrationSubsystem.generated.h"
@@ -24,6 +25,7 @@ public:
 
 	bool RegisterCohort(const Flight::Orchestration::FFlightCohortRecord& Cohort);
 	void UnregisterCohort(FName CohortName);
+	bool ReconcileBatchLoweringPlans(const TArray<Flight::Mass::FFlightMassBatchLoweringPlan>& Plans);
 
 	bool BindBehaviorToCohort(const Flight::Orchestration::FFlightBehaviorBinding& Binding);
 	void ClearBindingsForCohort(FName CohortName);
@@ -54,10 +56,12 @@ private:
 	void IngestRenderAdapters();
 	void IngestWaypointPaths();
 	void IngestSpawnAnchors();
+	void IngestNavigationGraph();
 	void IngestSpatialFields();
 	void IngestBehaviors();
 	void BuildDefaultCohorts();
 	void BuildMissingContracts();
+	void BuildDiagnostics();
 	void RebuildCachedReport();
 
 	void AddServiceStatus(FName ServiceName, bool bAvailable, FString Detail = FString());
@@ -66,10 +70,12 @@ private:
 	uint64 NextParticipantHandle = 1;
 	TMap<uint64, Flight::Orchestration::FFlightParticipantRecord> ParticipantsByHandle;
 	TMap<FName, Flight::Orchestration::FFlightCohortRecord> CohortsByName;
+	TMap<FName, Flight::Orchestration::FFlightCohortRecord> ReconciledBatchCohortsByName;
 	TMap<uint32, Flight::Orchestration::FFlightBehaviorRecord> BehaviorsById;
 	TArray<Flight::Orchestration::FFlightBehaviorBinding> Bindings;
 	TArray<Flight::Orchestration::FFlightServiceStatus> Services;
 	TArray<Flight::Orchestration::FFlightMissingContract> MissingContracts;
+	TArray<Flight::Orchestration::FFlightOrchestrationDiagnostic> Diagnostics;
 	Flight::Orchestration::FFlightExecutionPlan ExecutionPlan;
 	Flight::Orchestration::FFlightOrchestrationReport CachedReport;
 };

@@ -10,7 +10,8 @@ For the current architectural source of truth, start with:
 3. [GameModeBootstrapBoundary.md](GameModeBootstrapBoundary.md)
 4. [OrchestrationSubsystem.md](OrchestrationSubsystem.md)
 5. [CurrentProjectVision.md](CurrentProjectVision.md)
-6. [VexStateMutationSchemaFrame.md](VexStateMutationSchemaFrame.md)
+6. [ActorAdapters.md](ActorAdapters.md)
+7. [VexStateMutationSchemaFrame.md](VexStateMutationSchemaFrame.md)
 
 ## Current Identity
 
@@ -59,6 +60,8 @@ If your task is mostly about:
   [GameModeBootstrapBoundary.md](GameModeBootstrapBoundary.md)
 - orchestration:
   [OrchestrationSubsystem.md](OrchestrationSubsystem.md)
+- actor-backed runtime ingress and lowering:
+  [ActorAdapters.md](ActorAdapters.md)
 - VEX/compiler direction:
   [CurrentProjectVision.md](CurrentProjectVision.md),
   [VexStateMutationSchemaFrame.md](VexStateMutationSchemaFrame.md),

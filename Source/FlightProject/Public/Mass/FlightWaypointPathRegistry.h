@@ -76,6 +76,19 @@ public:
     FGuid RegisterPath(AFlightWaypointPath* Path, float SampleInterval = 100.f);
 
     /**
+     * Register or refresh a synthetic polyline path for non-actor navigation commits.
+     * @param ControlPoints Ordered world-space control points describing the path
+     * @param bClosedLoop Whether the synthetic path should wrap back to the start
+     * @param SampleInterval Distance between generated samples in cm
+     * @param PreferredPathId Optional stable identifier to reuse when refreshing a synthetic path
+     */
+    FGuid RegisterSyntheticPath(
+        const TArray<FVector>& ControlPoints,
+        bool bClosedLoop,
+        float SampleInterval = 100.f,
+        const FGuid& PreferredPathId = FGuid());
+
+    /**
      * Unregister a path when it's destroyed or no longer needed.
      * @param PathId The path identifier returned by RegisterPath
      */
@@ -115,4 +128,5 @@ private:
 
     /** Build LUT from spline component */
     void BuildPathLUT(FFlightPathData& OutData, AFlightWaypointPath* Path, float SampleInterval);
+    void BuildSyntheticPathLUT(FFlightPathData& OutData, const TArray<FVector>& ControlPoints, bool bClosedLoop, float SampleInterval);
 };

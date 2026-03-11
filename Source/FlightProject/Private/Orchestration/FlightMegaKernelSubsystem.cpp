@@ -4,6 +4,7 @@
 #include "Orchestration/FlightOrchestrationSubsystem.h"
 #include "Orchestration/FlightExecutionPlan.h"
 #include "Verse/UFlightVerseSubsystem.h"
+#include "Vex/FlightCompileArtifacts.h"
 #include "Vex/Frontend/VexParser.h"
 #include "Vex/FlightVexSymbolRegistry.h"
 #include "Swarm/SwarmSimulationTypes.h"
@@ -13,6 +14,7 @@
 #include "Misc/FileHelper.h"
 #include "HAL/FileManager.h"
 #include "Misc/Paths.h"
+#include "Containers/Set.h"
 #include "ShaderCore.h"
 
 void UFlightMegaKernelSubsystem::Initialize(FSubsystemCollectionBase& Collection)
@@ -70,6 +72,8 @@ void UFlightMegaKernelSubsystem::Synthesize()
 	LastPlanGeneration = Plan.Generation;
 
 	TMap<uint32, FVexProgramAst> GpuScripts;
+	TMap<uint32, TSet<FString>> GpuWrittenSymbols;
+	TArray<FString> BehaviorMetadataLines;
 	
 	// Identify GPU-bound behaviors from the execution plan
 	for (const FFlightExecutionPlanStep& Step : Plan.Steps)
@@ -80,6 +84,55 @@ void UFlightMegaKernelSubsystem::Synthesize()
 			if (Behavior)
 			{
 				GpuScripts.Add(Step.BehaviorID, Behavior->NativeProgram);
+				if (Behavior->SchemaBinding.IsSet())
+				{
+					GpuWrittenSymbols.Add(Step.BehaviorID, Behavior->SchemaBinding->WrittenSymbols);
+
+					TArray<FString> ReadSymbols = Behavior->SchemaBinding->ReadSymbols.Array();
+					ReadSymbols.Sort();
+					TArray<FString> WrittenSymbols = Behavior->SchemaBinding->WrittenSymbols.Array();
+					WrittenSymbols.Sort();
+
+					TSet<FString> StorageKinds;
+					for (const Flight::Vex::FVexSchemaSymbolUse& Use : Behavior->SchemaBinding->SymbolUses)
+					{
+						if (!Behavior->SchemaBinding->BoundSymbols.IsValidIndex(Use.BoundSymbolIndex))
+						{
+							continue;
+						}
+
+						const Flight::Vex::FVexSchemaBoundSymbol& BoundSymbol = Behavior->SchemaBinding->BoundSymbols[Use.BoundSymbolIndex];
+						StorageKinds.Add(Flight::Vex::VexStorageKindToString(BoundSymbol.LogicalSymbol.Storage.Kind));
+					}
+
+					TArray<FString> OrderedStorageKinds = StorageKinds.Array();
+					OrderedStorageKinds.Sort();
+					TArray<FString> FragmentBindings;
+					for (const Flight::Vex::FVexSchemaFragmentBinding& FragmentBinding : Behavior->SchemaBinding->FragmentBindings)
+					{
+						FragmentBindings.Add(FragmentBinding.FragmentType.IsNone()
+							? TEXT("<none>")
+							: FragmentBinding.FragmentType.ToString());
+					}
+					FragmentBindings.Sort();
+					BehaviorMetadataLines.Add(FString::Printf(
+						TEXT("// Behavior %u Type=%s LayoutHash=%u Reads=[%s] Writes=[%s] Storage=[%s] Fragments=[%s]"),
+						Step.BehaviorID,
+						Behavior->BoundTypeStableName.IsNone() ? TEXT("<unknown>") : *Behavior->BoundTypeStableName.ToString(),
+						Behavior->BoundSchemaLayoutHash,
+						*FString::Join(ReadSymbols, TEXT(", ")),
+						*FString::Join(WrittenSymbols, TEXT(", ")),
+						*FString::Join(OrderedStorageKinds, TEXT(", ")),
+						*FString::Join(FragmentBindings, TEXT(", "))));
+				}
+				else
+				{
+					BehaviorMetadataLines.Add(FString::Printf(
+						TEXT("// Behavior %u Type=%s LayoutHash=%u SchemaBinding=<unavailable>"),
+						Step.BehaviorID,
+						Behavior->BoundTypeStableName.IsNone() ? TEXT("<unknown>") : *Behavior->BoundTypeStableName.ToString(),
+						Behavior->BoundSchemaLayoutHash));
+				}
 			}
 		}
 	}
@@ -103,7 +156,17 @@ void UFlightMegaKernelSubsystem::Synthesize()
 	SymbolMap.Add(TEXT("@frame"), TEXT("frame"));
 
 	// Call the lowering logic with our stable function name
-	MegaKernelSource = LowerMegaKernel(GpuScripts, TArray<FVexSymbolDefinition>(), SymbolMap, TEXT("ExecuteVexBehavior"));
+	MegaKernelSource = FString::Printf(TEXT("// Mega-Kernel PlanGeneration=%u\n"), LastPlanGeneration);
+	for (const FString& MetadataLine : BehaviorMetadataLines)
+	{
+		MegaKernelSource += MetadataLine + TEXT("\n");
+	}
+	MegaKernelSource += LowerMegaKernel(
+		GpuScripts,
+		TArray<FVexSymbolDefinition>(),
+		SymbolMap,
+		TEXT("ExecuteVexBehavior"),
+		&GpuWrittenSymbols);
 
 	// Write the synthesized source to the Intermediate generated directory
 	const FString GeneratedDir = FPaths::ProjectIntermediateDir() / TEXT("Shaders/Generated/");

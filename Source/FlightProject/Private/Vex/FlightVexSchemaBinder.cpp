@@ -101,6 +101,20 @@ void AddSymbolUse(
 		StatementBinding.ReadSymbols.AddUnique(BoundSymbolIndex);
 		Result.ReadSymbols.Add(SymbolName);
 	}
+
+	const int32 FragmentBindingIndex = Result.BoundSymbols[BoundSymbolIndex].FragmentBindingIndex;
+	if (Result.FragmentBindings.IsValidIndex(FragmentBindingIndex))
+	{
+		FVexSchemaFragmentBinding& FragmentBinding = Result.FragmentBindings[FragmentBindingIndex];
+		if (AccessKind == EVexSchemaAccessKind::Write)
+		{
+			FragmentBinding.WrittenSymbols.Add(SymbolName);
+		}
+		else
+		{
+			FragmentBinding.ReadSymbols.Add(SymbolName);
+		}
+	}
 }
 
 } // namespace
@@ -111,6 +125,27 @@ const FVexSchemaBoundSymbol* FVexSchemaBindingResult::FindBoundSymbolByName(cons
 	{
 		return BoundSymbol.SymbolName == Name;
 	});
+}
+
+const FVexSchemaFragmentBinding* FVexSchemaBindingResult::FindFragmentBindingByType(const FName FragmentType) const
+{
+	return FragmentBindings.FindByPredicate([FragmentType](const FVexSchemaFragmentBinding& FragmentBinding)
+	{
+		return FragmentBinding.FragmentType == FragmentType;
+	});
+}
+
+const FVexSchemaFragmentBinding* FVexSchemaBindingResult::FindFragmentBindingForBoundSymbol(const int32 BoundSymbolIndex) const
+{
+	if (!BoundSymbols.IsValidIndex(BoundSymbolIndex))
+	{
+		return nullptr;
+	}
+
+	const int32 FragmentBindingIndex = BoundSymbols[BoundSymbolIndex].FragmentBindingIndex;
+	return FragmentBindings.IsValidIndex(FragmentBindingIndex)
+		? &FragmentBindings[FragmentBindingIndex]
+		: nullptr;
 }
 
 TMap<FString, FString> FVexSchemaBindingResult::BuildVerseSymbolMap() const
@@ -231,6 +266,7 @@ FVexSchemaBindingResult FVexSchemaBinder::BindProgram(
 	}
 
 	TMap<FString, int32> BoundIndexByName;
+	TMap<FName, int32> FragmentBindingIndexByType;
 	TArray<FString> BoundNames;
 	LogicalSymbols.GetKeys(BoundNames);
 	BoundNames.Sort();
@@ -249,6 +285,26 @@ FVexSchemaBindingResult FVexSchemaBinder::BindProgram(
 		BoundSymbol.Source = Schema.LogicalSymbols.Contains(SymbolName)
 			? EVexSchemaBindingSource::Schema
 			: EVexSchemaBindingSource::AmbientDefinition;
+
+		if (Logical->Storage.Kind == EVexStorageKind::MassFragmentField && !Logical->Storage.FragmentType.IsNone())
+		{
+			int32* ExistingFragmentBindingIndex = FragmentBindingIndexByType.Find(Logical->Storage.FragmentType);
+			if (!ExistingFragmentBindingIndex)
+			{
+				FVexSchemaFragmentBinding& FragmentBinding = Result.FragmentBindings.AddDefaulted_GetRef();
+				FragmentBinding.FragmentType = Logical->Storage.FragmentType;
+				FragmentBinding.StorageKind = Logical->Storage.Kind;
+				FragmentBinding.BoundSymbolIndices.Add(Result.BoundSymbols.Num() - 1);
+				FragmentBindingIndexByType.Add(Logical->Storage.FragmentType, Result.FragmentBindings.Num() - 1);
+				BoundSymbol.FragmentBindingIndex = Result.FragmentBindings.Num() - 1;
+			}
+			else
+			{
+				Result.FragmentBindings[*ExistingFragmentBindingIndex].BoundSymbolIndices.Add(Result.BoundSymbols.Num() - 1);
+				BoundSymbol.FragmentBindingIndex = *ExistingFragmentBindingIndex;
+			}
+		}
+
 		BoundIndexByName.Add(SymbolName, Result.BoundSymbols.Num() - 1);
 	}
 

@@ -1,7 +1,8 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "GameFramework/Actor.h"
+#include "Core/FlightActorAdapter.h"
+#include "Orchestration/FlightParticipantAdapter.h"
 #include "FlightWaypointPath.generated.h"
 
 class USplineComponent;
@@ -11,20 +12,19 @@ struct FFlightAutopilotConfigRow;
  * Authorable spline used to drive autonomous flight paths.
  */
 UCLASS()
-class FLIGHTPROJECT_API AFlightWaypointPath : public AActor
+class FLIGHTPROJECT_API AFlightWaypointPath : public AFlightActorAdapterBase, public IFlightParticipantAdapter
 {
     GENERATED_BODY()
 
 public:
     AFlightWaypointPath();
 
-    virtual void OnConstruction(const FTransform& Transform) override;
-    virtual void BeginPlay() override;
-    virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
-
     USplineComponent* GetSplineComponent() const { return FlightSpline; }
 
     FGuid GetPathId() const { return PathId; }
+    FGuid EnsureRegisteredPath();
+    FName GetNavNetworkId() const { return NavNetworkId; }
+    FName GetNavSubNetworkId() const { return NavSubNetworkId; }
 
     float GetPathLength() const;
     FTransform GetTransformAtDistance(float Distance) const;
@@ -32,6 +32,8 @@ public:
 
     void EnsureDefaultLoop();
     void ConfigureFromAutopilotConfig(const FFlightAutopilotConfigRow& Config);
+    void SetNavigationRoutingMetadata(FName InNavNetworkId, FName InNavSubNetworkId);
+    virtual bool BuildParticipantRecord(Flight::Orchestration::FFlightParticipantRecord& OutRecord) const override;
 
 private:
     UPROPERTY(VisibleAnywhere, Category = "Flight|Path")
@@ -43,9 +45,20 @@ private:
     UPROPERTY(EditAnywhere, Category = "Flight|Path")
     float DefaultAltitude = 1200.f;
 
+    UPROPERTY(EditAnywhere, Category = "Flight|Path|Navigation")
+    FName NavNetworkId = NAME_None;
+
+    UPROPERTY(EditAnywhere, Category = "Flight|Path|Navigation")
+    FName NavSubNetworkId = NAME_None;
+
     UPROPERTY(Transient, VisibleAnywhere, Category = "Flight|Path")
     FGuid PathId;
 
+    virtual void OnAdapterConstruction(const FTransform& Transform) override;
+    virtual void OnAdapterRegistered() override;
+    virtual void OnAdapterUnregistered(const EEndPlayReason::Type EndPlayReason) override;
+
     void BuildDefaultLoop();
     void BuildLoop(float Radius, float Altitude);
+    void RefreshRegisteredPath();
 };

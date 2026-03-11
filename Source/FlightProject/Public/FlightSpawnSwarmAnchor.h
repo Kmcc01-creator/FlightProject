@@ -1,9 +1,13 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "GameFramework/Actor.h"
+#include "Core/FlightActorAdapter.h"
+#include "Core/FlightSchemaProviderAdapter.h"
 #include "FlightDataTypes.h"
 #include "FlightNavGraphTypes.h"
+#include "Mass/FlightMassLoweringAdapter.h"
+#include "Orchestration/FlightParticipantAdapter.h"
+#include "Swarm/FlightSwarmAdapterContracts.h"
 #include "FlightSpawnSwarmAnchor.generated.h"
 
 /**
@@ -11,16 +15,16 @@
  * The game mode queries these anchors at startup to determine drone counts and phase offsets.
  */
 UCLASS()
-class FLIGHTPROJECT_API AFlightSpawnSwarmAnchor : public AActor
+class FLIGHTPROJECT_API AFlightSpawnSwarmAnchor
+	: public AFlightActorAdapterBase
+	, public IFlightParticipantAdapter
+	, public IFlightSchemaProviderAdapter
+	, public IFlightMassLoweringAdapter
 {
     GENERATED_BODY()
 
 public:
     AFlightSpawnSwarmAnchor();
-
-    virtual void OnConstruction(const FTransform& Transform) override;
-    virtual void BeginPlay() override;
-    virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
     FName GetAnchorId() const;
 
@@ -32,6 +36,11 @@ public:
     const TArray<int32>& GetAllowedBehaviorIds() const { return EffectiveAllowedBehaviorIds; }
     const TArray<int32>& GetDeniedBehaviorIds() const { return EffectiveDeniedBehaviorIds; }
     const TArray<FName>& GetRequiredBehaviorContracts() const { return EffectiveRequiredBehaviorContracts; }
+    FName GetNavNetworkId() const;
+    FName GetNavSubNetworkId() const { return NavSubNetworkId; }
+    virtual bool BuildParticipantRecord(Flight::Orchestration::FFlightParticipantRecord& OutRecord) const override;
+    virtual void GetSchemaProviderDescriptors(TArray<Flight::Adapters::FFlightSchemaProviderDescriptor>& OutDescriptors) const override;
+    virtual bool BuildMassBatchLoweringPlan(Flight::Mass::FFlightMassBatchLoweringPlan& OutPlan) const override;
 
 protected:
     UPROPERTY(VisibleAnywhere, Category = "Components")
@@ -81,6 +90,10 @@ protected:
     UPROPERTY(EditAnywhere, Category = "Swarm|NavGraph")
     FName NavNetworkId = NAME_None;
 
+    /** Optional subnetwork grouping used for local route constraints. */
+    UPROPERTY(EditAnywhere, Category = "Swarm|NavGraph")
+    FName NavSubNetworkId = NAME_None;
+
     /** Additional semantic tags applied to the nav graph node. */
     UPROPERTY(EditAnywhere, Category = "Swarm|NavGraph")
     TArray<FName> NavGraphTags;
@@ -95,6 +108,10 @@ private:
     TArray<int32> EffectiveDeniedBehaviorIds;
     TArray<FName> EffectiveRequiredBehaviorContracts;
     FGuid RegisteredNavNodeId;
+
+    virtual void OnAdapterConstruction(const FTransform& Transform) override;
+    virtual void OnAdapterRegistered() override;
+    virtual void OnAdapterUnregistered(const EEndPlayReason::Type EndPlayReason) override;
 
     void RefreshAnchor(bool bApplyOverrides);
     void ApplyOverrides(const FFlightProceduralAnchorRow* OverrideRow);

@@ -80,6 +80,23 @@ struct FLIGHTPROJECT_API FFlightBehaviorCohortFragment : public FMassConstShared
 	FName CohortName = NAME_None;
 };
 
+USTRUCT()
+struct FLIGHTPROJECT_API FFlightNavigationCommitSharedFragment : public FMassConstSharedFragment
+{
+	GENERATED_BODY()
+
+	FGuid SourceCandidateId;
+	FName SourceCandidateName = NAME_None;
+	FName CohortName = NAME_None;
+	FGuid RuntimePathId;
+	FVector InitialLocation = FVector::ZeroVector;
+	float PathLength = 0.0f;
+	uint8 CommitKind = 0;
+	uint8 SourceKind = 0;
+	bool bSynthetic = false;
+	bool bResolvedFromExecutionPlan = false;
+};
+
 /**
  * Visual/rendering properties for flight entities.
  * Only required when representation (Actor) is spawned.

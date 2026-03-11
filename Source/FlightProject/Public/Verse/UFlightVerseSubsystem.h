@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "Vex/FlightVexSchema.h"
+#include "Vex/FlightVexSchemaIr.h"
 #include "Vex/FlightCompileArtifacts.h"
 #include "Vex/FlightVexParser.h"
 #include "Vex/FlightVexOptics.h"
@@ -110,6 +111,9 @@ public:
 	/** Returns the latest compile artifact report as JSON for a behavior ID, if available. */
 	FString GetBehaviorCompileArtifactReportJson(uint32 BehaviorID) const;
 
+	/** Returns the resolved storage host kind used for this behavior and type key. */
+	FString DescribeResolvedStorageHost(uint32 BehaviorID, const void* TypeKey = nullptr) const;
+
 	struct FVerseBehavior
 	{
 #if WITH_VERSE_VM || defined(__INTELLISENSE__)
@@ -126,6 +130,10 @@ public:
 		bool bUsesVmEntryPoint = false;
 		EFlightVerseCompileState CompileState = EFlightVerseCompileState::VmCompileFailed;
 		Flight::Vex::FVexProgramAst NativeProgram;
+		const void* BoundTypeKey = nullptr;
+		FName BoundTypeStableName = NAME_None;
+		uint32 BoundSchemaLayoutHash = 0;
+		TOptional<Flight::Vex::FVexSchemaBindingResult> SchemaBinding;
 		FString GeneratedVerseCode;
 		FString LastCompileDiagnostics;
 		Flight::Vex::FFlightCompileArtifactReport CompileArtifactReport;
@@ -139,6 +147,29 @@ public:
 	TMap<uint32, FVerseBehavior> Behaviors;
 
 private:
+	enum class EStorageHostKind : uint8
+	{
+		None,
+		SchemaAos,
+		SchemaAccessor,
+		MassFragments,
+		GpuBuffer,
+		LegacyDroidState
+	};
+
+	struct FResolvedStorageHost
+	{
+		EStorageHostKind Kind = EStorageHostKind::None;
+		const Flight::Vex::FVexTypeSchema* Schema = nullptr;
+		const void* TypeKey = nullptr;
+		FName TypeName = NAME_None;
+
+		bool IsValid() const
+		{
+			return Kind != EStorageHostKind::None;
+		}
+	};
+
 	/** Builds Verse descriptors for all reflected types */
 	void RegisterNativeComponents();
 
@@ -166,6 +197,34 @@ private:
 
 	/** Flushes all deferred behaviors in a single fused VVM transaction. */
 	void FlushDeferredBehaviors();
+
+	/** Resolve the concrete storage host used to execute a behavior on a state payload. */
+	FResolvedStorageHost ResolveStorageHost(const FVerseBehavior& Behavior, const void* RequestedTypeKey) const;
+
+	/** Execute a behavior on a previously resolved storage host. */
+	bool ExecuteResolvedStorageHost(const FResolvedStorageHost& Host, const FVerseBehavior& Behavior, void* StructPtr);
+
+	/** Execute a behavior on a previously resolved Mass/direct storage host. */
+	bool ExecuteResolvedDirectStorageHost(
+		const FResolvedStorageHost& Host,
+		const FVerseBehavior& Behavior,
+		TArrayView<struct FFlightTransformFragment> Transforms,
+		TArrayView<struct FFlightDroidStateFragment> DroidStates);
+
+	/** Explicit AoS schema host for direct offset-backed scalar execution. */
+	void ExecuteOnAosSchemaHost(const Flight::Vex::FVexProgramAst& Program, void* StructPtr, const Flight::Vex::FVexTypeSchema& Schema);
+
+	/** Explicit accessor schema host for non-offset or provider-backed scalar execution. */
+	void ExecuteOnAccessorSchemaHost(const Flight::Vex::FVexProgramAst& Program, void* StructPtr, const Flight::Vex::FVexTypeSchema& Schema);
+
+	/** Explicit Mass/direct host for fragment-backed execution. */
+	bool ExecuteOnMassSchemaHost(
+		const FVerseBehavior& Behavior,
+		TArrayView<struct FFlightTransformFragment> Transforms,
+		TArrayView<struct FFlightDroidStateFragment> DroidStates);
+
+	/** Explicit GPU host placeholder for GPU-buffer-backed execution. */
+	bool ExecuteOnGpuSchemaHost(const FVerseBehavior& Behavior);
 
 #if WITH_VERSE_VM || defined(__INTELLISENSE__)
 	bool TryValidateVerseSource(const FString& VerseSource, FString& OutDiagnostics) const;

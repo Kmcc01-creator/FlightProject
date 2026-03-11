@@ -2,6 +2,8 @@
 
 #include "FlightDataSubsystem.h"
 #include "FlightNavGraphDataHubSubsystem.h"
+#include "Navigation/FlightNavigationContracts.h"
+#include "Swarm/FlightSwarmAdapterContracts.h"
 
 #include "Components/SceneComponent.h"
 #include "Engine/GameInstance.h"
@@ -24,27 +26,118 @@ AFlightSpawnSwarmAnchor::AFlightSpawnSwarmAnchor()
     NavGraphTags.AddUnique(TEXT("SpawnSwarmAnchor"));
 }
 
-void AFlightSpawnSwarmAnchor::OnConstruction(const FTransform& Transform)
+void AFlightSpawnSwarmAnchor::OnAdapterConstruction(const FTransform& Transform)
 {
-    Super::OnConstruction(Transform);
     RefreshAnchor(/*bApplyOverrides=*/false);
 }
 
-void AFlightSpawnSwarmAnchor::BeginPlay()
+void AFlightSpawnSwarmAnchor::OnAdapterRegistered()
 {
-    Super::BeginPlay();
     RefreshAnchor(/*bApplyOverrides=*/true);
 }
 
-void AFlightSpawnSwarmAnchor::EndPlay(const EEndPlayReason::Type EndPlayReason)
+void AFlightSpawnSwarmAnchor::OnAdapterUnregistered(const EEndPlayReason::Type EndPlayReason)
 {
     UnregisterNavGraphNode();
-    Super::EndPlay(EndPlayReason);
 }
 
 FName AFlightSpawnSwarmAnchor::GetAnchorId() const
 {
     return AnchorId.IsNone() ? GetFName() : AnchorId;
+}
+
+FName AFlightSpawnSwarmAnchor::GetNavNetworkId() const
+{
+    return NavNetworkId.IsNone() ? GetAnchorId() : NavNetworkId;
+}
+
+bool AFlightSpawnSwarmAnchor::BuildParticipantRecord(Flight::Orchestration::FFlightParticipantRecord& OutRecord) const
+{
+    OutRecord = {};
+    OutRecord.Kind = Flight::Orchestration::EFlightParticipantKind::SpawnAnchor;
+    OutRecord.Name = GetAnchorId().IsNone() ? GetFName() : GetAnchorId();
+    OutRecord.OwnerSubsystem = TEXT("UFlightSwarmSpawnerSubsystem");
+    OutRecord.SourceObject = const_cast<AFlightSpawnSwarmAnchor*>(this);
+    OutRecord.SourceObjectPath = GetPathName();
+    OutRecord.Tags.Add(TEXT("WorldActor"));
+    OutRecord.Tags.Add(TEXT("Swarm"));
+    OutRecord.Capabilities.Add(TEXT("SpawnSwarm"));
+    OutRecord.Capabilities.Add(TEXT("NavigationIntentSource"));
+    OutRecord.ContractKeys.Add(Flight::Navigation::Contracts::IntentKey);
+    return true;
+}
+
+void AFlightSpawnSwarmAnchor::GetSchemaProviderDescriptors(TArray<Flight::Adapters::FFlightSchemaProviderDescriptor>& OutDescriptors) const
+{
+    Flight::Adapters::FFlightSchemaProviderDescriptor Descriptor;
+    Descriptor.RuntimeTypeKey = Flight::Reflection::GetRuntimeTypeKey<Flight::Swarm::AdapterContracts::FFlightSpawnAnchorBatchContract>();
+    Descriptor.TypeName = TEXT("Flight::Swarm::AdapterContracts::FFlightSpawnAnchorBatchContract");
+    Descriptor.ExpectedCapability = Flight::Reflection::EVexCapability::VexCapableAuto;
+    Descriptor.ContractKeys.Add(Flight::Swarm::AdapterContracts::SpawnBatchKey);
+    Descriptor.bSupportsBatchResolution = true;
+    OutDescriptors.Add(MoveTemp(Descriptor));
+}
+
+bool AFlightSpawnSwarmAnchor::BuildMassBatchLoweringPlan(Flight::Mass::FFlightMassBatchLoweringPlan& OutPlan) const
+{
+    OutPlan = {};
+    OutPlan.AdapterName = GetAnchorId().IsNone() ? GetFName() : GetAnchorId();
+    OutPlan.CohortName = FName(*FString::Printf(TEXT("SwarmAnchor.%s"), *OutPlan.AdapterName.ToString()));
+    OutPlan.BatchCount = GetDroneCount();
+    OutPlan.PhaseOffsetDeg = GetPhaseOffsetDeg();
+    OutPlan.PhaseSpreadDeg = GetPhaseSpreadDeg();
+    OutPlan.DesiredSpeed = GetAutopilotSpeedOverride();
+    OutPlan.bLooping = true;
+    OutPlan.DesiredNavigationNetwork = GetNavNetworkId();
+    OutPlan.DesiredNavigationSubNetwork = GetNavSubNetworkId();
+    OutPlan.PreferredBehaviorId = GetPreferredBehaviorId();
+    OutPlan.RequiredBehaviorContracts = GetRequiredBehaviorContracts();
+
+    for (const int32 AllowedBehaviorId : GetAllowedBehaviorIds())
+    {
+        if (AllowedBehaviorId >= 0)
+        {
+            OutPlan.AllowedBehaviorIds.Add(static_cast<uint32>(AllowedBehaviorId));
+        }
+    }
+
+    for (const int32 DeniedBehaviorId : GetDeniedBehaviorIds())
+    {
+        if (DeniedBehaviorId >= 0)
+        {
+            OutPlan.DeniedBehaviorIds.Add(static_cast<uint32>(DeniedBehaviorId));
+        }
+    }
+
+    TArray<Flight::Adapters::FFlightSchemaProviderDescriptor> Descriptors;
+    GetSchemaProviderDescriptors(Descriptors);
+    if (!Descriptors.IsEmpty())
+    {
+        OutPlan.SchemaDescriptor = Descriptors[0];
+    }
+
+    OutPlan.SharedFragments.bHasBehaviorCohort = !OutPlan.CohortName.IsNone();
+    OutPlan.SharedFragments.BehaviorCohort.CohortName = OutPlan.CohortName;
+
+    OutPlan.Orchestration.bHasCohortRecord = !OutPlan.CohortName.IsNone();
+    if (OutPlan.Orchestration.bHasCohortRecord)
+    {
+        Flight::Orchestration::FFlightCohortRecord& Cohort = OutPlan.Orchestration.Cohort;
+        Cohort.Name = OutPlan.CohortName;
+        Cohort.Tags.Add(TEXT("Swarm"));
+        Cohort.Tags.Add(TEXT("AnchorScoped"));
+        Cohort.DesiredNavigationNetwork = OutPlan.DesiredNavigationNetwork;
+        Cohort.DesiredNavigationSubNetwork = OutPlan.DesiredNavigationSubNetwork;
+        Cohort.PreferredBehaviorId = OutPlan.PreferredBehaviorId;
+        Cohort.AllowedBehaviorIds = OutPlan.AllowedBehaviorIds;
+        Cohort.DeniedBehaviorIds = OutPlan.DeniedBehaviorIds;
+        Cohort.RequiredBehaviorContracts = OutPlan.RequiredBehaviorContracts;
+        Cohort.RequiredNavigationContracts.AddUnique(Flight::Navigation::Contracts::IntentKey);
+        Cohort.RequiredNavigationContracts.AddUnique(Flight::Navigation::Contracts::CandidateKey);
+        Cohort.RequiredNavigationContracts.AddUnique(Flight::Navigation::Contracts::CommitKey);
+    }
+
+    return OutPlan.BatchCount >= 0 && OutPlan.SchemaDescriptor.IsValid();
 }
 
 void AFlightSpawnSwarmAnchor::RefreshAnchor(bool bApplyOverrides)
@@ -144,7 +237,8 @@ void AFlightSpawnSwarmAnchor::SyncNavGraphNode()
     FFlightNavGraphNodeDescriptor Descriptor;
     Descriptor.NodeId = RegisteredNavNodeId;
     Descriptor.DisplayName = GetAnchorId();
-    Descriptor.NetworkId = NavNetworkId.IsNone() ? GetAnchorId() : NavNetworkId;
+    Descriptor.NetworkId = GetNavNetworkId();
+    Descriptor.SubNetworkId = NavSubNetworkId;
     Descriptor.Location = GetActorLocation();
     Descriptor.Tags = NavGraphTags;
     if (!GetAnchorId().IsNone())

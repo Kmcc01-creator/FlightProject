@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Vex/FlightVexOptics.h"
+#include "Vex/FlightVexSchemaTypes.h"
 
 namespace Flight::Vex
 {
@@ -117,9 +118,12 @@ struct FLIGHTPROJECT_API FFlightCompileArtifactReport
 	uint32 BehaviorID = 0;
 	uint32 SourceHash = 0;
 	FString TargetFingerprint;
+	FString BoundTypeName;
+	uint32 SchemaLayoutHash = 0;
 	FString CompileOutcome;
 	FString BackendPath;
 	FString SelectedBackend;
+	FString CommittedBackend;
 	FString Diagnostics;
 	FString GeneratedVerseCode;
 	FString IrCompileErrors;
@@ -130,6 +134,9 @@ struct FLIGHTPROJECT_API FFlightCompileArtifactReport
 	bool bUsesVmEntryPoint = false;
 	TArray<EFlightCompileArtifactKind> AvailableArtifacts;
 	TArray<FFlightCompileBackendReport> BackendReports;
+	TArray<FString> ReadSymbols;
+	TArray<FString> WrittenSymbols;
+	TArray<FString> ReferencedStorageKinds;
 	FFlightCodeShapeMetrics CodeShapeMetrics;
 	FFlightWarmupMetrics WarmupMetrics;
 	FFlightCompressionSummary CompressionSummary;
@@ -141,6 +148,7 @@ FLIGHTPROJECT_API FString LocalityClassToString(EFlightLocalityClass Class);
 FLIGHTPROJECT_API FString WorkingSetClassToString(EFlightWorkingSetClass Class);
 FLIGHTPROJECT_API FString ColdStartClassToString(EFlightColdStartClass Class);
 FLIGHTPROJECT_API FString VexTierToString(EVexTier Tier);
+FLIGHTPROJECT_API FString VexStorageKindToString(EVexStorageKind Kind);
 
 FLIGHTPROJECT_API FFlightCodeShapeMetrics AnalyzeIrCodeShape(const FVexIrProgram& Program, bool bAsync = false);
 FLIGHTPROJECT_API void FinalizeWarmupMetrics(FFlightWarmupMetrics& Metrics);

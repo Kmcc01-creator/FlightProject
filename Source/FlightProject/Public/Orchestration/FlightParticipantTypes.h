@@ -14,6 +14,8 @@ enum class EFlightParticipantKind : uint8
 	RenderAdapter,
 	SpawnAnchor,
 	WaypointPath,
+	NavigationNode,
+	NavigationEdge,
 	SpatialField,
 	BehaviorProvider
 };
@@ -51,10 +53,13 @@ struct FLIGHTPROJECT_API FFlightCohortRecord
 	FName Name = NAME_None;
 	TArray<FFlightParticipantHandle> Participants;
 	TArray<FName> Tags;
+	FName DesiredNavigationNetwork = NAME_None;
+	FName DesiredNavigationSubNetwork = NAME_None;
 	int32 PreferredBehaviorId = -1;
 	TArray<uint32> AllowedBehaviorIds;
 	TArray<uint32> DeniedBehaviorIds;
 	TArray<FName> RequiredBehaviorContracts;
+	TArray<FName> RequiredNavigationContracts;
 };
 
 } // namespace Flight::Orchestration

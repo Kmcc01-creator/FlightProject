@@ -25,7 +25,7 @@ namespace Flight::MassOptics
 
 using namespace Flight::Functional;
 using namespace Flight::Reflection;
-using namespace Flight::Reflection::Attr;
+using namespace ::Flight::Reflection::Attr;
 
 // ============================================================================
 // Fragment Concepts (extending UE::Mass)

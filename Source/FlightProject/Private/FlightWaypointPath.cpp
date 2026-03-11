@@ -2,6 +2,7 @@
 
 #include "FlightDataTypes.h"
 #include "Mass/FlightWaypointPathRegistry.h"
+#include "Navigation/FlightNavigationContracts.h"
 #include "Components/SceneComponent.h"
 #include "Components/SplineComponent.h"
 #include "Engine/World.h"
@@ -19,27 +20,41 @@ AFlightWaypointPath::AFlightWaypointPath()
     FlightSpline->SetDrawDebug(true);
 }
 
-void AFlightWaypointPath::OnConstruction(const FTransform& Transform)
+FGuid AFlightWaypointPath::EnsureRegisteredPath()
 {
-    Super::OnConstruction(Transform);
+    if (PathId.IsValid())
+    {
+        return PathId;
+    }
 
+    if (UWorld* World = GetWorld())
+    {
+        if (UFlightWaypointPathRegistry* Registry = World->GetSubsystem<UFlightWaypointPathRegistry>())
+        {
+            PathId = Registry->RegisterPath(this);
+        }
+    }
+
+    return PathId;
+}
+
+void AFlightWaypointPath::OnAdapterConstruction(const FTransform& Transform)
+{
     if (FlightSpline && FlightSpline->GetNumberOfSplinePoints() == 0)
     {
         BuildDefaultLoop();
     }
 }
 
-void AFlightWaypointPath::BeginPlay()
+void AFlightWaypointPath::OnAdapterRegistered()
 {
-    Super::BeginPlay();
-
     if (UFlightWaypointPathRegistry* Registry = GetWorld()->GetSubsystem<UFlightWaypointPathRegistry>())
     {
         PathId = Registry->RegisterPath(this);
     }
 }
 
-void AFlightWaypointPath::EndPlay(const EEndPlayReason::Type EndPlayReason)
+void AFlightWaypointPath::OnAdapterUnregistered(const EEndPlayReason::Type EndPlayReason)
 {
     if (PathId.IsValid())
     {
@@ -47,9 +62,9 @@ void AFlightWaypointPath::EndPlay(const EEndPlayReason::Type EndPlayReason)
         {
             Registry->UnregisterPath(PathId);
         }
-    }
 
-    Super::EndPlay(EndPlayReason);
+        PathId.Invalidate();
+    }
 }
 
 float AFlightWaypointPath::GetPathLength() const
@@ -119,6 +134,7 @@ void AFlightWaypointPath::BuildLoop(float Radius, float Altitude)
 
     FlightSpline->SetClosedLoop(true);
     FlightSpline->UpdateSpline();
+    RefreshRegisteredPath();
 }
 
 void AFlightWaypointPath::ConfigureFromAutopilotConfig(const FFlightAutopilotConfigRow& Config)
@@ -126,4 +142,58 @@ void AFlightWaypointPath::ConfigureFromAutopilotConfig(const FFlightAutopilotCon
     DefaultRadius = Config.PathRadius;
     DefaultAltitude = Config.BaseAltitude;
     BuildLoop(DefaultRadius, DefaultAltitude);
+    MarkAdapterDirty(/*bRequestVisibilityRefresh=*/true);
+}
+
+void AFlightWaypointPath::SetNavigationRoutingMetadata(const FName InNavNetworkId, const FName InNavSubNetworkId)
+{
+    NavNetworkId = InNavNetworkId;
+    NavSubNetworkId = InNavSubNetworkId;
+    MarkAdapterDirty(/*bRequestVisibilityRefresh=*/true);
+}
+
+bool AFlightWaypointPath::BuildParticipantRecord(Flight::Orchestration::FFlightParticipantRecord& OutRecord) const
+{
+    OutRecord = {};
+    OutRecord.Kind = Flight::Orchestration::EFlightParticipantKind::WaypointPath;
+    OutRecord.Name = GetFName();
+    OutRecord.OwnerSubsystem = TEXT("UFlightWaypointPathRegistry");
+    OutRecord.SourceObject = const_cast<AFlightWaypointPath*>(this);
+    OutRecord.SourceObjectPath = GetPathName();
+    OutRecord.Tags.Add(TEXT("WorldActor"));
+    if (PathId.IsValid())
+    {
+        OutRecord.Tags.Add(TEXT("Registered"));
+    }
+    if (!GetNavNetworkId().IsNone())
+    {
+        OutRecord.Tags.AddUnique(GetNavNetworkId());
+    }
+    if (!GetNavSubNetworkId().IsNone())
+    {
+        OutRecord.Tags.AddUnique(GetNavSubNetworkId());
+    }
+    OutRecord.Capabilities.Add(TEXT("SplinePath"));
+    OutRecord.Capabilities.Add(TEXT("NavigationCandidateSource"));
+    OutRecord.Capabilities.Add(TEXT("NavigationCommitLowering"));
+    OutRecord.ContractKeys.Add(Flight::Navigation::Contracts::CandidateKey);
+    OutRecord.ContractKeys.Add(Flight::Navigation::Contracts::CommitKey);
+    OutRecord.ContractKeys.Add(TEXT("WaypointPath"));
+    return true;
+}
+
+void AFlightWaypointPath::RefreshRegisteredPath()
+{
+    if (!PathId.IsValid())
+    {
+        return;
+    }
+
+    if (UWorld* World = GetWorld())
+    {
+        if (UFlightWaypointPathRegistry* Registry = World->GetSubsystem<UFlightWaypointPathRegistry>())
+        {
+            Registry->RefreshPath(PathId, this);
+        }
+    }
 }

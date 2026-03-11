@@ -73,6 +73,9 @@ bool FMegaKernelSynthesisTest::RunTest(const FString& Parameters)
 	const FString& Source = MegaKernel->GetMegaKernelSource();
 	
 	TestTrue(TEXT("Mega-Kernel should contain generation header"), Source.Contains(TEXT("Automatically generated")));
+	TestTrue(TEXT("Mega-Kernel should include plan generation metadata"), Source.Contains(TEXT("Mega-Kernel PlanGeneration=")));
+	TestTrue(TEXT("Mega-Kernel should include behavior schema metadata"), Source.Contains(TEXT("Behavior 101 Type=")));
+	TestTrue(TEXT("Mega-Kernel should include fragment metadata when schema binding is available"), Source.Contains(TEXT("Fragments=[")));
 	TestTrue(TEXT("Mega-Kernel should contain VEX_MEGA_KERNEL_DEFINED"), Source.Contains(TEXT("#define VEX_MEGA_KERNEL_DEFINED")));
 	TestTrue(TEXT("Mega-Kernel should contain ExecuteVexBehavior function"), Source.Contains(TEXT("void ExecuteVexBehavior")));
 	
@@ -83,6 +86,7 @@ bool FMegaKernelSynthesisTest::RunTest(const FString& Parameters)
 	// Verify behavior logic
 	TestTrue(TEXT("Mega-Kernel should contain case for behavior"), Source.Contains(TEXT("case 101:")));
 	TestTrue(TEXT("Mega-Kernel should contain store-back for velocity"), Source.Contains(TEXT("vel = velocity_local;")));
+	TestFalse(TEXT("Mega-Kernel should not store back read-only position when only velocity is written"), Source.Contains(TEXT("pos = position_local;")));
 
 	// 4. Verify file was exported to the generated directory
 	const FString ExpectedPath = FPaths::ProjectIntermediateDir() / TEXT("Shaders/Generated/VexMegaKernel.ush");

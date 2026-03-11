@@ -52,6 +52,16 @@ bool FFlightVexSchemaOrchestratorTest::RunTest(const FString& Parameters)
 	(void)Parameters;
 
 	const void* TypeKey = Flight::Vex::TTypeVexRegistry<FSchemaOrchestratorTestState>::GetTypeKey();
+	const Flight::Reflection::FTypeRegistry::FTypeInfo* TypeInfo = Flight::Reflection::FTypeRegistry::Get().Find(TEXT("FSchemaOrchestratorTestState"));
+	TestNotNull(TEXT("Reflection registry should expose orchestrator test state metadata"), TypeInfo);
+	if (TypeInfo)
+	{
+		TestEqual(TEXT("Reflection registry should retain the shared runtime key"), TypeInfo->RuntimeKey, TypeKey);
+		TestEqual(TEXT("Reflection registry should classify the test type as auto VEX-capable"), TypeInfo->VexCapability, Flight::Reflection::EVexCapability::VexCapableAuto);
+		TestNotNull(TEXT("Reflection registry should expose a lazy VEX schema registration hook"), reinterpret_cast<const void*>(TypeInfo->EnsureVexSchemaRegisteredFn));
+		TestNotNull(TEXT("Reflection registry should expose an auto schema provider callback"), reinterpret_cast<const void*>(TypeInfo->ProvideVexSchemaFn));
+	}
+
 	const Flight::Vex::FVexTypeSchema Schema =
 		Flight::Vex::FVexSchemaOrchestrator::BuildSchemaFromReflection<FSchemaOrchestratorTestState>(TypeKey);
 
@@ -88,13 +98,24 @@ bool FFlightVexSchemaOrchestratorTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("Enabled should preserve CPU residency"), EnabledLogical->Residency, EFlightVexSymbolResidency::CpuOnly);
 	}
 
+	if (TypeInfo)
+	{
+		const Flight::Vex::FVexTypeSchema* Reflected = Flight::Vex::FVexSymbolRegistry::Get().GetSchemaForReflectedType(*TypeInfo);
+		TestNotNull(TEXT("VEX registry should resolve schemas directly from reflected type metadata"), Reflected);
+		if (Reflected)
+		{
+			TestEqual(TEXT("Reflected-type schema resolution should preserve the shared runtime key"), Reflected->TypeId.RuntimeKey, TypeKey);
+			TestEqual(TEXT("Reflected-type schema resolution should preserve its layout hash"), Reflected->LayoutHash, Schema.LayoutHash);
+			TestTrue(TEXT("Reflected-type schema resolution should expose the health symbol"), Reflected->HasSymbol(TEXT("@health")));
+		}
+	}
+
 	Flight::Vex::TTypeVexRegistry<FSchemaOrchestratorTestState>::Register();
 	const Flight::Vex::FVexTypeSchema* Registered = Flight::Vex::FVexSymbolRegistry::Get().GetSchema(TypeKey);
 	TestNotNull(TEXT("Registered schema should be discoverable by runtime key"), Registered);
 	if (Registered)
 	{
 		TestEqual(TEXT("Registered schema should preserve its layout hash"), Registered->LayoutHash, Schema.LayoutHash);
-		TestTrue(TEXT("Registered schema should expose the health symbol"), Registered->HasSymbol(TEXT("@health")));
 		TestNotNull(TEXT("Registered schema should expose the canonical health record"), Registered->FindSymbolRecord(TEXT("@health")));
 	}
 

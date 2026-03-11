@@ -1,5 +1,13 @@
 # Hegetic Data Interface Design
 
+Status: exploratory future concept.
+
+For current context, see:
+
+- [ExplorationMap.md](ExplorationMap.md)
+- [../Architecture/CurrentProjectVision.md](../Architecture/CurrentProjectVision.md)
+- [../Architecture/OrchestrationSubsystem.md](../Architecture/OrchestrationSubsystem.md)
+
 This document proposes a reusable “hegetic” interface framework—an extensible data-to-visual system that exploits Unreal Engine’s material graph, Niagara, and UI stack to render rich, dynamic feedback for arbitrary data sources.
 
 ## Vision & Use Cases

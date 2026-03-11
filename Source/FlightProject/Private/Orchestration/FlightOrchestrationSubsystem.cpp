@@ -3,6 +3,7 @@
 #include "Orchestration/FlightOrchestrationSubsystem.h"
 
 #include "FlightProject.h"
+#include "FlightNavGraphDataHubSubsystem.h"
 #include "FlightSpawnSwarmAnchor.h"
 #include "FlightWaypointPath.h"
 #include "FlightWorldBootstrapSubsystem.h"
@@ -11,8 +12,10 @@
 #include "EngineUtils.h"
 #include "Engine/World.h"
 #include "Mass/FlightWaypointPathRegistry.h"
+#include "Navigation/FlightNavigationContracts.h"
 #include "Orchestration/FlightBehaviorBinding.h"
 #include "Orchestration/FlightExecutionPlan.h"
+#include "Orchestration/FlightParticipantAdapter.h"
 #include "Orchestration/FlightOrchestrationReport.h"
 #include "Orchestration/FlightParticipantTypes.h"
 #include "Rendering/FlightSimpleSCSLShaderPipelineSubsystem.h"
@@ -31,6 +34,134 @@ namespace
 
 const FName DefaultSwarmCohortName(TEXT("Swarm.Default"));
 
+template <typename ValueType>
+bool AreEquivalentUnordered(const TArray<ValueType>& Left, const TArray<ValueType>& Right)
+{
+	if (Left.Num() != Right.Num())
+	{
+		return false;
+	}
+
+	TArray<ValueType> Remaining = Right;
+	for (const ValueType& Value : Left)
+	{
+		const int32 MatchIndex = Remaining.IndexOfByKey(Value);
+		if (MatchIndex == INDEX_NONE)
+		{
+			return false;
+		}
+
+		Remaining.RemoveAtSwap(MatchIndex, 1, EAllowShrinking::No);
+	}
+
+	return Remaining.IsEmpty();
+}
+
+bool BuildCohortReconciliationMismatch(
+	const Flight::Orchestration::FFlightCohortRecord& Canonical,
+	const Flight::Orchestration::FFlightCohortRecord& Proposed,
+	FString& OutMismatch)
+{
+	if (Canonical.DesiredNavigationNetwork != Proposed.DesiredNavigationNetwork)
+	{
+		OutMismatch = FString::Printf(
+			TEXT("DesiredNavigationNetwork mismatch: canonical='%s' proposed='%s'"),
+			*Canonical.DesiredNavigationNetwork.ToString(),
+			*Proposed.DesiredNavigationNetwork.ToString());
+		return true;
+	}
+
+	if (Canonical.DesiredNavigationSubNetwork != Proposed.DesiredNavigationSubNetwork)
+	{
+		OutMismatch = FString::Printf(
+			TEXT("DesiredNavigationSubNetwork mismatch: canonical='%s' proposed='%s'"),
+			*Canonical.DesiredNavigationSubNetwork.ToString(),
+			*Proposed.DesiredNavigationSubNetwork.ToString());
+		return true;
+	}
+
+	if (Canonical.PreferredBehaviorId != Proposed.PreferredBehaviorId)
+	{
+		OutMismatch = FString::Printf(
+			TEXT("PreferredBehaviorId mismatch: canonical=%d proposed=%d"),
+			Canonical.PreferredBehaviorId,
+			Proposed.PreferredBehaviorId);
+		return true;
+	}
+
+	if (!AreEquivalentUnordered(Canonical.AllowedBehaviorIds, Proposed.AllowedBehaviorIds))
+	{
+		OutMismatch = TEXT("AllowedBehaviorIds mismatch between canonical cohort and proposed batch plan.");
+		return true;
+	}
+
+	if (!AreEquivalentUnordered(Canonical.DeniedBehaviorIds, Proposed.DeniedBehaviorIds))
+	{
+		OutMismatch = TEXT("DeniedBehaviorIds mismatch between canonical cohort and proposed batch plan.");
+		return true;
+	}
+
+	if (!AreEquivalentUnordered(Canonical.RequiredBehaviorContracts, Proposed.RequiredBehaviorContracts))
+	{
+		OutMismatch = TEXT("RequiredBehaviorContracts mismatch between canonical cohort and proposed batch plan.");
+		return true;
+	}
+
+	if (!AreEquivalentUnordered(Canonical.RequiredNavigationContracts, Proposed.RequiredNavigationContracts))
+	{
+		OutMismatch = TEXT("RequiredNavigationContracts mismatch between canonical cohort and proposed batch plan.");
+		return true;
+	}
+
+	return false;
+}
+
+bool AreCohortProposalsEquivalent(
+	const Flight::Orchestration::FFlightCohortRecord& Left,
+	const Flight::Orchestration::FFlightCohortRecord& Right)
+{
+	FString Mismatch;
+	return !BuildCohortReconciliationMismatch(Left, Right, Mismatch);
+}
+
+void ApplyReconciledBatchCohorts(
+	TMap<FName, Flight::Orchestration::FFlightCohortRecord>& CohortsByName,
+	const TMap<FName, Flight::Orchestration::FFlightCohortRecord>& ReconciledBatchCohortsByName)
+{
+	for (const TPair<FName, Flight::Orchestration::FFlightCohortRecord>& Pair : ReconciledBatchCohortsByName)
+	{
+		if (!CohortsByName.Contains(Pair.Key))
+		{
+			CohortsByName.Add(Pair.Key, Pair.Value);
+		}
+	}
+}
+
+bool RegisterParticipantAdapter(
+	UFlightOrchestrationSubsystem& Orchestration,
+	UObject* SourceObject)
+{
+	if (!SourceObject)
+	{
+		return false;
+	}
+
+	IFlightParticipantAdapter* Adapter = Cast<IFlightParticipantAdapter>(SourceObject);
+	if (!Adapter)
+	{
+		return false;
+	}
+
+	Flight::Orchestration::FFlightParticipantRecord Record;
+	if (!Adapter->BuildParticipantRecord(Record))
+	{
+		return false;
+	}
+
+	Orchestration.RegisterParticipant(Record);
+	return true;
+}
+
 FString ParticipantKindToString(const EFlightParticipantKind Kind)
 {
 	switch (Kind)
@@ -43,6 +174,10 @@ FString ParticipantKindToString(const EFlightParticipantKind Kind)
 		return TEXT("SpawnAnchor");
 	case EFlightParticipantKind::WaypointPath:
 		return TEXT("WaypointPath");
+	case EFlightParticipantKind::NavigationNode:
+		return TEXT("NavigationNode");
+	case EFlightParticipantKind::NavigationEdge:
+		return TEXT("NavigationEdge");
 	case EFlightParticipantKind::SpatialField:
 		return TEXT("SpatialField");
 	case EFlightParticipantKind::BehaviorProvider:
@@ -142,6 +277,510 @@ void AddNameArrayToJson(const TArray<FName>& Names, const TCHAR* FieldName, TSha
 	Object->SetArrayField(FieldName, Values);
 }
 
+void AddVectorToJson(const FVector& Value, const TCHAR* FieldName, TSharedRef<FJsonObject> Object)
+{
+	TSharedRef<FJsonObject> VectorObject = MakeShared<FJsonObject>();
+	VectorObject->SetNumberField(TEXT("x"), static_cast<double>(Value.X));
+	VectorObject->SetNumberField(TEXT("y"), static_cast<double>(Value.Y));
+	VectorObject->SetNumberField(TEXT("z"), static_cast<double>(Value.Z));
+	Object->SetObjectField(FieldName, VectorObject);
+}
+
+struct FWaypointPathRoutingValidationResult
+{
+	FString Status = TEXT("NotApplicable");
+	FName SuggestedNetworkId = NAME_None;
+	FName SuggestedSubNetworkId = NAME_None;
+	FString Detail;
+};
+
+FWaypointPathRoutingValidationResult ValidateWaypointPathRouting(
+	const AFlightWaypointPath& Path,
+	const FFlightNavGraphSnapshot& Snapshot)
+{
+	FWaypointPathRoutingValidationResult Result;
+	if (Snapshot.Nodes.IsEmpty())
+	{
+		Result.Status = TEXT("NoNearbyNodes");
+		Result.Detail = TEXT("No nav-graph nodes are registered.");
+		return Result;
+	}
+
+	constexpr float ValidationRadiusCm = 2500.0f;
+	const float ValidationRadiusSq = FMath::Square(ValidationRadiusCm);
+	const FVector SamplePoints[] = {
+		Path.GetLocationAtNormalizedPosition(0.0f),
+		Path.GetLocationAtNormalizedPosition(0.5f),
+		Path.GetLocationAtNormalizedPosition(1.0f)
+	};
+
+	TMap<FName, int32> NetworkCounts;
+	TMap<FName, int32> SubNetworkCounts;
+	int32 NearbyNodeCount = 0;
+
+	for (const FFlightNavGraphNodeSnapshot& Node : Snapshot.Nodes)
+	{
+		bool bIsNearby = false;
+		for (const FVector& SamplePoint : SamplePoints)
+		{
+			if (FVector::DistSquared(SamplePoint, Node.Location) <= ValidationRadiusSq)
+			{
+				bIsNearby = true;
+				break;
+			}
+		}
+
+		if (!bIsNearby)
+		{
+			continue;
+		}
+
+		++NearbyNodeCount;
+		if (!Node.NetworkId.IsNone())
+		{
+			NetworkCounts.FindOrAdd(Node.NetworkId) += 1;
+		}
+		if (!Node.SubNetworkId.IsNone())
+		{
+			SubNetworkCounts.FindOrAdd(Node.SubNetworkId) += 1;
+		}
+	}
+
+	if (NearbyNodeCount == 0)
+	{
+		Result.Status = TEXT("NoNearbyNodes");
+		Result.Detail = FString::Printf(TEXT("No nav-graph nodes were found within %.0fcm of sampled path points."), ValidationRadiusCm);
+		return Result;
+	}
+
+	auto ResolveDominantName = [](const TMap<FName, int32>& Counts, bool& bOutAmbiguous) -> FName
+	{
+		bOutAmbiguous = false;
+		FName Dominant = NAME_None;
+		int32 BestCount = 0;
+		for (const TPair<FName, int32>& Pair : Counts)
+		{
+			if (Pair.Value > BestCount)
+			{
+				Dominant = Pair.Key;
+				BestCount = Pair.Value;
+				bOutAmbiguous = false;
+			}
+			else if (Pair.Value > 0 && Pair.Value == BestCount && Pair.Key != Dominant)
+			{
+				bOutAmbiguous = true;
+			}
+		}
+		return Dominant;
+	};
+
+	bool bAmbiguousNetwork = false;
+	bool bAmbiguousSubNetwork = false;
+	Result.SuggestedNetworkId = ResolveDominantName(NetworkCounts, bAmbiguousNetwork);
+	Result.SuggestedSubNetworkId = ResolveDominantName(SubNetworkCounts, bAmbiguousSubNetwork);
+
+	if (bAmbiguousNetwork || bAmbiguousSubNetwork)
+	{
+		Result.Status = TEXT("AmbiguousNearbyNodes");
+		Result.Detail = TEXT("Nearby nav-graph nodes disagree on dominant network or subnetwork.");
+		return Result;
+	}
+
+	const FName AuthoredNetworkId = Path.GetNavNetworkId();
+	const FName AuthoredSubNetworkId = Path.GetNavSubNetworkId();
+	if (AuthoredNetworkId.IsNone() && AuthoredSubNetworkId.IsNone())
+	{
+		Result.Status = TEXT("MissingMetadata");
+		Result.Detail = TEXT("Waypoint path has no authored network metadata.");
+		return Result;
+	}
+
+	const bool bNetworkMatches = AuthoredNetworkId.IsNone() || Result.SuggestedNetworkId.IsNone() || AuthoredNetworkId == Result.SuggestedNetworkId;
+	const bool bSubNetworkMatches = AuthoredSubNetworkId.IsNone() || Result.SuggestedSubNetworkId.IsNone() || AuthoredSubNetworkId == Result.SuggestedSubNetworkId;
+	if (bNetworkMatches && bSubNetworkMatches)
+	{
+		Result.Status = TEXT("Match");
+		Result.Detail = TEXT("Nearby nav-graph nodes agree with authored waypoint-path routing metadata.");
+		return Result;
+	}
+
+	Result.Status = TEXT("Mismatch");
+	Result.Detail = TEXT("Nearby nav-graph nodes disagree with authored waypoint-path routing metadata.");
+	return Result;
+}
+
+void FinalizeNavigationCandidates(TArray<Flight::Orchestration::FFlightNavigationCandidateRecord>& Candidates)
+{
+	for (Flight::Orchestration::FFlightNavigationCandidateRecord& Candidate : Candidates)
+	{
+		Candidate.bLegal = Candidate.ContractKeys.Contains(Flight::Navigation::Contracts::CandidateKey);
+		Candidate.LegalityReason = NAME_None;
+
+		switch (Candidate.SourceKind)
+		{
+		case Flight::Orchestration::EFlightParticipantKind::NavigationNode:
+			if (!Candidate.SourceId.IsValid())
+			{
+				Candidate.bLegal = false;
+				Candidate.LegalityReason = TEXT("MissingSourceId");
+			}
+			break;
+
+		case Flight::Orchestration::EFlightParticipantKind::NavigationEdge:
+			if (!Candidate.SourceId.IsValid())
+			{
+				Candidate.bLegal = false;
+				Candidate.LegalityReason = TEXT("MissingSourceId");
+			}
+			break;
+
+		case Flight::Orchestration::EFlightParticipantKind::WaypointPath:
+			if (Candidate.EstimatedCost < 0.0f)
+			{
+				Candidate.bLegal = false;
+				Candidate.LegalityReason = TEXT("InvalidCost");
+			}
+			break;
+
+		default:
+			break;
+		}
+
+		if (Candidate.Status.IsEmpty())
+		{
+			Candidate.Status = TEXT("Visible");
+		}
+
+		if (!Candidate.bLegal)
+		{
+			Candidate.Status = TEXT("Rejected");
+			Candidate.RankScore = 0.0f;
+			continue;
+		}
+
+		float Score = 1.0f / (1.0f + FMath::Max(Candidate.EstimatedCost, 0.0f));
+		if (Candidate.ContractKeys.Contains(Flight::Navigation::Contracts::CommitKey))
+		{
+			Score += 1.0f;
+		}
+		if (Candidate.Tags.Contains(TEXT("Preferred")))
+		{
+			Score += 0.25f;
+		}
+		if (Candidate.Tags.Contains(TEXT("Registered")))
+		{
+			Score += 0.1f;
+		}
+		if (Candidate.Status == TEXT("Advertised"))
+		{
+			Score -= 0.05f;
+		}
+
+		Candidate.RankScore = FMath::Max(Score, 0.0f);
+	}
+
+	Candidates.Sort([](
+		const Flight::Orchestration::FFlightNavigationCandidateRecord& Left,
+		const Flight::Orchestration::FFlightNavigationCandidateRecord& Right)
+	{
+		if (Left.bLegal != Right.bLegal)
+		{
+			return Left.bLegal && !Right.bLegal;
+		}
+
+		if (!FMath::IsNearlyEqual(Left.RankScore, Right.RankScore))
+		{
+			return Left.RankScore > Right.RankScore;
+		}
+
+		if (Left.SourceKind != Right.SourceKind)
+		{
+			return static_cast<uint8>(Left.SourceKind) < static_cast<uint8>(Right.SourceKind);
+		}
+
+		return Left.Name.LexicalLess(Right.Name);
+	});
+
+	for (int32 Index = 0; Index < Candidates.Num(); ++Index)
+	{
+		Candidates[Index].RankOrder = Index;
+	}
+}
+
+TArray<Flight::Orchestration::FFlightNavigationCandidateRecord> BuildNavigationCandidateRecords(
+	const UWorld* World,
+	const TMap<uint64, Flight::Orchestration::FFlightParticipantRecord>& ParticipantsByHandle)
+{
+	TArray<Flight::Orchestration::FFlightNavigationCandidateRecord> Candidates;
+	if (!World)
+	{
+		return Candidates;
+	}
+
+	FFlightNavGraphSnapshot NavigationSnapshot;
+	bool bHasNavigationSnapshot = false;
+	if (const UFlightNavGraphDataHubSubsystem* NavGraphHub = World->GetSubsystem<UFlightNavGraphDataHubSubsystem>())
+	{
+		NavigationSnapshot = NavGraphHub->BuildSnapshot();
+		bHasNavigationSnapshot = true;
+
+		for (const FFlightNavGraphNodeSnapshot& Node : NavigationSnapshot.Nodes)
+		{
+			Flight::Orchestration::FFlightNavigationCandidateRecord Candidate;
+			Candidate.SourceKind = Flight::Orchestration::EFlightParticipantKind::NavigationNode;
+			Candidate.Name = Node.DisplayName.IsNone() ? FName(*Node.NodeId.ToString(EGuidFormats::Digits)) : Node.DisplayName;
+			Candidate.SourceId = Node.NodeId;
+			Candidate.OwnerSubsystem = TEXT("UFlightNavGraphDataHubSubsystem");
+			Candidate.NetworkId = Node.NetworkId;
+			Candidate.SubNetworkId = Node.SubNetworkId;
+			Candidate.StartLocation = Node.Location;
+			Candidate.EndLocation = Node.Location;
+			Candidate.Tags = Node.Tags;
+			Candidate.Tags.AddUnique(TEXT("Navigation"));
+			Candidate.Tags.AddUnique(TEXT("NavGraph"));
+			Candidate.ContractKeys.Add(Flight::Navigation::Contracts::CandidateKey);
+			Candidate.Status = TEXT("Resolved");
+			Candidates.Add(MoveTemp(Candidate));
+		}
+
+		for (const FFlightNavGraphEdgeSnapshot& Edge : NavigationSnapshot.Edges)
+		{
+			Flight::Orchestration::FFlightNavigationCandidateRecord Candidate;
+			Candidate.SourceKind = Flight::Orchestration::EFlightParticipantKind::NavigationEdge;
+			Candidate.Name = FName(*Edge.EdgeId.ToString(EGuidFormats::Digits));
+			Candidate.SourceId = Edge.EdgeId;
+			Candidate.OwnerSubsystem = TEXT("UFlightNavGraphDataHubSubsystem");
+			Candidate.StartLocation = Edge.FromLocation;
+			Candidate.EndLocation = Edge.ToLocation;
+			Candidate.EstimatedCost = Edge.BaseCost;
+			Candidate.bBidirectional = Edge.bBidirectional;
+			Candidate.Tags = Edge.Tags;
+			Candidate.Tags.AddUnique(TEXT("Navigation"));
+			Candidate.Tags.AddUnique(TEXT("NavGraph"));
+			Candidate.ContractKeys.Add(Flight::Navigation::Contracts::CandidateKey);
+			Candidate.Status = TEXT("Resolved");
+			Candidates.Add(MoveTemp(Candidate));
+		}
+	}
+
+	for (const TPair<uint64, Flight::Orchestration::FFlightParticipantRecord>& Pair : ParticipantsByHandle)
+	{
+		const Flight::Orchestration::FFlightParticipantRecord& Participant = Pair.Value;
+		if (!Participant.ContractKeys.Contains(Flight::Navigation::Contracts::CandidateKey))
+		{
+			continue;
+		}
+
+		if (Participant.Kind != Flight::Orchestration::EFlightParticipantKind::WaypointPath)
+		{
+			continue;
+		}
+
+		Flight::Orchestration::FFlightNavigationCandidateRecord Candidate;
+		Candidate.SourceKind = Participant.Kind;
+		Candidate.Name = Participant.Name;
+		Candidate.OwnerSubsystem = Participant.OwnerSubsystem;
+		Candidate.Tags = Participant.Tags;
+		Candidate.ContractKeys = Participant.ContractKeys;
+		Candidate.Tags.AddUnique(TEXT("Navigation"));
+
+		if (const AFlightWaypointPath* Path = Cast<AFlightWaypointPath>(Participant.SourceObject.Get()))
+		{
+			Candidate.SourceId = Path->GetPathId();
+			Candidate.NetworkId = Path->GetNavNetworkId();
+			Candidate.SubNetworkId = Path->GetNavSubNetworkId();
+			Candidate.StartLocation = Path->GetLocationAtNormalizedPosition(0.0f);
+			Candidate.EndLocation = Path->GetLocationAtNormalizedPosition(1.0f);
+			Candidate.EstimatedCost = Path->GetPathLength();
+			Candidate.bBidirectional = true;
+			Candidate.Tags.AddUnique(TEXT("SplinePath"));
+			Candidate.Status = TEXT("Resolved");
+			if (bHasNavigationSnapshot)
+			{
+				const FWaypointPathRoutingValidationResult Validation =
+					ValidateWaypointPathRouting(*Path, NavigationSnapshot);
+				Candidate.RoutingValidationStatus = Validation.Status;
+				Candidate.SuggestedNetworkId = Validation.SuggestedNetworkId;
+				Candidate.SuggestedSubNetworkId = Validation.SuggestedSubNetworkId;
+				Candidate.RoutingValidationDetail = Validation.Detail;
+			}
+		}
+		else
+		{
+			Candidate.Status = TEXT("Advertised");
+			Candidate.RoutingValidationStatus = TEXT("NotApplicable");
+		}
+
+		Candidates.Add(MoveTemp(Candidate));
+	}
+
+	FinalizeNavigationCandidates(Candidates);
+
+	return Candidates;
+}
+
+bool CohortHasRequiredNavigationInputs(
+	const Flight::Orchestration::FFlightCohortRecord& Cohort,
+	const bool bHasNavigationIntent,
+	const bool bHasNavigationCommit,
+	const TArray<Flight::Orchestration::FFlightNavigationCandidateRecord>& NavigationCandidates)
+{
+	for (const FName Contract : Cohort.RequiredNavigationContracts)
+	{
+		if (Contract == Flight::Navigation::Contracts::IntentKey && !bHasNavigationIntent)
+		{
+			return false;
+		}
+
+		if (Contract == Flight::Navigation::Contracts::CommitKey && !bHasNavigationCommit)
+		{
+			return false;
+		}
+
+		if (Contract == Flight::Navigation::Contracts::CandidateKey && NavigationCandidates.IsEmpty())
+		{
+			return false;
+		}
+	}
+
+	return true;
+}
+
+struct FCohortNavigationSelection
+{
+	const Flight::Orchestration::FFlightNavigationCandidateRecord* Candidate = nullptr;
+	float Score = 0.0f;
+	FString Reason;
+};
+
+FCohortNavigationSelection ResolveNavigationCandidateForCohort(
+	const Flight::Orchestration::FFlightCohortRecord& Cohort,
+	const TMap<uint64, Flight::Orchestration::FFlightParticipantRecord>& ParticipantsByHandle,
+	const TArray<Flight::Orchestration::FFlightNavigationCandidateRecord>& NavigationCandidates)
+{
+	FCohortNavigationSelection BestSelection;
+	TArray<FName> CohortAffinityNames = Cohort.Tags;
+	TArray<FVector> AnchorLocations;
+
+	for (const Flight::Orchestration::FFlightParticipantHandle Handle : Cohort.Participants)
+	{
+		const Flight::Orchestration::FFlightParticipantRecord* Participant = ParticipantsByHandle.Find(Handle.Value);
+		if (!Participant)
+		{
+			continue;
+		}
+
+		CohortAffinityNames.AddUnique(Participant->Name);
+		for (const FName Tag : Participant->Tags)
+		{
+			CohortAffinityNames.AddUnique(Tag);
+		}
+
+		if (const AFlightSpawnSwarmAnchor* Anchor = Cast<AFlightSpawnSwarmAnchor>(Participant->SourceObject.Get()))
+		{
+			AnchorLocations.Add(Anchor->GetActorLocation());
+		}
+	}
+
+	for (const Flight::Orchestration::FFlightNavigationCandidateRecord& Candidate : NavigationCandidates)
+	{
+		if (!Candidate.bLegal)
+		{
+			continue;
+		}
+
+		if (!Cohort.DesiredNavigationNetwork.IsNone())
+		{
+			if (Candidate.NetworkId.IsNone() || Candidate.NetworkId != Cohort.DesiredNavigationNetwork)
+			{
+				continue;
+			}
+		}
+
+		if (!Cohort.DesiredNavigationSubNetwork.IsNone())
+		{
+			if (Candidate.SubNetworkId.IsNone() || Candidate.SubNetworkId != Cohort.DesiredNavigationSubNetwork)
+			{
+				continue;
+			}
+		}
+
+		float Score = Candidate.RankScore;
+		TArray<FString> Reasons;
+
+		if (!Cohort.DesiredNavigationNetwork.IsNone())
+		{
+			Score += 1.5f;
+			Reasons.Add(FString::Printf(TEXT("Network:%s"), *Cohort.DesiredNavigationNetwork.ToString()));
+		}
+
+		if (!Cohort.DesiredNavigationSubNetwork.IsNone())
+		{
+			Score += 1.0f;
+			Reasons.Add(FString::Printf(TEXT("SubNetwork:%s"), *Cohort.DesiredNavigationSubNetwork.ToString()));
+		}
+
+		for (const Flight::Orchestration::FFlightParticipantHandle Handle : Cohort.Participants)
+		{
+			const Flight::Orchestration::FFlightParticipantRecord* Participant = ParticipantsByHandle.Find(Handle.Value);
+			if (!Participant)
+			{
+				continue;
+			}
+
+			if (Participant->Kind == Candidate.SourceKind && Participant->Name == Candidate.Name)
+			{
+				Score += 2.0f;
+				Reasons.Add(TEXT("ParticipantAffinity"));
+				break;
+			}
+		}
+
+		for (const FName CohortNameHint : CohortAffinityNames)
+		{
+			if (CohortNameHint.IsNone())
+			{
+				continue;
+			}
+
+			if (Candidate.Name == CohortNameHint || Candidate.NetworkId == CohortNameHint || Candidate.SubNetworkId == CohortNameHint || Candidate.Tags.Contains(CohortNameHint))
+			{
+				Score += 1.5f;
+				Reasons.Add(FString::Printf(TEXT("IdentityMatch:%s"), *CohortNameHint.ToString()));
+				break;
+			}
+		}
+
+		if (!AnchorLocations.IsEmpty())
+		{
+			float BestDistance = TNumericLimits<float>::Max();
+			for (const FVector& AnchorLocation : AnchorLocations)
+			{
+				BestDistance = FMath::Min(BestDistance, FVector::Dist(AnchorLocation, Candidate.StartLocation));
+			}
+
+			if (BestDistance < TNumericLimits<float>::Max())
+			{
+				const float DistanceBonus = 1.0f / (1.0f + (BestDistance / 1000.0f));
+				Score += DistanceBonus;
+				Reasons.Add(FString::Printf(TEXT("AnchorDistance:%.2f"), DistanceBonus));
+			}
+		}
+
+		if (BestSelection.Candidate == nullptr
+			|| Score > BestSelection.Score
+			|| (FMath::IsNearlyEqual(Score, BestSelection.Score)
+				&& Candidate.RankOrder < BestSelection.Candidate->RankOrder))
+		{
+			BestSelection.Candidate = &Candidate;
+			BestSelection.Score = Score;
+			BestSelection.Reason = Reasons.IsEmpty() ? TEXT("BaseRank") : FString::Join(Reasons, TEXT("+"));
+		}
+	}
+
+	return BestSelection;
+}
+
 const Flight::Orchestration::FFlightBehaviorRecord* SelectBehaviorForCohort(
 	const Flight::Orchestration::FFlightCohortRecord& Cohort,
 	const TMap<uint32, Flight::Orchestration::FFlightBehaviorRecord>& BehaviorsById)
@@ -229,6 +868,7 @@ void UFlightOrchestrationSubsystem::Initialize(FSubsystemCollectionBase& Collect
 	Collection.InitializeDependency<UFlightVerseSubsystem>();
 	Collection.InitializeDependency<UFlightVexTaskSubsystem>();
 	Collection.InitializeDependency<UFlightWaypointPathRegistry>();
+	Collection.InitializeDependency<UFlightNavGraphDataHubSubsystem>();
 	Collection.InitializeDependency<UFlightSimpleSCSLShaderPipelineSubsystem>();
 
 	RebuildVisibility();
@@ -238,9 +878,11 @@ void UFlightOrchestrationSubsystem::Initialize(FSubsystemCollectionBase& Collect
 void UFlightOrchestrationSubsystem::Deinitialize()
 {
 	ResetVisibilityState();
+	ReconciledBatchCohortsByName.Reset();
 	Bindings.Reset();
 	Services.Reset();
 	MissingContracts.Reset();
+	Diagnostics.Reset();
 	ExecutionPlan = Flight::Orchestration::FFlightExecutionPlan();
 	CachedReport = Flight::Orchestration::FFlightOrchestrationReport();
 	Super::Deinitialize();
@@ -296,6 +938,61 @@ void UFlightOrchestrationSubsystem::UnregisterCohort(const FName CohortName)
 	}
 }
 
+bool UFlightOrchestrationSubsystem::ReconcileBatchLoweringPlans(
+	const TArray<Flight::Mass::FFlightMassBatchLoweringPlan>& Plans)
+{
+	const TMap<FName, Flight::Orchestration::FFlightCohortRecord> PreviousReconciledBatchCohortsByName =
+		ReconciledBatchCohortsByName;
+	TMap<FName, Flight::Orchestration::FFlightCohortRecord> NextReconciledBatchCohortsByName;
+
+	for (const Flight::Mass::FFlightMassBatchLoweringPlan& Plan : Plans)
+	{
+		if (!Plan.Orchestration.bHasCohortRecord || Plan.Orchestration.Cohort.Name.IsNone())
+		{
+			continue;
+		}
+
+		NextReconciledBatchCohortsByName.Add(Plan.Orchestration.Cohort.Name, Plan.Orchestration.Cohort);
+	}
+
+	bool bChanged = ReconciledBatchCohortsByName.Num() != NextReconciledBatchCohortsByName.Num();
+	if (!bChanged)
+	{
+		for (const TPair<FName, Flight::Orchestration::FFlightCohortRecord>& Pair : NextReconciledBatchCohortsByName)
+		{
+			const Flight::Orchestration::FFlightCohortRecord* ExistingProposal =
+				ReconciledBatchCohortsByName.Find(Pair.Key);
+			if (!ExistingProposal || !Flight::Orchestration::AreCohortProposalsEquivalent(*ExistingProposal, Pair.Value))
+			{
+				bChanged = true;
+				break;
+			}
+		}
+	}
+
+	ReconciledBatchCohortsByName = MoveTemp(NextReconciledBatchCohortsByName);
+	for (const TPair<FName, Flight::Orchestration::FFlightCohortRecord>& Pair : PreviousReconciledBatchCohortsByName)
+	{
+		if (ReconciledBatchCohortsByName.Contains(Pair.Key))
+		{
+			continue;
+		}
+
+		if (const Flight::Orchestration::FFlightCohortRecord* ExistingCohort = CohortsByName.Find(Pair.Key);
+			ExistingCohort && ExistingCohort->Participants.IsEmpty())
+		{
+			CohortsByName.Remove(Pair.Key);
+		}
+	}
+
+	Flight::Orchestration::ApplyReconciledBatchCohorts(CohortsByName, ReconciledBatchCohortsByName);
+	MissingContracts.Reset();
+	BuildMissingContracts();
+	BuildDiagnostics();
+	RebuildExecutionPlan();
+	return bChanged;
+}
+
 bool UFlightOrchestrationSubsystem::BindBehaviorToCohort(const Flight::Orchestration::FFlightBehaviorBinding& Binding)
 {
 	if (Binding.CohortName.IsNone() || Binding.BehaviorID == 0)
@@ -337,6 +1034,26 @@ bool UFlightOrchestrationSubsystem::IsServiceAvailable(const FName ServiceName) 
 
 	return false;
 }
+
+namespace
+{
+
+bool HasParticipantAdvertisingContract(
+	const TMap<uint64, Flight::Orchestration::FFlightParticipantRecord>& ParticipantsByHandle,
+	const FName ContractKey)
+{
+	for (const TPair<uint64, Flight::Orchestration::FFlightParticipantRecord>& Pair : ParticipantsByHandle)
+	{
+		if (Pair.Value.ContractKeys.Contains(ContractKey))
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+} // namespace
 
 const Flight::Orchestration::FFlightParticipantRecord* UFlightOrchestrationSubsystem::FindParticipant(
 	const Flight::Orchestration::FFlightParticipantHandle Handle) const
@@ -451,10 +1168,12 @@ void UFlightOrchestrationSubsystem::RebuildVisibility()
 	IngestRenderAdapters();
 	IngestWaypointPaths();
 	IngestSpawnAnchors();
+	IngestNavigationGraph();
 	IngestSpatialFields();
 	IngestBehaviors();
 	BuildDefaultCohorts();
 	BuildMissingContracts();
+	BuildDiagnostics();
 	RebuildCachedReport();
 }
 
@@ -465,8 +1184,30 @@ void UFlightOrchestrationSubsystem::RebuildExecutionPlan()
 	ExecutionPlan.BuiltAtUtc = FDateTime::UtcNow();
 	ExecutionPlan.Steps.Reset();
 
+	const bool bHasNavigationIntent = HasParticipantAdvertisingContract(ParticipantsByHandle, Flight::Navigation::Contracts::IntentKey);
+	const bool bHasNavigationCommit = HasParticipantAdvertisingContract(ParticipantsByHandle, Flight::Navigation::Contracts::CommitKey);
+	const TArray<Flight::Orchestration::FFlightNavigationCandidateRecord> NavigationCandidates =
+		Flight::Orchestration::BuildNavigationCandidateRecords(GetWorld(), ParticipantsByHandle);
+
 	for (const TPair<FName, Flight::Orchestration::FFlightCohortRecord>& Pair : CohortsByName)
 	{
+		if (!Flight::Orchestration::CohortHasRequiredNavigationInputs(
+			Pair.Value,
+			bHasNavigationIntent,
+			bHasNavigationCommit,
+			NavigationCandidates))
+		{
+			continue;
+		}
+
+		const Flight::Orchestration::FCohortNavigationSelection NavigationSelection =
+			Flight::Orchestration::ResolveNavigationCandidateForCohort(Pair.Value, ParticipantsByHandle, NavigationCandidates);
+		if (Pair.Value.RequiredNavigationContracts.Contains(Flight::Navigation::Contracts::CandidateKey)
+			&& NavigationSelection.Candidate == nullptr)
+		{
+			continue;
+		}
+
 		const Flight::Orchestration::FFlightBehaviorRecord* SelectedBehavior =
 			Flight::Orchestration::SelectBehaviorForCohort(Pair.Value, BehaviorsById);
 		if (!SelectedBehavior)
@@ -489,9 +1230,22 @@ void UFlightOrchestrationSubsystem::RebuildExecutionPlan()
 		Step.ExecutionDomain = SelectedBehavior->ResolvedDomain;
 		Step.FrameInterval = SelectedBehavior->FrameInterval;
 		Step.bAsync = SelectedBehavior->bAsync;
+		if (NavigationSelection.Candidate)
+		{
+			Step.NavigationCandidateId = NavigationSelection.Candidate->SourceId;
+			Step.NavigationCandidateName = NavigationSelection.Candidate->Name;
+			Step.NavigationCandidateScore = NavigationSelection.Score;
+			Step.NavigationCandidateRankOrder = NavigationSelection.Candidate->RankOrder;
+			Step.NavigationSelectionReason = NavigationSelection.Reason;
+		}
 		Step.InputContracts = SelectedBehavior->RequiredContracts;
+		for (const FName Contract : Pair.Value.RequiredNavigationContracts)
+		{
+			Step.InputContracts.AddUnique(Contract);
+		}
 		Step.OutputConsumers.Add(TEXT("Mass"));
 		Step.OutputConsumers.Add(TEXT("Swarm"));
+		Step.OutputConsumers.AddUnique(TEXT("NavigationCommit"));
 		if (const UFlightSimpleSCSLShaderPipelineSubsystem* SimpleSCSLSubsystem = GetWorld()
 			? GetWorld()->GetSubsystem<UFlightSimpleSCSLShaderPipelineSubsystem>()
 			: nullptr;
@@ -539,12 +1293,55 @@ FString UFlightOrchestrationSubsystem::BuildReportJson() const
 	}
 	Root->SetArrayField(TEXT("participants"), ParticipantValues);
 
+	TArray<TSharedPtr<FJsonValue>> NavigationCandidateValues;
+	for (const Flight::Orchestration::FFlightNavigationCandidateRecord& Candidate : CachedReport.NavigationCandidates)
+	{
+		TSharedRef<FJsonObject> CandidateObject = MakeShared<FJsonObject>();
+		CandidateObject->SetStringField(TEXT("kind"), Flight::Orchestration::ParticipantKindToString(Candidate.SourceKind));
+		CandidateObject->SetStringField(TEXT("name"), Candidate.Name.ToString());
+		CandidateObject->SetStringField(TEXT("sourceId"), Candidate.SourceId.ToString(EGuidFormats::DigitsWithHyphensLower));
+		CandidateObject->SetStringField(TEXT("ownerSubsystem"), Candidate.OwnerSubsystem.ToString());
+		CandidateObject->SetStringField(TEXT("networkId"), Candidate.NetworkId.ToString());
+		CandidateObject->SetStringField(TEXT("subNetworkId"), Candidate.SubNetworkId.ToString());
+		Flight::Orchestration::AddVectorToJson(Candidate.StartLocation, TEXT("startLocation"), CandidateObject);
+		Flight::Orchestration::AddVectorToJson(Candidate.EndLocation, TEXT("endLocation"), CandidateObject);
+		CandidateObject->SetNumberField(TEXT("estimatedCost"), static_cast<double>(Candidate.EstimatedCost));
+		CandidateObject->SetBoolField(TEXT("legal"), Candidate.bLegal);
+		CandidateObject->SetStringField(TEXT("legalityReason"), Candidate.LegalityReason.ToString());
+		CandidateObject->SetNumberField(TEXT("rankScore"), static_cast<double>(Candidate.RankScore));
+		CandidateObject->SetNumberField(TEXT("rankOrder"), Candidate.RankOrder);
+		CandidateObject->SetBoolField(TEXT("bidirectional"), Candidate.bBidirectional);
+		CandidateObject->SetStringField(TEXT("status"), Candidate.Status);
+		CandidateObject->SetStringField(TEXT("routingValidationStatus"), Candidate.RoutingValidationStatus);
+		CandidateObject->SetStringField(TEXT("suggestedNetworkId"), Candidate.SuggestedNetworkId.ToString());
+		CandidateObject->SetStringField(TEXT("suggestedSubNetworkId"), Candidate.SuggestedSubNetworkId.ToString());
+		CandidateObject->SetStringField(TEXT("routingValidationDetail"), Candidate.RoutingValidationDetail);
+		Flight::Orchestration::AddNameArrayToJson(Candidate.Tags, TEXT("tags"), CandidateObject);
+		Flight::Orchestration::AddNameArrayToJson(Candidate.ContractKeys, TEXT("contractKeys"), CandidateObject);
+		NavigationCandidateValues.Add(MakeShared<FJsonValueObject>(CandidateObject));
+	}
+	Root->SetArrayField(TEXT("navigationCandidates"), NavigationCandidateValues);
+
+	TArray<TSharedPtr<FJsonValue>> DiagnosticValues;
+	for (const Flight::Orchestration::FFlightOrchestrationDiagnostic& Diagnostic : CachedReport.Diagnostics)
+	{
+		TSharedRef<FJsonObject> DiagnosticObject = MakeShared<FJsonObject>();
+		DiagnosticObject->SetStringField(TEXT("severity"), Diagnostic.Severity.ToString());
+		DiagnosticObject->SetStringField(TEXT("category"), Diagnostic.Category.ToString());
+		DiagnosticObject->SetStringField(TEXT("sourceName"), Diagnostic.SourceName.ToString());
+		DiagnosticObject->SetStringField(TEXT("message"), Diagnostic.Message);
+		DiagnosticValues.Add(MakeShared<FJsonValueObject>(DiagnosticObject));
+	}
+	Root->SetArrayField(TEXT("diagnostics"), DiagnosticValues);
+
 	TArray<TSharedPtr<FJsonValue>> CohortValues;
 	for (const Flight::Orchestration::FFlightCohortRecord& Cohort : CachedReport.Cohorts)
 	{
 		TSharedRef<FJsonObject> CohortObject = MakeShared<FJsonObject>();
 		CohortObject->SetStringField(TEXT("name"), Cohort.Name.ToString());
 		Flight::Orchestration::AddNameArrayToJson(Cohort.Tags, TEXT("tags"), CohortObject);
+		CohortObject->SetStringField(TEXT("desiredNavigationNetwork"), Cohort.DesiredNavigationNetwork.ToString());
+		CohortObject->SetStringField(TEXT("desiredNavigationSubNetwork"), Cohort.DesiredNavigationSubNetwork.ToString());
 		CohortObject->SetNumberField(TEXT("preferredBehaviorId"), Cohort.PreferredBehaviorId);
 
 		TArray<TSharedPtr<FJsonValue>> AllowedBehaviorValues;
@@ -561,6 +1358,7 @@ FString UFlightOrchestrationSubsystem::BuildReportJson() const
 		}
 		CohortObject->SetArrayField(TEXT("deniedBehaviorIds"), DeniedBehaviorValues);
 		Flight::Orchestration::AddNameArrayToJson(Cohort.RequiredBehaviorContracts, TEXT("requiredBehaviorContracts"), CohortObject);
+		Flight::Orchestration::AddNameArrayToJson(Cohort.RequiredNavigationContracts, TEXT("requiredNavigationContracts"), CohortObject);
 
 		TArray<TSharedPtr<FJsonValue>> ParticipantHandleValues;
 		for (const Flight::Orchestration::FFlightParticipantHandle Handle : Cohort.Participants)
@@ -628,6 +1426,11 @@ FString UFlightOrchestrationSubsystem::BuildReportJson() const
 		StepObject->SetStringField(TEXT("executionDomain"), Flight::Orchestration::ExecutionDomainToString(Step.ExecutionDomain));
 		StepObject->SetNumberField(TEXT("frameInterval"), Step.FrameInterval);
 		StepObject->SetBoolField(TEXT("async"), Step.bAsync);
+		StepObject->SetStringField(TEXT("navigationCandidateId"), Step.NavigationCandidateId.ToString(EGuidFormats::DigitsWithHyphensLower));
+		StepObject->SetStringField(TEXT("navigationCandidateName"), Step.NavigationCandidateName.ToString());
+		StepObject->SetNumberField(TEXT("navigationCandidateScore"), static_cast<double>(Step.NavigationCandidateScore));
+		StepObject->SetNumberField(TEXT("navigationCandidateRankOrder"), Step.NavigationCandidateRankOrder);
+		StepObject->SetStringField(TEXT("navigationSelectionReason"), Step.NavigationSelectionReason);
 		Flight::Orchestration::AddNameArrayToJson(Step.InputContracts, TEXT("inputContracts"), StepObject);
 		Flight::Orchestration::AddNameArrayToJson(Step.OutputConsumers, TEXT("outputConsumers"), StepObject);
 		PlanStepValues.Add(MakeShared<FJsonValueObject>(StepObject));
@@ -673,6 +1476,7 @@ void UFlightOrchestrationSubsystem::ResetVisibilityState()
 	Bindings.Reset();
 	Services.Reset();
 	MissingContracts.Reset();
+	Diagnostics.Reset();
 	ExecutionPlan = Flight::Orchestration::FFlightExecutionPlan();
 	CachedReport = Flight::Orchestration::FFlightOrchestrationReport();
 }
@@ -691,6 +1495,7 @@ void UFlightOrchestrationSubsystem::RefreshServiceStatuses()
 	AddServiceStatus(TEXT("UFlightVerseSubsystem"), World->GetSubsystem<UFlightVerseSubsystem>() != nullptr);
 	AddServiceStatus(TEXT("UFlightVexTaskSubsystem"), World->GetSubsystem<UFlightVexTaskSubsystem>() != nullptr);
 	AddServiceStatus(TEXT("UFlightWaypointPathRegistry"), World->GetSubsystem<UFlightWaypointPathRegistry>() != nullptr);
+	AddServiceStatus(TEXT("UFlightNavGraphDataHubSubsystem"), World->GetSubsystem<UFlightNavGraphDataHubSubsystem>() != nullptr);
 	if (const UFlightSimpleSCSLShaderPipelineSubsystem* SimpleSCSLSubsystem = World->GetSubsystem<UFlightSimpleSCSLShaderPipelineSubsystem>())
 	{
 		AddServiceStatus(
@@ -756,25 +1561,7 @@ void UFlightOrchestrationSubsystem::IngestWaypointPaths()
 
 	for (TActorIterator<AFlightWaypointPath> It(World); It; ++It)
 	{
-		AFlightWaypointPath* Path = *It;
-		if (!Path)
-		{
-			continue;
-		}
-
-		Flight::Orchestration::FFlightParticipantRecord Record;
-		Record.Kind = Flight::Orchestration::EFlightParticipantKind::WaypointPath;
-		Record.Name = Path->GetFName();
-		Record.OwnerSubsystem = TEXT("UFlightWaypointPathRegistry");
-		Record.SourceObject = Path;
-		Record.SourceObjectPath = Path->GetPathName();
-		Record.Tags.Add(TEXT("WorldActor"));
-		if (Path->GetPathId().IsValid())
-		{
-			Record.Tags.Add(TEXT("Registered"));
-		}
-		Record.Capabilities.Add(TEXT("SplinePath"));
-		RegisterParticipant(Record);
+		Flight::Orchestration::RegisterParticipantAdapter(*this, *It);
 	}
 }
 
@@ -788,21 +1575,57 @@ void UFlightOrchestrationSubsystem::IngestSpawnAnchors()
 
 	for (TActorIterator<AFlightSpawnSwarmAnchor> It(World); It; ++It)
 	{
-		AFlightSpawnSwarmAnchor* Anchor = *It;
-		if (!Anchor)
-		{
-			continue;
-		}
+		Flight::Orchestration::RegisterParticipantAdapter(*this, *It);
+	}
+}
 
+void UFlightOrchestrationSubsystem::IngestNavigationGraph()
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	const UFlightNavGraphDataHubSubsystem* NavGraphHub = World->GetSubsystem<UFlightNavGraphDataHubSubsystem>();
+	if (!NavGraphHub || (!NavGraphHub->HasNodes() && !NavGraphHub->HasEdges()))
+	{
+		return;
+	}
+
+	const FFlightNavGraphSnapshot Snapshot = NavGraphHub->BuildSnapshot();
+
+	for (const FFlightNavGraphNodeSnapshot& Node : Snapshot.Nodes)
+	{
 		Flight::Orchestration::FFlightParticipantRecord Record;
-		Record.Kind = Flight::Orchestration::EFlightParticipantKind::SpawnAnchor;
-		Record.Name = Anchor->GetAnchorId().IsNone() ? Anchor->GetFName() : Anchor->GetAnchorId();
-		Record.OwnerSubsystem = TEXT("UFlightSwarmSpawnerSubsystem");
-		Record.SourceObject = Anchor;
-		Record.SourceObjectPath = Anchor->GetPathName();
-		Record.Tags.Add(TEXT("WorldActor"));
-		Record.Tags.Add(TEXT("Swarm"));
-		Record.Capabilities.Add(TEXT("SpawnSwarm"));
+		Record.Kind = Flight::Orchestration::EFlightParticipantKind::NavigationNode;
+		Record.Name = Node.DisplayName.IsNone() ? FName(*Node.NodeId.ToString(EGuidFormats::Digits)) : Node.DisplayName;
+		Record.OwnerSubsystem = TEXT("UFlightNavGraphDataHubSubsystem");
+		Record.SourceObject = const_cast<UFlightNavGraphDataHubSubsystem*>(NavGraphHub);
+		Record.SourceObjectPath = NavGraphHub->GetPathName();
+		Record.Tags = Node.Tags;
+		Record.Tags.AddUnique(TEXT("Navigation"));
+		Record.Tags.AddUnique(TEXT("NavGraph"));
+		Record.Capabilities.Add(TEXT("NavigationNode"));
+		Record.Capabilities.Add(TEXT("NavigationCandidateSource"));
+		Record.ContractKeys.Add(Flight::Navigation::Contracts::CandidateKey);
+		RegisterParticipant(Record);
+	}
+
+	for (const FFlightNavGraphEdgeSnapshot& Edge : Snapshot.Edges)
+	{
+		Flight::Orchestration::FFlightParticipantRecord Record;
+		Record.Kind = Flight::Orchestration::EFlightParticipantKind::NavigationEdge;
+		Record.Name = FName(*Edge.EdgeId.ToString(EGuidFormats::Digits));
+		Record.OwnerSubsystem = TEXT("UFlightNavGraphDataHubSubsystem");
+		Record.SourceObject = const_cast<UFlightNavGraphDataHubSubsystem*>(NavGraphHub);
+		Record.SourceObjectPath = NavGraphHub->GetPathName();
+		Record.Tags = Edge.Tags;
+		Record.Tags.AddUnique(TEXT("Navigation"));
+		Record.Tags.AddUnique(TEXT("NavGraph"));
+		Record.Capabilities.Add(TEXT("NavigationEdge"));
+		Record.Capabilities.Add(TEXT("NavigationCandidateSource"));
+		Record.ContractKeys.Add(Flight::Navigation::Contracts::CandidateKey);
 		RegisterParticipant(Record);
 	}
 }
@@ -834,6 +1657,7 @@ void UFlightOrchestrationSubsystem::IngestSpatialFields()
 		Record.OwnerSubsystem = TEXT("UFlightSpatialSubsystem");
 		Record.Tags.Add(TEXT("RuntimeField"));
 		Record.Capabilities.Add(*Flight::Orchestration::SpatialFieldTypeToString(Pair.Value->GetFieldType()));
+		Record.ContractKeys.Add(Flight::Navigation::Contracts::FieldSampleKey);
 		RegisterParticipant(Record);
 	}
 }
@@ -900,8 +1724,13 @@ void UFlightOrchestrationSubsystem::BuildDefaultCohorts()
 			Cohort.Participants.Add(Participant.Handle);
 			Cohort.Tags.Add(TEXT("Swarm"));
 			Cohort.Tags.Add(TEXT("AnchorScoped"));
+			Cohort.RequiredNavigationContracts.AddUnique(Flight::Navigation::Contracts::IntentKey);
+			Cohort.RequiredNavigationContracts.AddUnique(Flight::Navigation::Contracts::CandidateKey);
+			Cohort.RequiredNavigationContracts.AddUnique(Flight::Navigation::Contracts::CommitKey);
 			if (const AFlightSpawnSwarmAnchor* Anchor = Cast<AFlightSpawnSwarmAnchor>(Participant.SourceObject.Get()))
 			{
+				Cohort.DesiredNavigationNetwork = Anchor->GetNavNetworkId();
+				Cohort.DesiredNavigationSubNetwork = Anchor->GetNavSubNetworkId();
 				Cohort.PreferredBehaviorId = Anchor->GetPreferredBehaviorId();
 				for (const int32 AllowedBehaviorId : Anchor->GetAllowedBehaviorIds())
 				{
@@ -930,14 +1759,24 @@ void UFlightOrchestrationSubsystem::BuildDefaultCohorts()
 		Cohort.Participants = MoveTemp(SwarmParticipants);
 		Cohort.Tags.Add(TEXT("Swarm"));
 		Cohort.Tags.Add(TEXT("Default"));
+		Cohort.RequiredNavigationContracts.AddUnique(Flight::Navigation::Contracts::IntentKey);
+		Cohort.RequiredNavigationContracts.AddUnique(Flight::Navigation::Contracts::CandidateKey);
+		Cohort.RequiredNavigationContracts.AddUnique(Flight::Navigation::Contracts::CommitKey);
 		RegisterCohort(Cohort);
 	}
+
+	Flight::Orchestration::ApplyReconciledBatchCohorts(CohortsByName, ReconciledBatchCohortsByName);
 }
 
 void UFlightOrchestrationSubsystem::BuildMissingContracts()
 {
 	const bool bHasSwarmParticipants = HasParticipantOfKind(Flight::Orchestration::EFlightParticipantKind::SpawnAnchor);
 	const bool bHasWaypointPaths = HasParticipantOfKind(Flight::Orchestration::EFlightParticipantKind::WaypointPath);
+	const bool bHasNavigationIntent = HasParticipantAdvertisingContract(ParticipantsByHandle, Flight::Navigation::Contracts::IntentKey);
+	const bool bHasNavigationCommit = HasParticipantAdvertisingContract(ParticipantsByHandle, Flight::Navigation::Contracts::CommitKey);
+	const TArray<Flight::Orchestration::FFlightNavigationCandidateRecord> NavigationCandidates =
+		Flight::Orchestration::BuildNavigationCandidateRecords(GetWorld(), ParticipantsByHandle);
+	const bool bHasNavigationCandidate = !NavigationCandidates.IsEmpty();
 
 	if (bHasSwarmParticipants && !bHasWaypointPaths)
 	{
@@ -945,6 +1784,33 @@ void UFlightOrchestrationSubsystem::BuildMissingContracts()
 		MissingContract.Scope = TEXT("Swarm");
 		MissingContract.ContractKey = TEXT("WaypointPath");
 		MissingContract.Issue = TEXT("Swarm anchors are visible, but no waypoint path is available.");
+		MissingContracts.Add(MissingContract);
+	}
+
+	if (bHasSwarmParticipants && !bHasNavigationIntent)
+	{
+		Flight::Orchestration::FFlightMissingContract MissingContract;
+		MissingContract.Scope = TEXT("Navigation");
+		MissingContract.ContractKey = Flight::Navigation::Contracts::IntentKey;
+		MissingContract.Issue = TEXT("Swarm anchors are visible, but no participant is advertising Navigation.Intent.");
+		MissingContracts.Add(MissingContract);
+	}
+
+	if (bHasSwarmParticipants && !bHasNavigationCandidate)
+	{
+		Flight::Orchestration::FFlightMissingContract MissingContract;
+		MissingContract.Scope = TEXT("Navigation");
+		MissingContract.ContractKey = Flight::Navigation::Contracts::CandidateKey;
+		MissingContract.Issue = TEXT("Swarm anchors are visible, but no navigation candidate records are available.");
+		MissingContracts.Add(MissingContract);
+	}
+
+	if (bHasSwarmParticipants && !bHasNavigationCommit)
+	{
+		Flight::Orchestration::FFlightMissingContract MissingContract;
+		MissingContract.Scope = TEXT("Navigation");
+		MissingContract.ContractKey = Flight::Navigation::Contracts::CommitKey;
+		MissingContract.Issue = TEXT("Swarm anchors are visible, but no participant is advertising Navigation.Commit.");
 		MissingContracts.Add(MissingContract);
 	}
 
@@ -967,6 +1833,71 @@ void UFlightOrchestrationSubsystem::BuildMissingContracts()
 	}
 }
 
+void UFlightOrchestrationSubsystem::BuildDiagnostics()
+{
+	Diagnostics.Reset();
+
+	for (const TPair<FName, Flight::Orchestration::FFlightCohortRecord>& Pair : ReconciledBatchCohortsByName)
+	{
+		const Flight::Orchestration::FFlightCohortRecord* CanonicalCohort = CohortsByName.Find(Pair.Key);
+		if (!CanonicalCohort)
+		{
+			continue;
+		}
+
+		FString Mismatch;
+		if (Flight::Orchestration::BuildCohortReconciliationMismatch(*CanonicalCohort, Pair.Value, Mismatch))
+		{
+			Flight::Orchestration::FFlightOrchestrationDiagnostic Diagnostic;
+			Diagnostic.Severity = TEXT("Warning");
+			Diagnostic.Category = TEXT("CohortReconciliation");
+			Diagnostic.SourceName = Pair.Key;
+			Diagnostic.Message = Mismatch;
+			Diagnostics.Add(MoveTemp(Diagnostic));
+		}
+	}
+
+	const TArray<Flight::Orchestration::FFlightNavigationCandidateRecord> NavigationCandidates =
+		Flight::Orchestration::BuildNavigationCandidateRecords(GetWorld(), ParticipantsByHandle);
+
+	for (const Flight::Orchestration::FFlightNavigationCandidateRecord& Candidate : NavigationCandidates)
+	{
+		if (Candidate.SourceKind != Flight::Orchestration::EFlightParticipantKind::WaypointPath)
+		{
+			continue;
+		}
+
+		if (Candidate.RoutingValidationStatus == TEXT("Match") || Candidate.RoutingValidationStatus == TEXT("NotApplicable"))
+		{
+			continue;
+		}
+
+		Flight::Orchestration::FFlightOrchestrationDiagnostic Diagnostic;
+		Diagnostic.Severity = TEXT("Warning");
+		Diagnostic.Category = TEXT("NavigationRouting");
+		Diagnostic.SourceName = Candidate.Name;
+		Diagnostic.Message = FString::Printf(
+			TEXT("Waypoint-path routing validation reported %s. %s SuggestedNetwork=%s SuggestedSubNetwork=%s"),
+			*Candidate.RoutingValidationStatus,
+			*Candidate.RoutingValidationDetail,
+			*Candidate.SuggestedNetworkId.ToString(),
+			*Candidate.SuggestedSubNetworkId.ToString());
+		Diagnostics.Add(MoveTemp(Diagnostic));
+	}
+
+	Diagnostics.Sort([](
+		const Flight::Orchestration::FFlightOrchestrationDiagnostic& Left,
+		const Flight::Orchestration::FFlightOrchestrationDiagnostic& Right)
+	{
+		if (Left.Category == Right.Category)
+		{
+			return Left.SourceName.LexicalLess(Right.SourceName);
+		}
+
+		return Left.Category.LexicalLess(Right.Category);
+	});
+}
+
 void UFlightOrchestrationSubsystem::RebuildCachedReport()
 {
 	CachedReport = Flight::Orchestration::FFlightOrchestrationReport();
@@ -974,6 +1905,7 @@ void UFlightOrchestrationSubsystem::RebuildCachedReport()
 	CachedReport.BuiltAtUtc = FDateTime::UtcNow();
 	CachedReport.Services = Services;
 	CachedReport.MissingContracts = MissingContracts;
+	CachedReport.Diagnostics = Diagnostics;
 	CachedReport.ExecutionPlan = ExecutionPlan;
 
 	ParticipantsByHandle.GenerateValueArray(CachedReport.Participants);
@@ -990,6 +1922,8 @@ void UFlightOrchestrationSubsystem::RebuildCachedReport()
 	{
 		return Left.Name.LexicalLess(Right.Name);
 	});
+
+	CachedReport.NavigationCandidates = Flight::Orchestration::BuildNavigationCandidateRecords(GetWorld(), ParticipantsByHandle);
 
 	CachedReport.Behaviors.Sort([](const Flight::Orchestration::FFlightBehaviorRecord& Left, const Flight::Orchestration::FFlightBehaviorRecord& Right)
 	{

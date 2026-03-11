@@ -5,6 +5,7 @@
 
 #include "Core/FlightHlslReflection.h"
 #include "Core/FlightReflection.h"
+#include "Vex/FlightVexSymbolRegistry.h"
 
 #if WITH_AUTOMATION_TESTS
 

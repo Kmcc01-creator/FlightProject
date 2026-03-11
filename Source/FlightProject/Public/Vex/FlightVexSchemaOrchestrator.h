@@ -47,9 +47,11 @@ public:
 				}
 
 				FVexSymbolRecord Record;
-				const auto& SymbolNameAttr = DescType::template GetAttr<Attr::VexSymbol>::Value;
-
-					Record.SymbolName = FString(SymbolNameAttr.data());
+				if constexpr (DescType::template HasAttrTemplate<Attr::VexSymbol>)
+				{
+					using AttrType = typename DescType::template GetAttr<Attr::VexSymbol>;
+					Record.SymbolName = FString(AttrType::Value.data());
+				}
 					Record.ValueType = ResolveValueType<FieldType>();
 					Record.Storage.Kind = DescType::IsOffsetEligible ? EVexStorageKind::AosOffset : EVexStorageKind::Accessor;
 					Record.Storage.MemberOffset = DescType::IsOffsetEligible ? DescType::GetOffset() : INDEX_NONE;

@@ -1,5 +1,14 @@
 # FlightProject Architecture & Workflow Guide
 
+Status: older high-level workflow reference from an earlier Mass/ECS transition phase.
+
+For the current architectural source of truth, prefer:
+
+- [../Architecture/Overview.md](../Architecture/Overview.md)
+- [../Architecture/CurrentProjectVision.md](../Architecture/CurrentProjectVision.md)
+- [../Workflow/GameplaySystems.md](../Workflow/GameplaySystems.md)
+- [CurrentExtensionDirections.md](CurrentExtensionDirections.md)
+
 ## 1. Architectural Best Practices (UE 5.7+)
 
 ### Thinking Beyond the Actor Model

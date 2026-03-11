@@ -28,6 +28,16 @@ struct FVexSchemaBoundSymbol
 	FString SymbolName;
 	FVexLogicalSymbolSchema LogicalSymbol;
 	EVexSchemaBindingSource Source = EVexSchemaBindingSource::Schema;
+	int32 FragmentBindingIndex = INDEX_NONE;
+};
+
+struct FVexSchemaFragmentBinding
+{
+	FName FragmentType = NAME_None;
+	EVexStorageKind StorageKind = EVexStorageKind::None;
+	TArray<int32> BoundSymbolIndices;
+	TSet<FString> ReadSymbols;
+	TSet<FString> WrittenSymbols;
 };
 
 struct FVexSchemaSymbolUse
@@ -61,6 +71,7 @@ struct FLIGHTPROJECT_API FVexSchemaBindingResult
 	TArray<FString> Errors;
 	TArray<FVexSymbolDefinition> SymbolDefinitions;
 	TArray<FVexSchemaBoundSymbol> BoundSymbols;
+	TArray<FVexSchemaFragmentBinding> FragmentBindings;
 	TArray<FVexSchemaSymbolUse> SymbolUses;
 	TArray<FVexSchemaStatementBinding> StatementBindings;
 	TSet<FString> ReadSymbols;
@@ -69,6 +80,8 @@ struct FLIGHTPROJECT_API FVexSchemaBindingResult
 	TMap<EVexBackendKind, bool> BackendLegality;
 
 	const FVexSchemaBoundSymbol* FindBoundSymbolByName(const FString& Name) const;
+	const FVexSchemaFragmentBinding* FindFragmentBindingByType(FName FragmentType) const;
+	const FVexSchemaFragmentBinding* FindFragmentBindingForBoundSymbol(int32 BoundSymbolIndex) const;
 	TMap<FString, FString> BuildVerseSymbolMap() const;
 	TMap<FString, FString> BuildHlslSymbolMap() const;
 };

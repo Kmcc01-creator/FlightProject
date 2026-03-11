@@ -1,5 +1,14 @@
 # Code Review Request: Trait-Based Reflection System for Unreal Engine
 
+Status: archival review prompt from an earlier reflection-system stabilization pass.
+
+Before using this as a live review frame, prefer these current docs:
+
+- [../Architecture/CurrentProjectVision.md](../Architecture/CurrentProjectVision.md)
+- [../Architecture/ActorAdapters.md](../Architecture/ActorAdapters.md)
+- [../Workflow/SchemaIrImplementationPlan.md](../Workflow/SchemaIrImplementationPlan.md)
+- [../Workflow/ReflectionGenerativeTestingRecoveryPlan.md](../Workflow/ReflectionGenerativeTestingRecoveryPlan.md)
+
 ## Context
 
 We're developing a trait-based reflection system for Unreal Engine 5.7 as an alternative to the traditional USTRUCT/UPROPERTY macro approach. The goal is to explore what UE reflection might look like if designed with modern C++20 from the start.

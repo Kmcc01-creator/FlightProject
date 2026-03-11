@@ -405,3 +405,191 @@ Relevant new test files:
 10. move runtime and orchestration consumers onto schema-issued bindings
 
 This order establishes the new boundary without requiring a risky compiler rewrite in one pass.
+
+## 11. Forward Projection Roadmap
+
+The next useful step is to stop treating SchemaIR as a compile-time sidecar and make it the persistent handoff between:
+
+- source intent
+- schema/storage facts
+- backend selection
+- runtime commit
+- Mega-Kernel synthesis
+
+The migration should stay incremental.
+The immediate priority is to preserve bound schema facts after compile without destabilizing the current AST, IR, or native fallback paths.
+
+### 11.1 Phase 1: Persist Bound Schema Metadata
+
+Goal:
+
+- make compile-time schema binding durable
+- expose enough metadata for runtime commit and orchestration
+- keep current executable paths intact
+
+Required changes:
+
+- extend `UFlightVerseSubsystem::FVerseBehavior` to retain:
+  - compile-time `TypeKey`
+  - schema stable name
+  - schema layout hash
+  - persisted `FVexSchemaBindingResult` or a compact derivative
+  - resolved read/write symbol sets
+- extend `FFlightCompileArtifactReport` to include:
+  - bound schema type identity
+  - schema layout hash
+  - read symbol set
+  - written symbol set
+  - referenced storage kinds
+  - selected backend
+  - committed backend
+- treat `selectedBackend` as a planning result and `committedBackend` as the actual executable path used in the current build
+
+Success criteria:
+
+- schema-bound compile paths retain the bound type and symbol-usage metadata after compile
+- compile artifact JSON exports schema/layout/read-write information
+- existing compile integration tests assert on persisted schema metadata rather than only generated Verse text
+
+### 11.2 Phase 2: Introduce Storage Hosts
+
+Goal:
+
+- stop routing all non-VM execution through struct-specific fallback code
+
+Required changes:
+
+- keep `ExecuteOnSchema(...)` as the scalar reference host
+- introduce explicit host adapters for:
+  - AoS struct execution
+  - typed accessor execution
+  - Mass fragment / SoA execution
+  - GPU buffer execution
+  - VM symbol bridge execution
+- make adapter selection consume schema storage kinds rather than `FDroidState` or fragment-type assumptions
+
+Success criteria:
+
+- scalar fallback no longer requires `TypeKey == GetDroidStateTypeKey()`
+- non-`FDroidState` reflected structs and future framework-owned data models can execute through the same schema host layer
+
+### 11.3 Phase 3: Backend Commitment
+
+Goal:
+
+- make backend selection operational instead of report-only
+
+Required changes:
+
+- add a backend commitment step after compatibility scoring
+- preserve downgrade reasons when the chosen backend is legal in theory but not executable in the current build/runtime
+- ensure runtime dispatch consumes persisted binding metadata instead of rediscovering it from AST plus registry lookup
+
+Success criteria:
+
+- compile artifacts show both selected and committed backend
+- runtime dispatch can explain why a selected backend downgraded to another path
+
+### 11.4 Phase 4: Schema-Driven Mega-Kernel
+
+Goal:
+
+- retarget the Mega-Kernel to consume SchemaIR outputs instead of a hardcoded swarm ABI
+
+Required changes:
+
+- replace the fixed `inout pos/vel/shield/status` contract with generated storage-view bindings derived from schema
+- generate hoists from resolved read/write sets, not union-of-used-symbols alone
+- generate sparse store-back from written symbol sets
+- move dispatch identity out of packed `status` bits and onto orchestration-issued GPU cohort/behavior bindings
+- partition future multi-kernel execution using:
+  - storage kind
+  - register pressure estimate
+  - write set overlap
+  - residency/domain legality
+- make shader regeneration include explicit cache invalidation / recompile fencing
+
+Success criteria:
+
+- Mega-Kernel synthesis uses schema-bound storage mappings
+- store-back matches mutation intent
+- shader integration is orchestration-driven and explainable
+
+## 12. Concrete Phase 1 File Plan
+
+### 12.1 `Public/Verse/UFlightVerseSubsystem.h`
+
+Add persisted compile-time schema metadata to `FVerseBehavior`.
+
+Recommended first fields:
+
+```cpp
+const void* BoundTypeKey = nullptr;
+FName BoundTypeStableName = NAME_None;
+uint32 BoundSchemaLayoutHash = 0;
+TOptional<FVexSchemaBindingResult> SchemaBinding;
+```
+
+If storing the full binding result proves too heavy for this phase, preserve at least:
+
+- type key
+- stable name
+- layout hash
+- read symbols
+- written symbols
+
+### 12.2 `Private/Verse/UFlightVerseSubsystem.cpp`
+
+During `CompileVex(...)`:
+
+- reset persisted schema metadata up front
+- when schema binding succeeds, copy the binding and schema identity into the behavior
+- populate compile artifact report fields from the persisted binding rather than rebuilding symbol sets later
+
+Do not change backend execution semantics in this phase.
+
+### 12.3 `Public/Vex/FlightCompileArtifacts.h`
+
+Extend `FFlightCompileArtifactReport` with schema-bound metadata.
+
+Recommended first fields:
+
+```cpp
+FString BoundTypeName;
+uint32 SchemaLayoutHash = 0;
+FString CommittedBackend;
+TArray<FString> ReadSymbols;
+TArray<FString> WrittenSymbols;
+TArray<FString> ReferencedStorageKinds;
+```
+
+### 12.4 `Private/Vex/FlightCompileArtifacts.cpp`
+
+Update JSON export to include the new schema-bound reporting fields.
+
+Add a string formatter for `EVexStorageKind` so artifact output stays readable.
+
+### 12.5 `Private/Tests/FlightVexSchemaIrTests.cpp`
+
+Expand compile integration coverage to assert:
+
+- behavior retains schema stable name and layout hash
+- compile artifact report retains schema type identity
+- compile artifact report retains written/read symbol sets
+- compile artifact report retains committed backend
+
+## 13. Concrete Mega-Kernel Follow-On Checklist
+
+These items are not phase-one edits, but phase-one persistence should make them easier:
+
+- persist per-behavior write sets so Mega-Kernel store-back is mutation-driven
+- persist schema storage kinds so Mega-Kernel lowering can distinguish:
+  - direct GPU buffer elements
+  - SoA columns
+  - external providers
+- carry layout hash into generated shader artifact naming/reporting
+- add orchestration report entries describing:
+  - behaviors included in the current Mega-Kernel
+  - symbols hoisted
+  - symbols written back
+  - selected vs committed GPU execution policy

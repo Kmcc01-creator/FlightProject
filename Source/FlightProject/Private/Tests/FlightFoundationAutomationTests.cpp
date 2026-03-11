@@ -63,15 +63,15 @@ namespace Flight::Reflection
 
 FLIGHT_REFLECT_FIELDS_ATTR(
     FFoundationMetrics,
-    FLIGHT_FIELD_ATTR(int32, RetryCount, Flight::Reflection::Attr::EditAnywhere),
-    FLIGHT_FIELD_ATTR(bool, bHealthy, Flight::Reflection::Attr::EditAnywhere)
+    FLIGHT_FIELD_ATTR(int32, RetryCount, ::Flight::Reflection::Attr::EditAnywhere),
+    FLIGHT_FIELD_ATTR(bool, bHealthy, ::Flight::Reflection::Attr::EditAnywhere)
 )
 
 FLIGHT_REFLECT_FIELDS_ATTR(
     FFoundationPayload,
-    FLIGHT_FIELD_ATTR(FString, Label, Flight::Reflection::Attr::EditAnywhere),
-    FLIGHT_FIELD_ATTR(float, Score, Flight::Reflection::Attr::EditAnywhere),
-    FLIGHT_FIELD_ATTR(FFoundationMetrics, Metrics, Flight::Reflection::Attr::EditAnywhere)
+    FLIGHT_FIELD_ATTR(FString, Label, ::Flight::Reflection::Attr::EditAnywhere),
+    FLIGHT_FIELD_ATTR(float, Score, ::Flight::Reflection::Attr::EditAnywhere),
+    FLIGHT_FIELD_ATTR(FFoundationMetrics, Metrics, ::Flight::Reflection::Attr::EditAnywhere)
 )
 
 } // namespace Flight::Reflection

@@ -94,6 +94,16 @@ Participants can include:
 
 The important change is that visibility should become explicit.
 
+Current implementation now includes explicit navigation-facing participants and promoted route-candidate records.
+Visible navigation participant kinds include:
+
+- `WaypointPath`
+- `SpawnAnchor`
+- `NavigationNode`
+- `NavigationEdge`
+
+Those participants are further reduced into navigation candidate records for planning/reporting rather than remaining capability advertisements only.
+
 ### 3.3 Contract Resolution
 
 It should fuse together:
@@ -116,6 +126,20 @@ It should build per-world execution plans:
 - what barriers or sync points are needed
 - which render adapters consume the resulting state
 
+Current implementation already includes a CPU-first navigation planning layer in `RebuildExecutionPlan()`:
+
+- cohorts can require navigation contracts
+- cohorts can constrain desired navigation network/subnetwork
+- promoted navigation candidates are scored and ranked
+- execution-plan steps retain:
+  - selected navigation candidate id/name
+  - cohort-adjusted candidate score
+  - base rank order
+  - selection reason
+- `UFlightSwarmSpawnerSubsystem` now reconciles batch cohort plans through orchestration before spawn
+- spawn-time navigation commitment now consumes the selected execution-plan candidate rather than independently picking a path
+- that selected result is lowered into a runtime `FFlightNavigationCommitProduct` plus shared fragment metadata before current path-follow execution
+
 ### 3.5 Observability
 
 It should export a coherent picture of:
@@ -127,6 +151,15 @@ It should export a coherent picture of:
 - frame-level orchestration decisions
 
 That is much easier to debug than chasing several subsystem-local views.
+
+Current implementation already reports:
+
+- visible participants
+- missing contracts
+- promoted `navigationCandidates`
+- per-step navigation selections
+- cohort desired navigation network/subnetwork
+- top-level diagnostics for navigation routing validation
 
 ## 4. Visibility Model
 
@@ -268,8 +301,10 @@ Right now:
 - compiled behaviors live in `UFlightVerseSubsystem::Behaviors`
 - task dispatch exists in `UFlightVexTaskSubsystem`
 - the Mass VEX behavior processor now resolves orchestration-issued bindings per chunk/cohort before falling back
+- navigation participant visibility, candidate promotion, candidate ranking, and cohort-scoped network legality are now also part of orchestration
+- waypoint-path routing metadata drift is surfaced as orchestration diagnostics
 
-That means behavior visibility and basic cohort binding are present, but richer execution-domain selection and reporting are not fully centralized yet.
+That means behavior visibility and basic cohort binding are present, and the first real navigation decision/reporting surface is now centralized as well. Richer execution-domain selection, GPU-informed legality, and stricter policy escalation are still follow-on work.
 
 ### Proposed VEX-Orchestration Model
 
@@ -428,6 +463,15 @@ Fuse schema ensure/diff logic into orchestration reporting so one subsystem can 
 - what is active
 - what is missing
 - what degraded gracefully
+
+Navigation is already the first concrete example of this direction:
+
+- real world-owned sources are promoted into candidate records
+- route metadata validation surfaces as diagnostics
+- cohort planning consumes reported candidates directly
+- batch lowering plans reconcile against canonical orchestration-owned cohort state before entity creation
+- spawns now consume orchestration-selected navigation commitments directly
+- stricter escalation from warning diagnostics to hard legality remains a documented TODO for stronger profiles
 
 ## 12. Key Recommendation
 

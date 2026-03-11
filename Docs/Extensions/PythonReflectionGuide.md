@@ -1,5 +1,12 @@
 # Unreal Engine Python Reflection Guide
 
+Status: focused reference note.
+
+For the current project scripting/documentation context, also see:
+
+- [../Scripting/README.md](../Scripting/README.md)
+- [CurrentExtensionDirections.md](CurrentExtensionDirections.md)
+
 To make C++ classes, structs, and functions accessible to Unreal Engine's Python API, you must expose them to the reflection system using specific macros and specifiers.
 
 ## 1. Exposing Structs (`USTRUCT`)

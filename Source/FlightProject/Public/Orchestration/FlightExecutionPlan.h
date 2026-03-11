@@ -15,6 +15,11 @@ struct FLIGHTPROJECT_API FFlightExecutionPlanStep
 	EFlightExecutionDomain ExecutionDomain = EFlightExecutionDomain::Unknown;
 	uint32 FrameInterval = 1;
 	bool bAsync = false;
+	FGuid NavigationCandidateId;
+	FName NavigationCandidateName = NAME_None;
+	float NavigationCandidateScore = 0.0f;
+	int32 NavigationCandidateRankOrder = INDEX_NONE;
+	FString NavigationSelectionReason;
 	TArray<FName> InputContracts;
 	TArray<FName> OutputConsumers;
 };
@@ -27,4 +32,3 @@ struct FLIGHTPROJECT_API FFlightExecutionPlan
 };
 
 } // namespace Flight::Orchestration
-

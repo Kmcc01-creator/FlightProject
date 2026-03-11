@@ -61,6 +61,11 @@ FString LowerToHLSL(const FVexProgramAst& Program, const TArray<FVexSymbolDefini
 FString LowerToVerse(const FVexProgramAst& Program, const TArray<FVexSymbolDefinition>& SymbolDefinitions, const TMap<FString, FString>& VerseBySymbol);
 
 /** Generate a unified HLSL Mega-Kernel from multiple behavior scripts with hoisting optimizations. */
-FString LowerMegaKernel(const TMap<uint32, FVexProgramAst>& Scripts, const TArray<FVexSymbolDefinition>& SymbolDefinitions, const TMap<FString, FString>& SymbolMap, const FString& FunctionName = TEXT("ExecuteVexBehavior"));
+FString LowerMegaKernel(
+	const TMap<uint32, FVexProgramAst>& Scripts,
+	const TArray<FVexSymbolDefinition>& SymbolDefinitions,
+	const TMap<FString, FString>& SymbolMap,
+	const FString& FunctionName = TEXT("ExecuteVexBehavior"),
+	const TMap<uint32, TSet<FString>>* WrittenSymbolsByBehavior = nullptr);
 
 } // namespace Flight::Vex

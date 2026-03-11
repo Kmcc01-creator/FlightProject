@@ -11,7 +11,11 @@
 #include "FlightProject/Public/FlightDataTypes.h"
 #include "FlightProject/Public/FlightSpawnSwarmAnchor.h"
 #include "FlightProject/Public/FlightWaypointPath.h"
+#include "FlightProject/Public/Mass/FlightMassLoweringAdapter.h"
 #include "FlightProject/Public/Mass/FlightMassFragments.h"
+#include "FlightProject/Public/Mass/FlightWaypointPathRegistry.h"
+#include "FlightProject/Public/Navigation/FlightNavigationCommitProduct.h"
+#include "FlightProject/Public/Orchestration/FlightOrchestrationSubsystem.h"
 
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
@@ -23,6 +27,21 @@ namespace
 {
 
 const FName DefaultSwarmCohortName(TEXT("Swarm.Default"));
+
+struct FResolvedAnchorBatchPlan
+{
+	AFlightSpawnSwarmAnchor* Anchor = nullptr;
+	Flight::Mass::FFlightMassBatchLoweringPlan Plan;
+};
+
+struct FResolvedSpawnPath
+{
+	AFlightWaypointPath* Path = nullptr;
+	FGuid PathId;
+	float PathLength = 0.0f;
+	FVector InitialLocation = FVector::ZeroVector;
+	bool bResolvedFromExecutionPlan = false;
+};
 
 FName MakeAnchorCohortName(const AFlightSpawnSwarmAnchor& Anchor)
 {
@@ -47,6 +66,193 @@ void ApplyBehaviorCohortFragment(FMassEntityManager& EntityManager, const TArray
 	TArray<FMassArchetypeEntityCollection> EntityCollections;
 	UE::Mass::Utils::CreateEntityCollections(EntityManager, Entities, FMassArchetypeEntityCollection::NoDuplicates, EntityCollections);
 	EntityManager.BatchAddSharedFragmentsForEntities(EntityCollections, SharedFragmentValues);
+}
+
+void ApplySharedFragmentPlan(
+	FMassEntityManager& EntityManager,
+	const TArray<FMassEntityHandle>& Entities,
+	const Flight::Mass::FFlightMassSharedFragmentPlan& SharedPlan)
+{
+	if (SharedPlan.bHasBehaviorCohort)
+	{
+		ApplyBehaviorCohortFragment(EntityManager, Entities, SharedPlan.BehaviorCohort.CohortName);
+	}
+}
+
+void ApplyNavigationCommitSharedFragment(
+	FMassEntityManager& EntityManager,
+	const TArray<FMassEntityHandle>& Entities,
+	const Flight::Navigation::FFlightNavigationCommitProduct& CommitProduct)
+{
+	if (Entities.IsEmpty() || !CommitProduct.IsValid())
+	{
+		return;
+	}
+
+	FFlightNavigationCommitSharedFragment CommitFragment;
+	CommitProduct.WriteSharedFragment(CommitFragment);
+
+	const FConstSharedStruct SharedFragment = EntityManager.GetOrCreateConstSharedFragment(CommitFragment);
+	FMassArchetypeSharedFragmentValues SharedFragmentValues;
+	SharedFragmentValues.Add(SharedFragment);
+
+	TArray<FMassArchetypeEntityCollection> EntityCollections;
+	UE::Mass::Utils::CreateEntityCollections(EntityManager, Entities, FMassArchetypeEntityCollection::NoDuplicates, EntityCollections);
+	EntityManager.BatchAddSharedFragmentsForEntities(EntityCollections, SharedFragmentValues);
+}
+
+float ComputeNormalizedBatchPhase(const Flight::Mass::FFlightMassBatchLoweringPlan& Plan, const int32 EntityIndex)
+{
+	float NormalizedPhase = FMath::Fmod(Plan.PhaseOffsetDeg, 360.0f) / 360.0f;
+	if (Plan.BatchCount > 1 && Plan.PhaseSpreadDeg > 0.0f)
+	{
+		const float Step = (Plan.PhaseSpreadDeg / 360.0f) / static_cast<float>(Plan.BatchCount);
+		NormalizedPhase += Step * static_cast<float>(EntityIndex);
+	}
+
+	return FMath::Frac(NormalizedPhase);
+}
+
+bool BuildLegacyAnchorPlan(
+	const AFlightSpawnSwarmAnchor& Anchor,
+	Flight::Mass::FFlightMassBatchLoweringPlan& OutPlan)
+{
+	OutPlan = {};
+	const FName AnchorName = Anchor.GetAnchorId().IsNone() ? Anchor.GetFName() : Anchor.GetAnchorId();
+	OutPlan.AdapterName = AnchorName;
+	OutPlan.CohortName = FName(*FString::Printf(TEXT("SwarmAnchor.%s"), *AnchorName.ToString()));
+	OutPlan.BatchCount = Anchor.GetDroneCount();
+	OutPlan.PhaseOffsetDeg = Anchor.GetPhaseOffsetDeg();
+	OutPlan.PhaseSpreadDeg = Anchor.GetPhaseSpreadDeg();
+	OutPlan.DesiredSpeed = Anchor.GetAutopilotSpeedOverride();
+	OutPlan.bLooping = true;
+	OutPlan.DesiredNavigationNetwork = Anchor.GetNavNetworkId();
+	OutPlan.DesiredNavigationSubNetwork = Anchor.GetNavSubNetworkId();
+	OutPlan.PreferredBehaviorId = Anchor.GetPreferredBehaviorId();
+	OutPlan.RequiredBehaviorContracts = Anchor.GetRequiredBehaviorContracts();
+
+	for (const int32 AllowedBehaviorId : Anchor.GetAllowedBehaviorIds())
+	{
+		if (AllowedBehaviorId >= 0)
+		{
+			OutPlan.AllowedBehaviorIds.Add(static_cast<uint32>(AllowedBehaviorId));
+		}
+	}
+
+	for (const int32 DeniedBehaviorId : Anchor.GetDeniedBehaviorIds())
+	{
+		if (DeniedBehaviorId >= 0)
+		{
+			OutPlan.DeniedBehaviorIds.Add(static_cast<uint32>(DeniedBehaviorId));
+		}
+	}
+
+	OutPlan.SharedFragments.bHasBehaviorCohort = !OutPlan.CohortName.IsNone();
+	OutPlan.SharedFragments.BehaviorCohort.CohortName = OutPlan.CohortName;
+
+	OutPlan.Orchestration.bHasCohortRecord = !OutPlan.CohortName.IsNone();
+	if (OutPlan.Orchestration.bHasCohortRecord)
+	{
+		Flight::Orchestration::FFlightCohortRecord& Cohort = OutPlan.Orchestration.Cohort;
+		Cohort.Name = OutPlan.CohortName;
+		Cohort.Tags.Add(TEXT("Swarm"));
+		Cohort.Tags.Add(TEXT("AnchorScoped"));
+		Cohort.DesiredNavigationNetwork = OutPlan.DesiredNavigationNetwork;
+		Cohort.DesiredNavigationSubNetwork = OutPlan.DesiredNavigationSubNetwork;
+		Cohort.PreferredBehaviorId = OutPlan.PreferredBehaviorId;
+		Cohort.AllowedBehaviorIds = OutPlan.AllowedBehaviorIds;
+		Cohort.DeniedBehaviorIds = OutPlan.DeniedBehaviorIds;
+		Cohort.RequiredBehaviorContracts = OutPlan.RequiredBehaviorContracts;
+		Cohort.RequiredNavigationContracts.AddUnique(TEXT("Navigation.Intent"));
+		Cohort.RequiredNavigationContracts.AddUnique(TEXT("Navigation.Candidate"));
+		Cohort.RequiredNavigationContracts.AddUnique(TEXT("Navigation.Commit"));
+	}
+
+	return OutPlan.BatchCount >= 0;
+}
+
+bool ResolveAnchorBatchLoweringPlan(
+	const AFlightSpawnSwarmAnchor& Anchor,
+	Flight::Mass::FFlightMassBatchLoweringPlan& OutPlan)
+{
+	if (const IFlightMassLoweringAdapter* Adapter = Cast<IFlightMassLoweringAdapter>(&Anchor))
+	{
+		if (Adapter->BuildMassBatchLoweringPlan(OutPlan))
+		{
+			return true;
+		}
+	}
+
+	return BuildLegacyAnchorPlan(Anchor, OutPlan);
+}
+
+const Flight::Orchestration::FFlightExecutionPlanStep* FindExecutionPlanStepForCohort(
+	const UFlightOrchestrationSubsystem& Orchestration,
+	const FName CohortName)
+{
+	return Orchestration.GetExecutionPlan().Steps.FindByPredicate(
+		[CohortName](const Flight::Orchestration::FFlightExecutionPlanStep& Step)
+		{
+			return Step.CohortName == CohortName;
+		});
+}
+
+FResolvedSpawnPath MakeResolvedSpawnPath(const Flight::Navigation::FFlightNavigationCommitProduct& Product)
+{
+	FResolvedSpawnPath Result;
+	Result.Path = Product.Path;
+	Result.PathId = Product.PathId;
+	Result.PathLength = Product.PathLength;
+	Result.InitialLocation = Product.InitialLocation;
+	Result.bResolvedFromExecutionPlan = Product.bResolvedFromExecutionPlan;
+	return Result;
+}
+
+Flight::Navigation::FFlightNavigationCommitProduct ResolveCommitProductForBatchPlan(
+	const UFlightOrchestrationSubsystem* Orchestration,
+	const Flight::Navigation::FFlightNavigationCommitResolverContext& CommitContext,
+	UFlightWaypointPathRegistry* PathRegistry,
+	const Flight::Mass::FFlightMassBatchLoweringPlan& BatchPlan,
+	AFlightWaypointPath* DefaultPath)
+{
+	if (Orchestration && !BatchPlan.CohortName.IsNone())
+	{
+		if (const Flight::Orchestration::FFlightExecutionPlanStep* Step =
+			FindExecutionPlanStepForCohort(*Orchestration, BatchPlan.CohortName))
+		{
+			return Flight::Navigation::ResolveNavigationCommitProductForStep(
+				*Step,
+				Orchestration->GetReport(),
+				CommitContext,
+				PathRegistry,
+				DefaultPath);
+		}
+	}
+
+	Flight::Orchestration::FFlightExecutionPlanStep FallbackStep;
+	FallbackStep.CohortName = BatchPlan.CohortName;
+	return Flight::Navigation::ResolveNavigationCommitProductForStep(
+		FallbackStep,
+		Flight::Orchestration::FFlightOrchestrationReport(),
+		CommitContext,
+		PathRegistry,
+		DefaultPath);
+}
+
+FResolvedSpawnPath ResolveSpawnPathForBatchPlan(
+	const UFlightOrchestrationSubsystem* Orchestration,
+	const Flight::Navigation::FFlightNavigationCommitResolverContext& CommitContext,
+	UFlightWaypointPathRegistry* PathRegistry,
+	const Flight::Mass::FFlightMassBatchLoweringPlan& BatchPlan,
+	AFlightWaypointPath* DefaultPath)
+{
+	return MakeResolvedSpawnPath(
+		ResolveCommitProductForBatchPlan(
+			Orchestration,
+			CommitContext,
+			PathRegistry,
+			BatchPlan,
+			DefaultPath));
 }
 
 } // namespace
@@ -97,36 +303,95 @@ void UFlightSwarmSpawnerSubsystem::SpawnMassEntities(const FFlightAutopilotConfi
     UMassSpawnerSubsystem* MassSpawner = GetWorld()->GetSubsystem<UMassSpawnerSubsystem>();
     UMassEntitySubsystem* EntitySubsystem = GetWorld()->GetSubsystem<UMassEntitySubsystem>();
     if (!MassSpawner || !EntitySubsystem) return;
+    UFlightOrchestrationSubsystem* Orchestration = GetWorld()->GetSubsystem<UFlightOrchestrationSubsystem>();
+    UFlightWaypointPathRegistry* PathRegistry = GetWorld()->GetSubsystem<UFlightWaypointPathRegistry>();
 
     const FMassEntityConfig& Config = SwarmEntityConfig->GetConfig();
     const FMassEntityTemplate& Template = Config.GetOrCreateEntityTemplate(*GetWorld());
     FMassEntityTemplateID TemplateID = Template.GetTemplateID();
 
-    const float PathLength = WaypointPath->GetPathLength();
-    const FGuid PathId = WaypointPath->GetPathId();
     const float GlobalSpeed = (AutopilotConfig && AutopilotConfig->DroneSpeed > 0.f) ? AutopilotConfig->DroneSpeed : 1500.f;
 
     int32 TotalSpawned = 0;
     bool bHasAnchors = false;
+    TArray<FResolvedAnchorBatchPlan> ResolvedAnchorPlans;
 
     // Iterate Anchors and spawn per-group
     for (TActorIterator<AFlightSpawnSwarmAnchor> It(GetWorld()); It; ++It)
     {
         AFlightSpawnSwarmAnchor* Anchor = *It;
-        int32 Count = Anchor->GetDroneCount();
-        if (Count <= 0) continue;
+        if (!Anchor)
+        {
+            continue;
+        }
+
+        Flight::Mass::FFlightMassBatchLoweringPlan BatchPlan;
+        if (!ResolveAnchorBatchLoweringPlan(*Anchor, BatchPlan))
+        {
+            UE_LOG(LogFlightSwarmSpawner, Warning, TEXT("Skipping swarm anchor '%s': failed to build a Mass batch lowering plan."),
+                *Anchor->GetName());
+            continue;
+        }
+
+        const int32 Count = BatchPlan.BatchCount;
+        if (Count <= 0)
+        {
+            continue;
+        }
+
+        FResolvedAnchorBatchPlan& ResolvedPlan = ResolvedAnchorPlans.AddDefaulted_GetRef();
+        ResolvedPlan.Anchor = Anchor;
+        ResolvedPlan.Plan = MoveTemp(BatchPlan);
+    }
+
+    if (Orchestration)
+    {
+        TArray<Flight::Mass::FFlightMassBatchLoweringPlan> CohortPlans;
+        CohortPlans.Reserve(ResolvedAnchorPlans.Num());
+        for (const FResolvedAnchorBatchPlan& ResolvedPlan : ResolvedAnchorPlans)
+        {
+            CohortPlans.Add(ResolvedPlan.Plan);
+        }
+
+        const bool bReconciled = Orchestration->ReconcileBatchLoweringPlans(CohortPlans);
+        UE_LOG(
+            LogFlightSwarmSpawner,
+            Verbose,
+            TEXT("SwarmSpawner reconciled %d batch cohort plans through orchestration (changed=%s)."),
+            CohortPlans.Num(),
+            bReconciled ? TEXT("true") : TEXT("false"));
+    }
+
+    Flight::Navigation::FFlightNavigationCommitResolverContext CommitContext;
+    CommitContext.BuildFromWorld(*GetWorld());
+
+    for (const FResolvedAnchorBatchPlan& ResolvedPlan : ResolvedAnchorPlans)
+    {
+        const Flight::Mass::FFlightMassBatchLoweringPlan& BatchPlan = ResolvedPlan.Plan;
+        const int32 Count = BatchPlan.BatchCount;
+        const Flight::Navigation::FFlightNavigationCommitProduct CommitProduct =
+            ResolveCommitProductForBatchPlan(Orchestration, CommitContext, PathRegistry, BatchPlan, WaypointPath);
+        const FResolvedSpawnPath SpawnPath =
+            ResolveSpawnPathForBatchPlan(Orchestration, CommitContext, PathRegistry, BatchPlan, WaypointPath);
+        if (!SpawnPath.PathId.IsValid())
+        {
+            UE_LOG(
+                LogFlightSwarmSpawner,
+                Warning,
+                TEXT("Skipping cohort '%s': no waypoint path could be resolved for spawn commitment."),
+                *BatchPlan.CohortName.ToString());
+            continue;
+        }
 
         bHasAnchors = true;
         TArray<FMassEntityHandle> SpawnedEntities;
         MassSpawner->SpawnEntities(TemplateID, Count, FConstStructView(), nullptr, SpawnedEntities);
 
         FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
-        ApplyBehaviorCohortFragment(EntityManager, SpawnedEntities, MakeAnchorCohortName(*Anchor));
+        ApplySharedFragmentPlan(EntityManager, SpawnedEntities, BatchPlan.SharedFragments);
+        ApplyNavigationCommitSharedFragment(EntityManager, SpawnedEntities, CommitProduct);
 
-        float PhaseOffset = Anchor->GetPhaseOffsetDeg();
-        float PhaseSpread = Anchor->GetPhaseSpreadDeg();
-        float AnchorSpeed = Anchor->GetAutopilotSpeedOverride();
-        float EffectiveSpeed = (AnchorSpeed > 0.f) ? AnchorSpeed : GlobalSpeed;
+        const float EffectiveSpeed = (BatchPlan.DesiredSpeed > 0.0f) ? BatchPlan.DesiredSpeed : GlobalSpeed;
 
         for (int32 i = 0; i < SpawnedEntities.Num(); ++i)
         {
@@ -134,26 +399,27 @@ void UFlightSwarmSpawnerSubsystem::SpawnMassEntities(const FFlightAutopilotConfi
 
             if (FFlightPathFollowFragment* PathFrag = EntityManager.GetFragmentDataPtr<FFlightPathFollowFragment>(Entity))
             {
-                // Calculate distance along spline based on Phase
-                float NormalizedPhase = FMath::Fmod(PhaseOffset, 360.f) / 360.f;
-                if (Count > 1 && PhaseSpread > 0.f)
-                {
-                    float Step = (PhaseSpread / 360.f) / Count;
-                    NormalizedPhase += Step * i;
-                }
-                
-                PathFrag->PathId = PathId;
-                PathFrag->CurrentDistance = FMath::Frac(NormalizedPhase) * PathLength;
+                const float NormalizedPhase = ComputeNormalizedBatchPhase(BatchPlan, i);
+                PathFrag->PathId = SpawnPath.PathId;
+                PathFrag->CurrentDistance = NormalizedPhase * SpawnPath.PathLength;
                 PathFrag->DesiredSpeed = EffectiveSpeed;
-                PathFrag->bLooping = true; // Always loop for now
+                PathFrag->bLooping = BatchPlan.bLooping;
             }
 
             if (FFlightTransformFragment* TransFrag = EntityManager.GetFragmentDataPtr<FFlightTransformFragment>(Entity))
             {
                 // Initial placement (Processor will snap to spline next frame, but good to start close)
-                TransFrag->Location = WaypointPath->GetActorLocation(); 
+                TransFrag->Location = SpawnPath.InitialLocation;
             }
         }
+
+        UE_LOG(
+            LogFlightSwarmSpawner,
+            Verbose,
+            TEXT("Spawn cohort '%s' committed path '%s' (fromExecutionPlan=%s)."),
+            *BatchPlan.CohortName.ToString(),
+            SpawnPath.Path ? *SpawnPath.Path->GetName() : *SpawnPath.PathId.ToString(EGuidFormats::DigitsWithHyphensLower),
+            SpawnPath.bResolvedFromExecutionPlan ? TEXT("true") : TEXT("false"));
         TotalSpawned += Count;
     }
 
@@ -168,6 +434,8 @@ void UFlightSwarmSpawnerSubsystem::SpawnMassEntities(const FFlightAutopilotConfi
             
             FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
             ApplyBehaviorCohortFragment(EntityManager, SpawnedEntities, DefaultSwarmCohortName);
+            const float PathLength = WaypointPath->GetPathLength();
+            const FGuid PathId = WaypointPath->GetPathId();
             for (int32 i = 0; i < SpawnedEntities.Num(); ++i)
             {
                 FMassEntityHandle Entity = SpawnedEntities[i];

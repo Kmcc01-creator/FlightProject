@@ -15,10 +15,10 @@
 
 #if WITH_AUTOMATION_TESTS
 
-using namespace Flight::Reflection;
-using namespace Flight::Reflection::Attr;
-using namespace Flight::RowTypes;
-using namespace Flight::Mocks;
+using namespace ::Flight::Reflection;
+using namespace ::Flight::Reflection::Attr;
+using namespace ::Flight::RowTypes;
+using namespace ::Flight::Mocks;
 
 /**
  * Mock Asset Structure for Testing
@@ -130,6 +130,15 @@ bool FReflectionValidityTest::RunTest(const FString& Parameters)
     // Verify field names
     using Field0 = MetaTraits::Fields::At<0>;
     TestEqual("Field 0 name should be Guid", FString(Field0::NameCStr), TEXT("Guid"));
+
+    const FTypeRegistry::FTypeInfo* AssetInfo = FTypeRegistry::Get().Find(TEXT("FAssetMetadata"));
+    TestNotNull("FAssetMetadata should be discoverable in the runtime reflection registry", AssetInfo);
+    if (AssetInfo)
+    {
+        TestEqual("Non-VEX reflected types should classify as not VEX-capable", AssetInfo->VexCapability, EVexCapability::NotVexCapable);
+        TestNull("Non-VEX reflected types should not expose an auto-schema hook", reinterpret_cast<const void*>(AssetInfo->EnsureVexSchemaRegisteredFn));
+        TestNull("Non-VEX reflected types should not expose a schema provider callback", reinterpret_cast<const void*>(AssetInfo->ProvideVexSchemaFn));
+    }
 
     return true;
 }

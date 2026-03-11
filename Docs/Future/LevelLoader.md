@@ -1,5 +1,13 @@
 # Composable Level Loader (UE5) – Concept Notes
 
+Status: exploratory future concept.
+
+For current context, see:
+
+- [ExplorationMap.md](ExplorationMap.md)
+- [../Architecture/WorldExecutionModel.md](../Architecture/WorldExecutionModel.md)
+- [../Architecture/GameModeBootstrapBoundary.md](../Architecture/GameModeBootstrapBoundary.md)
+
 _Drafted: October 21, 2025_
 
 ## Goals

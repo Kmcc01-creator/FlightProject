@@ -6,6 +6,7 @@
 #include "Core/FlightReflection.h"
 #include "Core/FlightReactive.h"
 #include "Schema/FlightRequirementSchema.h"
+#include "Vex/FlightVexSymbolRegistry.h"
 #include "ShaderParameterMacros.h"
 #include "UniformBuffer.h"
 
