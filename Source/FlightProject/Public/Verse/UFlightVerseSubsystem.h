@@ -136,6 +136,16 @@ public:
 		TOptional<Flight::Vex::FVexSchemaBindingResult> SchemaBinding;
 		FString GeneratedVerseCode;
 		FString LastCompileDiagnostics;
+		FString SelectedBackend;
+		FString CommittedBackend;
+		TArray<FString> ImportedSymbols;
+		TArray<FString> ExportedSymbols;
+		int32 BoundaryOperatorCount = 0;
+		bool bHasBoundarySemantics = false;
+		bool bBoundarySemanticsExecutable = true;
+		bool bHasAwaitableBoundary = false;
+		bool bHasMirrorRequest = false;
+		FString BoundaryExecutionDetail;
 		Flight::Vex::FFlightCompileArtifactReport CompileArtifactReport;
 		bool bHasCompileArtifactReport = false;
 #if WITH_VERSE_VM || defined(__INTELLISENSE__)
@@ -239,8 +249,8 @@ private:
 	/** Generic dispatcher for registered native thunks */
 	static Verse::FOpResult RegistryThunk(Verse::FRunningContext Context, Verse::VValue Self, Verse::VNativeFunction::Args Arguments);
 
-	/** Async completion entrypoint for io_uring bridge */
-	void CompleteGpuWait(int64 RequestId);
+	/** Async completion entrypoint for the native GPU script bridge */
+	void CompleteGpuWait(int64 RequestId, bool bSuccess = true);
 
 	// Active execution payload consumed by VM thunk invocation.
 	uint32 ActiveVmBehaviorID = 0;

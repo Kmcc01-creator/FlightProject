@@ -18,7 +18,7 @@ ensure_executable "$HEADLESS_RUNNER" "run_tests_headless.sh"
 ensure_executable "$FULL_RUNNER" "run_tests_full.sh"
 
 PHASE1_FILTER="FlightProject.Integration.SchemaDriven+FlightProject.Integration.Vex.VerticalSlice+FlightProject.Integration.Concurrency+FlightProject.Integration.Startup.Sequencing+FlightProject.Unit.Safety.MemoryLayout+FlightProject.Vex.Parser.Spec"
-PHASE2_FILTER="FlightProject.Schema+FlightProject.Vex.RewriteRegistry+FlightProject.Vex.TreeTraits.IR.PostOrder+FlightProject.Vex.Parsing+FlightProject.Vex.Simd+FlightProject.Vex.UI+FlightProject.Verse+FlightProject.Verse.Bytecode+FlightProject.AutoRTFM+FlightProject.Gpu.Reactive+FlightProject.Logging+FlightProject.Orchestration+FlightProject.Swarm.Pipeline+FlightProject.Spatial.GpuPerception+FlightProject.Benchmark.GpuPerception+FlightProject.Reactive+FlightProject.Reflection+FlightProject.Functional"
+PHASE2_FILTER="FlightProject.Schema+FlightProject.Vex.RewriteRegistry+FlightProject.Vex.TreeTraits.IR.PostOrder+FlightProject.Vex.Parsing+FlightProject.Vex.Simd+FlightProject.Vex.UI+FlightProject.Verse+FlightProject.Verse.Bytecode+FlightProject.AutoRTFM+FlightProject.Gpu.ScriptBridge+FlightProject.Gpu.Reactive+FlightProject.Logging+FlightProject.Orchestration+FlightProject.Unit.Swarm+FlightProject.Reactive+FlightProject.Reflection+FlightProject.Functional"
 
 RUN_PHASE1=1
 RUN_PHASE2=1
@@ -234,8 +234,15 @@ run_headless_phase() {
 
 run_gpu_phase() {
     log_info "Starting Phase 3 (GPU/System, scope=${GPU_SCOPE})"
+    local gpu_stream_filter="all"
+    case "${TEST_OUTPUT_MODE_VALUE,,}" in
+        errors|error|fail|failures|summary)
+            gpu_stream_filter="errors"
+            ;;
+    esac
     set +e
-    TEST_SCOPE="$GPU_SCOPE" TEST_STREAM_FILTER="$TEST_STREAM_FILTER_VALUE" TEST_COLOR_MODE="$TEST_COLOR_MODE_VALUE" \
+    TEST_SCOPE="$GPU_SCOPE" TEST_STREAM_FILTER="$gpu_stream_filter" TEST_COLOR_MODE="$TEST_COLOR_MODE_VALUE" \
+        TEST_LOG_PROFILE="$TEST_LOG_PROFILE_VALUE" TEST_PRESET="$TEST_PRESET_VALUE" \
         "$FULL_RUNNER"
     local status=$?
     set -e

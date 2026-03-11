@@ -21,6 +21,15 @@ export FP_TEST_LOG_PROFILE="${FP_TEST_LOG_PROFILE:-full}"
 export FP_TEST_OUTPUT_MODE="${FP_TEST_OUTPUT_MODE:-all}"
 export FP_TEST_EXTRA_LOG_CMDS="${FP_TEST_EXTRA_LOG_CMDS:-}"
 export FP_TEST_PRESET="${FP_TEST_PRESET:-}"
+export FP_VIDEO_BACKEND="${FP_VIDEO_BACKEND:-auto}"
+export FP_SESSION_WRAPPER="${FP_SESSION_WRAPPER:-auto}"
+export FP_USE_GAMESCOPE="${FP_USE_GAMESCOPE:-0}"
+export FP_GAMESCOPE_ARGS="${FP_GAMESCOPE_ARGS:-}"
+export FP_VK_VALIDATION="${FP_VK_VALIDATION:-0}"
+export FP_VK_GPU_VALIDATION="${FP_VK_GPU_VALIDATION:-0}"
+export FP_VK_DEBUG_SYNC="${FP_VK_DEBUG_SYNC:-0}"
+export FP_VK_BEST_PRACTICES="${FP_VK_BEST_PRACTICES:-0}"
+export FP_VK_DEBUG_UTILS="${FP_VK_DEBUG_UTILS:-0}"
 
 # --- Colors ---
 if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
@@ -307,6 +316,119 @@ check_linux_capabilities
 
 resolve_ue_path() { echo "$UE_ROOT/$1"; }
 
+is_wayland_session() {
+    [[ "${XDG_SESSION_TYPE:-}" == "wayland" && -n "${WAYLAND_DISPLAY:-}" && -n "${XDG_RUNTIME_DIR:-}" ]]
+}
+
+load_gamescope_args() {
+    local -n out_ref="$1"
+    local raw="${2:-$FP_GAMESCOPE_ARGS}"
+
+    out_ref=()
+    if [[ -n "$raw" ]]; then
+        # shellcheck disable=SC2206 # Intentional shell-style word splitting for env/CLI parity.
+        out_ref=($raw)
+    fi
+}
+
+build_launch_prefix() {
+    local -n out_ref="$1"
+    local session_wrapper="${2:-$FP_SESSION_WRAPPER}"
+    local use_gamescope="${3:-$FP_USE_GAMESCOPE}"
+    local gamescope_args_name="${4:-}"
+    local graphical_session_required="${5:-1}"
+    local -a resolved_gamescope_args=()
+
+    out_ref=()
+
+    case "${session_wrapper,,}" in
+        auto)
+            if (( graphical_session_required )) && command -v uwsm >/dev/null 2>&1 && is_wayland_session; then
+                out_ref+=(uwsm app --)
+            fi
+            ;;
+        uwsm|session)
+            if ! command -v uwsm >/dev/null 2>&1; then
+                error "uwsm requested but not found in PATH"
+                return 1
+            fi
+            if (( graphical_session_required )) && ! is_wayland_session; then
+                log_warn "uwsm requested outside an obvious Wayland session; launch may still fail."
+            fi
+            out_ref+=(uwsm app --)
+            ;;
+        none|off|disabled|"")
+            ;;
+        *)
+            error "Unknown session wrapper '$session_wrapper' (expected: auto, uwsm, none)"
+            return 1
+            ;;
+    esac
+
+    if is_truthy "$use_gamescope"; then
+        if ! command -v gamescope >/dev/null 2>&1; then
+            error "gamescope requested but not found in PATH"
+            return 1
+        fi
+
+        if [[ -n "$gamescope_args_name" ]]; then
+            local -n gamescope_args_ref="$gamescope_args_name"
+            resolved_gamescope_args=("${gamescope_args_ref[@]}")
+        fi
+
+        if [[ ${#resolved_gamescope_args[@]} -eq 0 ]]; then
+            if is_wayland_session; then
+                resolved_gamescope_args=(--backend wayland --expose-wayland)
+            else
+                resolved_gamescope_args=(--expose-wayland)
+            fi
+        fi
+
+        out_ref+=(gamescope "${resolved_gamescope_args[@]}" --)
+    fi
+}
+
+build_vulkan_validation_args() {
+    local -n out_ref="$1"
+    local validation_level="${2:-$FP_VK_VALIDATION}"
+    local gpu_validation="${3:-$FP_VK_GPU_VALIDATION}"
+    local debug_sync="${4:-$FP_VK_DEBUG_SYNC}"
+    local best_practices="${5:-$FP_VK_BEST_PRACTICES}"
+    local debug_utils="${6:-$FP_VK_DEBUG_UTILS}"
+    local effective_validation="$validation_level"
+
+    out_ref=()
+
+    if [[ ! "$effective_validation" =~ ^[0-5]$ ]]; then
+        error "Invalid Vulkan validation level '$effective_validation' (expected 0-5)"
+        return 1
+    fi
+
+    if (( effective_validation == 0 )) && { is_truthy "$gpu_validation" || is_truthy "$debug_sync" || is_truthy "$best_practices"; }; then
+        effective_validation=2
+    fi
+
+    if (( effective_validation > 0 )); then
+        out_ref+=("-vulkanvalidation=${effective_validation}")
+    fi
+
+    if is_truthy "$gpu_validation"; then
+        out_ref+=("-gpuvalidation")
+    fi
+
+    if is_truthy "$debug_sync"; then
+        out_ref+=("-vulkandebugsync")
+    fi
+
+    if is_truthy "$best_practices"; then
+        out_ref+=("-vulkanbestpractices")
+    fi
+
+    if is_truthy "$debug_utils"; then
+        out_ref+=("-vulkandebugutils")
+    fi
+}
+
 configure_video_backend() {
     local backend="${1:-auto}"
     case "$backend" in
@@ -336,3 +458,7 @@ export -f build_test_log_cmds
 export -f test_preset_exists
 export -f resolve_test_preset_value
 export -f apply_test_preset_overrides
+export -f is_wayland_session
+export -f load_gamescope_args
+export -f build_launch_prefix
+export -f build_vulkan_validation_args

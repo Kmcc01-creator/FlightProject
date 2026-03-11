@@ -117,6 +117,140 @@ void AddSymbolUse(
 	}
 }
 
+void CollectBoundSymbolsInExpression(
+	const FVexProgramAst& Program,
+	const int32 ExpressionNodeIndex,
+	const TMap<FString, int32>& BoundIndexByName,
+	TArray<int32>& OutBoundSymbolIndices)
+{
+	if (ExpressionNodeIndex == INDEX_NONE || !Program.Expressions.IsValidIndex(ExpressionNodeIndex))
+	{
+		return;
+	}
+
+	TArray<int32> Stack;
+	TSet<int32> Visited;
+	Stack.Add(ExpressionNodeIndex);
+
+	while (Stack.Num() > 0)
+	{
+		const int32 NodeIndex = Stack.Pop(EAllowShrinking::No);
+		if (Visited.Contains(NodeIndex) || !Program.Expressions.IsValidIndex(NodeIndex))
+		{
+			continue;
+		}
+
+		Visited.Add(NodeIndex);
+		const FVexExpressionAst& Expression = Program.Expressions[NodeIndex];
+		if (Expression.Kind == EVexExprKind::SymbolRef)
+		{
+			if (const int32* BoundSymbolIndex = BoundIndexByName.Find(Expression.Lexeme))
+			{
+				OutBoundSymbolIndices.AddUnique(*BoundSymbolIndex);
+			}
+		}
+
+		if (Expression.LeftNodeIndex != INDEX_NONE)
+		{
+			Stack.Add(Expression.LeftNodeIndex);
+		}
+		if (Expression.RightNodeIndex != INDEX_NONE)
+		{
+			Stack.Add(Expression.RightNodeIndex);
+		}
+		for (const int32 ArgumentNodeIndex : Expression.ArgumentNodeIndices)
+		{
+			if (ArgumentNodeIndex != INDEX_NONE)
+			{
+				Stack.Add(ArgumentNodeIndex);
+			}
+		}
+	}
+}
+
+void AddBoundaryUse(
+	FVexSchemaBindingResult& Result,
+	const FVexProgramAst& Program,
+	const int32 StatementIndex,
+	const int32 ExpressionNodeIndex,
+	const TMap<FString, int32>& BoundIndexByName)
+{
+	if (!Program.Expressions.IsValidIndex(ExpressionNodeIndex))
+	{
+		return;
+	}
+
+	const FVexExpressionAst& Expression = Program.Expressions[ExpressionNodeIndex];
+	if (Expression.Kind == EVexExprKind::PipeIn || Expression.Kind == EVexExprKind::PipeOut)
+	{
+		Result.bHasBoundaryOperators = true;
+
+		FVexSchemaBoundaryUse& BoundaryUse = Result.BoundaryUses.AddDefaulted_GetRef();
+		BoundaryUse.StatementIndex = StatementIndex;
+		BoundaryUse.ExpressionNodeIndex = ExpressionNodeIndex;
+		BoundaryUse.OperatorKind = Expression.Kind;
+		BoundaryUse.Metadata.Direction = Expression.Kind == EVexExprKind::PipeIn
+			? EVexBoundaryDirection::Import
+			: EVexBoundaryDirection::Export;
+
+		TArray<int32> LeftSymbols;
+		TArray<int32> RightSymbols;
+		CollectBoundSymbolsInExpression(Program, Expression.LeftNodeIndex, BoundIndexByName, LeftSymbols);
+		CollectBoundSymbolsInExpression(Program, Expression.RightNodeIndex, BoundIndexByName, RightSymbols);
+
+		const bool bLeftHasSymbols = LeftSymbols.Num() > 0;
+		const bool bRightHasSymbols = RightSymbols.Num() > 0;
+		BoundaryUse.Metadata.PayloadKind = (bLeftHasSymbols || bRightHasSymbols)
+			? EVexBoundaryPayloadKind::Symbol
+			: EVexBoundaryPayloadKind::Value;
+
+		if (Expression.Kind == EVexExprKind::PipeIn)
+		{
+			if (bRightHasSymbols)
+			{
+				BoundaryUse.SourceBoundSymbolIndex = RightSymbols[0];
+				BoundaryUse.SourceSymbolName = Result.BoundSymbols[RightSymbols[0]].SymbolName;
+			}
+			if (bLeftHasSymbols)
+			{
+				BoundaryUse.DestinationBoundSymbolIndex = LeftSymbols[0];
+				BoundaryUse.DestinationSymbolName = Result.BoundSymbols[LeftSymbols[0]].SymbolName;
+				Result.ImportedSymbols.Add(BoundaryUse.DestinationSymbolName);
+			}
+		}
+		else
+		{
+			if (bLeftHasSymbols)
+			{
+				BoundaryUse.SourceBoundSymbolIndex = LeftSymbols[0];
+				BoundaryUse.SourceSymbolName = Result.BoundSymbols[LeftSymbols[0]].SymbolName;
+				Result.ExportedSymbols.Add(BoundaryUse.SourceSymbolName);
+			}
+			if (bRightHasSymbols)
+			{
+				BoundaryUse.DestinationBoundSymbolIndex = RightSymbols[0];
+				BoundaryUse.DestinationSymbolName = Result.BoundSymbols[RightSymbols[0]].SymbolName;
+			}
+		}
+	}
+
+	if (Expression.LeftNodeIndex != INDEX_NONE)
+	{
+		AddBoundaryUse(Result, Program, StatementIndex, Expression.LeftNodeIndex, BoundIndexByName);
+	}
+	if (Expression.RightNodeIndex != INDEX_NONE)
+	{
+		AddBoundaryUse(Result, Program, StatementIndex, Expression.RightNodeIndex, BoundIndexByName);
+	}
+	for (const int32 ArgumentNodeIndex : Expression.ArgumentNodeIndices)
+	{
+		if (ArgumentNodeIndex != INDEX_NONE)
+		{
+			AddBoundaryUse(Result, Program, StatementIndex, ArgumentNodeIndex, BoundIndexByName);
+		}
+	}
+}
+
 } // namespace
 
 const FVexSchemaBoundSymbol* FVexSchemaBindingResult::FindBoundSymbolByName(const FString& Name) const
@@ -375,6 +509,11 @@ FVexSchemaBindingResult FVexSchemaBinder::BindProgram(
 				}
 				AddSymbolUse(Result, StatementBinding, StatementIndex, TokenIndex, *BoundSymbolIndex, EVexSchemaAccessKind::Read);
 			}
+		}
+
+		if (Statement.ExpressionNodeIndex != INDEX_NONE)
+		{
+			AddBoundaryUse(Result, Program, StatementIndex, Statement.ExpressionNodeIndex, BoundIndexByName);
 		}
 	}
 

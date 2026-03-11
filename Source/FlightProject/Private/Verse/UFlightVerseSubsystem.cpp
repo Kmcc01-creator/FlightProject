@@ -1,6 +1,7 @@
 // Copyright Kelly Rey Wilson. All Rights Reserved.
 
 #include "Verse/UFlightVerseSubsystem.h"
+#include "Verse/FlightGpuScriptBridge.h"
 #include "Vex/FlightCompileArtifacts.h"
 #include "Vex/FlightVexBackendCapabilities.h"
 #include "Vex/FlightVexParser.h"
@@ -135,6 +136,11 @@ namespace
 
 		for (const Flight::Vex::FVexExpressionAst& Expression : Program.Expressions)
 		{
+			if (Expression.Kind == Flight::Vex::EVexExprKind::PipeIn || Expression.Kind == Flight::Vex::EVexExprKind::PipeOut)
+			{
+				OutReason = TEXT("Boundary operators are not executable in the native fallback path.");
+				return false;
+			}
 			if (Expression.Kind == Flight::Vex::EVexExprKind::FunctionCall && !IsSupportedNativeFunction(Expression.Lexeme))
 			{
 				OutReason = FString::Printf(TEXT("Unsupported function '%s' in native fallback."), *Expression.Lexeme);
@@ -807,6 +813,8 @@ void UFlightVerseSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
 
+	Collection.InitializeDependency<UFlightGpuScriptBridgeSubsystem>();
+
 	// Cache symbol definitions for VEX parsing
 	const Flight::Schema::FManifestData Manifest = Flight::Schema::BuildManifestData();
 	SymbolDefinitions = Flight::Vex::BuildSymbolDefinitionsFromManifest(Manifest);
@@ -1008,11 +1016,51 @@ bool UFlightVerseSubsystem::ExecuteOnMassSchemaHost(
 
 bool UFlightVerseSubsystem::ExecuteOnGpuSchemaHost(const FVerseBehavior& Behavior)
 {
+	UWorld* World = GetWorld();
+	UFlightGpuScriptBridgeSubsystem* GpuBridge = World ? World->GetSubsystem<UFlightGpuScriptBridgeSubsystem>() : nullptr;
+	if (!GpuBridge)
+	{
+		UE_LOG(
+			LogFlightVerseSubsystem,
+			Verbose,
+			TEXT("Behavior %u resolved to explicit GPU storage hosting, but no GPU script bridge is available."),
+			Behavior.CompileArtifactReport.BehaviorID);
+		return false;
+	}
+
+	FFlightGpuInvocation Invocation;
+	Invocation.ProgramId = Behavior.BoundTypeStableName.IsNone()
+		? FName(*FString::Printf(TEXT("Behavior_%u"), Behavior.CompileArtifactReport.BehaviorID))
+		: Behavior.BoundTypeStableName;
+	Invocation.BehaviorId = Behavior.CompileArtifactReport.BehaviorID;
+	Invocation.LatencyClass = EFlightGpuLatencyClass::NextFrameGpu;
+	Invocation.bAwaitRequested = Behavior.bHasAwaitableBoundary;
+	Invocation.bMirrorRequested = Behavior.bHasMirrorRequest;
+	Invocation.bAllowDeferredExternalSignal = true;
+
+	for (const FString& ImportedSymbol : Behavior.ImportedSymbols)
+	{
+		FFlightGpuResourceBinding& Binding = Invocation.ResourceBindings.AddDefaulted_GetRef();
+		Binding.Name = FName(*ImportedSymbol);
+		Binding.SymbolName = ImportedSymbol;
+	}
+
+	for (const FString& ExportedSymbol : Behavior.ExportedSymbols)
+	{
+		FFlightGpuResourceBinding& Binding = Invocation.ResourceBindings.AddDefaulted_GetRef();
+		Binding.Name = FName(*ExportedSymbol);
+		Binding.SymbolName = ExportedSymbol;
+	}
+
+	FString SubmissionDetail;
+	const FFlightGpuSubmissionHandle Handle = GpuBridge->Submit(Invocation, SubmissionDetail);
 	UE_LOG(
 		LogFlightVerseSubsystem,
 		Verbose,
-		TEXT("Behavior %u resolved to explicit GPU storage hosting, but no runtime GPU host is available yet."),
-		Behavior.CompileArtifactReport.BehaviorID);
+		TEXT("Behavior %u resolved to explicit GPU storage hosting. BridgeHandle=%llu Detail=%s"),
+		Behavior.CompileArtifactReport.BehaviorID,
+		static_cast<unsigned long long>(Handle.Value),
+		*SubmissionDetail);
 	return false;
 }
 
@@ -1046,6 +1094,16 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 	Behavior.SchemaBinding.Reset();
 	Behavior.GeneratedVerseCode.Reset();
 	Behavior.LastCompileDiagnostics.Reset();
+	Behavior.SelectedBackend.Reset();
+	Behavior.CommittedBackend.Reset();
+	Behavior.ImportedSymbols.Reset();
+	Behavior.ExportedSymbols.Reset();
+	Behavior.BoundaryOperatorCount = 0;
+	Behavior.bHasBoundarySemantics = false;
+	Behavior.bBoundarySemanticsExecutable = true;
+	Behavior.bHasAwaitableBoundary = false;
+	Behavior.bHasMirrorRequest = false;
+	Behavior.BoundaryExecutionDetail.Reset();
 	Behavior.SimdCompileDiagnostics.Reset();
 	Behavior.CompileArtifactReport = Flight::Vex::FFlightCompileArtifactReport();
 	Behavior.bHasCompileArtifactReport = false;
@@ -1096,7 +1154,13 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 		ArtifactReport.BackendReports.Reset();
 		ArtifactReport.ReadSymbols.Reset();
 		ArtifactReport.WrittenSymbols.Reset();
+		ArtifactReport.ImportedSymbols.Reset();
+		ArtifactReport.ExportedSymbols.Reset();
 		ArtifactReport.ReferencedStorageKinds.Reset();
+		ArtifactReport.BoundaryOperatorCount = 0;
+		ArtifactReport.bHasBoundaryOperators = false;
+		ArtifactReport.bHasAwaitableBoundary = false;
+		ArtifactReport.bHasMirrorRequest = false;
 		ArtifactReport.AvailableArtifacts.Add(Flight::Vex::EFlightCompileArtifactKind::CompileTelemetry);
 
 		if (Behavior.SchemaBinding.IsSet())
@@ -1105,6 +1169,14 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 			ArtifactReport.ReadSymbols.Sort();
 			ArtifactReport.WrittenSymbols = Behavior.SchemaBinding->WrittenSymbols.Array();
 			ArtifactReport.WrittenSymbols.Sort();
+			ArtifactReport.ImportedSymbols = Behavior.SchemaBinding->ImportedSymbols.Array();
+			ArtifactReport.ImportedSymbols.Sort();
+			ArtifactReport.ExportedSymbols = Behavior.SchemaBinding->ExportedSymbols.Array();
+			ArtifactReport.ExportedSymbols.Sort();
+			ArtifactReport.BoundaryOperatorCount = Behavior.SchemaBinding->BoundaryUses.Num();
+			ArtifactReport.bHasBoundaryOperators = Behavior.SchemaBinding->bHasBoundaryOperators;
+			ArtifactReport.bHasAwaitableBoundary = Behavior.SchemaBinding->bHasAwaitableBoundary;
+			ArtifactReport.bHasMirrorRequest = Behavior.SchemaBinding->bHasMirrorRequest;
 
 			TSet<FString> ReferencedStorageKinds;
 			for (const Flight::Vex::FVexSchemaSymbolUse& Use : Behavior.SchemaBinding->SymbolUses)
@@ -1157,6 +1229,33 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 		ArtifactReport.WarmupMetrics.CacheFillCount = Behavior.bHasExecutableProcedure ? 1 : 0;
 		ArtifactReport.WarmupMetrics.RegistryMissCount = Behavior.bUsesVmEntryPoint ? 0 : (Behavior.bUsesNativeFallback ? 1 : 0);
 		Flight::Vex::FinalizeWarmupMetrics(ArtifactReport.WarmupMetrics);
+
+		Behavior.SelectedBackend = ArtifactReport.SelectedBackend;
+		Behavior.CommittedBackend = ArtifactReport.CommittedBackend;
+		Behavior.ImportedSymbols = ArtifactReport.ImportedSymbols;
+		Behavior.ExportedSymbols = ArtifactReport.ExportedSymbols;
+		Behavior.BoundaryOperatorCount = ArtifactReport.BoundaryOperatorCount;
+		Behavior.bHasBoundarySemantics = ArtifactReport.bHasBoundaryOperators;
+		Behavior.bBoundarySemanticsExecutable = !ArtifactReport.bHasBoundaryOperators;
+		Behavior.bHasAwaitableBoundary = ArtifactReport.bHasAwaitableBoundary;
+		Behavior.bHasMirrorRequest = ArtifactReport.bHasMirrorRequest;
+		Behavior.BoundaryExecutionDetail = Behavior.bHasBoundarySemantics
+			? FString::Printf(
+				TEXT("Boundary-aware semantics are preserved for reporting only in the current runtime path. Selected backend=%s; committed backend=%s."),
+				*ArtifactReport.SelectedBackend,
+				*ArtifactReport.CommittedBackend)
+			: FString();
+		if (!Behavior.BoundaryExecutionDetail.IsEmpty()
+			&& !Behavior.LastCompileDiagnostics.Contains(Behavior.BoundaryExecutionDetail))
+		{
+			if (!Behavior.LastCompileDiagnostics.IsEmpty())
+			{
+				Behavior.LastCompileDiagnostics += TEXT("\n");
+			}
+			Behavior.LastCompileDiagnostics += Behavior.BoundaryExecutionDetail;
+			ArtifactReport.Diagnostics = Behavior.LastCompileDiagnostics;
+		}
+
 		Behavior.CompileArtifactReport = ArtifactReport;
 		Behavior.bHasCompileArtifactReport = true;
 
@@ -2131,7 +2230,7 @@ Verse::FOpResult UFlightVerseSubsystem::RegistryThunk(Verse::FRunningContext Con
 namespace
 {
 	/**
-	 * WaitOnGpu_Thunk: VEX/Verse native function to suspend and wait for GPU io_uring signal.
+	 * WaitOnGpu_Thunk: VEX/Verse native function to suspend and wait for a GPU bridge submission.
 	 */
 	Verse::FOpResult WaitOnGpu_Thunk(Verse::FRunningContext Context, Verse::VValue Self, Verse::VNativeFunction::Args Arguments)
 	{
@@ -2139,23 +2238,60 @@ namespace
 		UFlightVerseSubsystem* Subsystem = Cast<UFlightVerseSubsystem>(Self.AsUObject());
 		if (!Subsystem) return FOpResult(FOpResult::Error);
 
-		// 1. Create a placeholder to represent the future value (bool)
+		if (Arguments.Num() < 1 || !Arguments[0].IsInt32())
+		{
+			return FOpResult(FOpResult::Error);
+		}
+
+		UWorld* World = Subsystem->GetWorld();
+		UFlightGpuScriptBridgeSubsystem* GpuBridge = World ? World->GetSubsystem<UFlightGpuScriptBridgeSubsystem>() : nullptr;
+		if (!GpuBridge)
+		{
+			return FOpResult(FOpResult::Error);
+		}
+
+		const int64 TrackingId = static_cast<int64>(Arguments[0].AsInt32());
+		FFlightGpuInvocation Invocation;
+		Invocation.ProgramId = TEXT("Verse.WaitOnGpu");
+		Invocation.LatencyClass = EFlightGpuLatencyClass::CpuObserved;
+		Invocation.ExternalTrackingId = TrackingId;
+		Invocation.bAwaitRequested = true;
+
+		FString SubmissionDetail;
+		const FFlightGpuSubmissionHandle Handle = GpuBridge->Submit(Invocation, SubmissionDetail);
+		if (!Handle.IsValid())
+		{
+			return FOpResult(FOpResult::Error);
+		}
+
 		VPlaceholder& Placeholder = VPlaceholder::New(Context, 0);
+		Subsystem->PendingReadbacks.Add(static_cast<int64>(Handle.Value), TWriteBarrier<VPlaceholder>(Context, Placeholder));
 
-		// 2. Register with GPU bridge (Mocking a request ID for now)
-		// In a real system, we'd get this from UFlightGpuPerceptionSubsystem.
-		static int64 MockRequestId = 1000;
-		int64 RequestId = MockRequestId++;
+		FString AwaitReason;
+		const TWeakObjectPtr<UFlightVerseSubsystem> WeakSubsystem(Subsystem);
+		const bool bAwaitRegistered = GpuBridge->Await(
+			Handle,
+			[WeakSubsystem, Handle](EFlightGpuSubmissionStatus Status, const FString&)
+			{
+				if (UFlightVerseSubsystem* ResolvedSubsystem = WeakSubsystem.Get())
+				{
+					ResolvedSubsystem->CompleteGpuWait(
+						static_cast<int64>(Handle.Value),
+						Status == EFlightGpuSubmissionStatus::Completed);
+				}
+			},
+			AwaitReason);
+		if (!bAwaitRegistered)
+		{
+			Subsystem->PendingReadbacks.Remove(static_cast<int64>(Handle.Value));
+			return FOpResult(FOpResult::Error);
+		}
 
-		// Wrap the placeholder in a WriteBarrier to root it for the Garbage Collector
-		Subsystem->PendingReadbacks.Add(RequestId, TWriteBarrier<VPlaceholder>(Context, Placeholder));
-
-		// 3. Suspend current behavior execution
 		return FOpResult(FOpResult::Return, VValue::Placeholder(Placeholder));
 	}
 }
 
-void UFlightVerseSubsystem::CompleteGpuWait(int64 RequestId)
+void UFlightVerseSubsystem::CompleteGpuWait(int64 RequestId, const bool bSuccess)
 {
 	if (Verse::TWriteBarrier<Verse::VPlaceholder>* Found = PendingReadbacks.Find(RequestId))
 	{
@@ -2170,7 +2306,7 @@ void UFlightVerseSubsystem::CompleteGpuWait(int64 RequestId)
 			Verse::VPlaceholder* Placeholder = const_cast<Verse::VPlaceholder*>(&BarrierCopy.Get(VerseContext));
 
 			// Fulfill the placeholder to wake the behavior
-			Placeholder->Fill(VerseContext, Verse::VValue::FromBool(true));
+			Placeholder->Fill(VerseContext, Verse::VValue::FromBool(bSuccess));
 		});
 
 		// Once the behavior wakes up, it might have registered new deferred behaviors.
@@ -2194,7 +2330,7 @@ void UFlightVerseSubsystem::RegisterNativeVerseFunctions()
 		FAllocationContext AllocContext(VerseContext);
 
 		VUniqueString& WaitName = VUniqueString::New(AllocContext, "WaitOnGpu");
-		VNativeFunction& WaitFn = VNativeFunction::New(AllocContext, 0, &WaitOnGpu_Thunk, WaitName, GlobalFalse());
+		VNativeFunction& WaitFn = VNativeFunction::New(AllocContext, 1, &WaitOnGpu_Thunk, WaitName, GlobalFalse());
 
 		// Note: Mapping in VVM's global namespace for Behaviors is pending.
 	});

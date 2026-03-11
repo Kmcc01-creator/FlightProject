@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Vex/FlightVexBoundaryTypes.h"
 #include "Vex/FlightVexBackendCapabilities.h"
 #include "Vex/Frontend/VexAst.h"
 #include "Vex/Frontend/VexParser.h"
@@ -55,6 +56,18 @@ struct FVexSchemaStatementBinding
 	TArray<int32> WrittenSymbols;
 };
 
+struct FVexSchemaBoundaryUse
+{
+	int32 StatementIndex = INDEX_NONE;
+	int32 ExpressionNodeIndex = INDEX_NONE;
+	EVexExprKind OperatorKind = EVexExprKind::Unknown;
+	int32 SourceBoundSymbolIndex = INDEX_NONE;
+	int32 DestinationBoundSymbolIndex = INDEX_NONE;
+	FString SourceSymbolName;
+	FString DestinationSymbolName;
+	FVexBoundaryMetadata Metadata;
+};
+
 struct FVexBackendBindingDiagnostic
 {
 	EVexBackendKind Backend = EVexBackendKind::NativeScalar;
@@ -74,8 +87,14 @@ struct FLIGHTPROJECT_API FVexSchemaBindingResult
 	TArray<FVexSchemaFragmentBinding> FragmentBindings;
 	TArray<FVexSchemaSymbolUse> SymbolUses;
 	TArray<FVexSchemaStatementBinding> StatementBindings;
+	TArray<FVexSchemaBoundaryUse> BoundaryUses;
 	TSet<FString> ReadSymbols;
 	TSet<FString> WrittenSymbols;
+	TSet<FString> ImportedSymbols;
+	TSet<FString> ExportedSymbols;
+	bool bHasBoundaryOperators = false;
+	bool bHasAwaitableBoundary = false;
+	bool bHasMirrorRequest = false;
 	TArray<FVexBackendBindingDiagnostic> BackendDiagnostics;
 	TMap<EVexBackendKind, bool> BackendLegality;
 

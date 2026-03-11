@@ -28,6 +28,20 @@ TSharedPtr<FVexIrProgram> FVexIrCompiler::Compile(const FVexProgramAst& Program,
 		Invalid.Index = INDEX_NONE;
 		return Invalid;
 	};
+
+	for (const FVexExpressionAst& Expression : Program.Expressions)
+	{
+		if (Expression.Kind == EVexExprKind::PipeIn || Expression.Kind == EVexExprKind::PipeOut)
+		{
+			AppendError(TEXT("IR lowering failed: boundary operators must remain in SchemaIR/runtime planning and are not supported in low-level IR."));
+			return nullptr;
+		}
+		if (Expression.Kind == EVexExprKind::Pipe)
+		{
+			AppendError(TEXT("IR lowering failed: pipe composition is not yet supported in low-level IR."));
+			return nullptr;
+		}
+	}
 	
 	TMap<FString, int32> SymbolToIndex;
 	auto GetSymbolIndex = [&](const FString& Name)

@@ -9,9 +9,19 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "$SCRIPT_DIR/env_common.sh"
 
 VIDEO_BACKEND="${FP_VIDEO_BACKEND:-wayland}"
+SESSION_WRAPPER="${FP_SESSION_WRAPPER:-auto}"
+USE_GAMESCOPE=0
+GAMESCOPE_ARGS=()
 ENABLE_TRACE=0
 ENABLE_GPU_DEBUG=0
 EXTRA_ARGS=()
+VULKAN_VALIDATION_ARGS=()
+
+load_gamescope_args GAMESCOPE_ARGS
+if is_truthy "${FP_USE_GAMESCOPE:-0}"; then
+    USE_GAMESCOPE=1
+fi
+build_vulkan_validation_args VULKAN_VALIDATION_ARGS
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -37,7 +47,10 @@ EDITOR_BIN=$(resolve_ue_path "Engine/Binaries/Linux/UnrealEditor")
 ensure_project_file
 ensure_executable "$EDITOR_BIN" "UnrealEditor binary"
 
-CMD=("$EDITOR_BIN" "$PROJECT_FILE" /Game/Maps/PersistentFlightTest -Vulkan)
+LAUNCH_PREFIX=()
+build_launch_prefix LAUNCH_PREFIX "$SESSION_WRAPPER" "$USE_GAMESCOPE" GAMESCOPE_ARGS 1
+
+CMD=("${LAUNCH_PREFIX[@]}" "$EDITOR_BIN" "$PROJECT_FILE" /Game/Maps/PersistentFlightTest -Vulkan)
 
 # Critical extensions for zero-syscall io_uring integration
 CMD+=("-vulkanextension=VK_KHR_external_semaphore_fd")
@@ -51,6 +64,10 @@ fi
 
 if (( ENABLE_GPU_DEBUG )); then
     CMD+=("-d3ddebug" "-gpucrashdebugging")
+fi
+
+if [[ ${#VULKAN_VALIDATION_ARGS[@]} -gt 0 ]]; then
+    CMD+=("${VULKAN_VALIDATION_ARGS[@]}")
 fi
 
 if [[ ${#EXTRA_ARGS[@]} -gt 0 ]]; then

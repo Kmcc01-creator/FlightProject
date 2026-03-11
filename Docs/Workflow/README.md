@@ -14,6 +14,7 @@ Use this folder when you need to know what is current, what is blocked, and what
 
 - [OrchestrationImplementationPlan.md](OrchestrationImplementationPlan.md)
 - [SchemaIrImplementationPlan.md](SchemaIrImplementationPlan.md)
+- [BoundaryAwareIrImplementationPlan.md](BoundaryAwareIrImplementationPlan.md)
 - [ReflectionGenerativeTestingRecoveryPlan.md](ReflectionGenerativeTestingRecoveryPlan.md)
 - [DocumentationConsolidationPlan.md](DocumentationConsolidationPlan.md)
 

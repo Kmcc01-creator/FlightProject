@@ -277,6 +277,17 @@ void AddNameArrayToJson(const TArray<FName>& Names, const TCHAR* FieldName, TSha
 	Object->SetArrayField(FieldName, Values);
 }
 
+void AddStringArrayToJson(const TArray<FString>& Strings, const TCHAR* FieldName, TSharedRef<FJsonObject> Object)
+{
+	TArray<TSharedPtr<FJsonValue>> Values;
+	Values.Reserve(Strings.Num());
+	for (const FString& Value : Strings)
+	{
+		Values.Add(MakeShared<FJsonValueString>(Value));
+	}
+	Object->SetArrayField(FieldName, Values);
+}
+
 void AddVectorToJson(const FVector& Value, const TCHAR* FieldName, TSharedRef<FJsonObject> Object)
 {
 	TSharedRef<FJsonObject> VectorObject = MakeShared<FJsonObject>();
@@ -1383,6 +1394,16 @@ FString UFlightOrchestrationSubsystem::BuildReportJson() const
 		BehaviorObject->SetBoolField(TEXT("executable"), Behavior.bExecutable);
 		BehaviorObject->SetStringField(TEXT("resolvedDomain"), Flight::Orchestration::ExecutionDomainToString(Behavior.ResolvedDomain));
 		Flight::Orchestration::AddNameArrayToJson(Behavior.RequiredContracts, TEXT("requiredContracts"), BehaviorObject);
+		BehaviorObject->SetStringField(TEXT("selectedBackend"), Behavior.SelectedBackend);
+		BehaviorObject->SetStringField(TEXT("committedBackend"), Behavior.CommittedBackend);
+		Flight::Orchestration::AddStringArrayToJson(Behavior.ImportedSymbols, TEXT("importedSymbols"), BehaviorObject);
+		Flight::Orchestration::AddStringArrayToJson(Behavior.ExportedSymbols, TEXT("exportedSymbols"), BehaviorObject);
+		BehaviorObject->SetNumberField(TEXT("boundaryOperatorCount"), Behavior.BoundaryOperatorCount);
+		BehaviorObject->SetBoolField(TEXT("hasBoundarySemantics"), Behavior.bHasBoundarySemantics);
+		BehaviorObject->SetBoolField(TEXT("boundarySemanticsExecutable"), Behavior.bBoundarySemanticsExecutable);
+		BehaviorObject->SetBoolField(TEXT("hasAwaitableBoundary"), Behavior.bHasAwaitableBoundary);
+		BehaviorObject->SetBoolField(TEXT("hasMirrorRequest"), Behavior.bHasMirrorRequest);
+		BehaviorObject->SetStringField(TEXT("boundaryExecutionDetail"), Behavior.BoundaryExecutionDetail);
 		BehaviorObject->SetStringField(TEXT("diagnostics"), Behavior.Diagnostics);
 		BehaviorValues.Add(MakeShared<FJsonValueObject>(BehaviorObject));
 	}
@@ -1686,7 +1707,18 @@ void UFlightOrchestrationSubsystem::IngestBehaviors()
 		Record.FrameInterval = Pair.Value.FrameInterval;
 		Record.bAsync = Pair.Value.bIsAsync;
 		Record.ResolvedDomain = Flight::Orchestration::ResolveExecutionDomain(Pair.Value);
-		Record.bExecutable = Pair.Value.bHasExecutableProcedure || Pair.Value.bUsesNativeFallback || Pair.Value.SimdPlan.IsValid() || (Record.ResolvedDomain == Flight::Orchestration::EFlightExecutionDomain::Gpu);
+		Record.SelectedBackend = Pair.Value.SelectedBackend;
+		Record.CommittedBackend = Pair.Value.CommittedBackend;
+		Record.ImportedSymbols = Pair.Value.ImportedSymbols;
+		Record.ExportedSymbols = Pair.Value.ExportedSymbols;
+		Record.BoundaryOperatorCount = Pair.Value.BoundaryOperatorCount;
+		Record.bHasBoundarySemantics = Pair.Value.bHasBoundarySemantics;
+		Record.bBoundarySemanticsExecutable = Pair.Value.bBoundarySemanticsExecutable;
+		Record.bHasAwaitableBoundary = Pair.Value.bHasAwaitableBoundary;
+		Record.bHasMirrorRequest = Pair.Value.bHasMirrorRequest;
+		Record.BoundaryExecutionDetail = Pair.Value.BoundaryExecutionDetail;
+		Record.bExecutable = (Pair.Value.bHasExecutableProcedure || Pair.Value.bUsesNativeFallback || Pair.Value.SimdPlan.IsValid() || (Record.ResolvedDomain == Flight::Orchestration::EFlightExecutionDomain::Gpu))
+			&& (!Record.bHasBoundarySemantics || Record.bBoundarySemanticsExecutable);
 		Record.Diagnostics = Pair.Value.LastCompileDiagnostics;
 		RegisterBehavior(Pair.Key, Record);
 	}

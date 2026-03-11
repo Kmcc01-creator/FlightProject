@@ -14,6 +14,7 @@ DO_BUILD=1
 DO_COOK=1
 EXTRA_ARGS=()
 VIDEO_BACKEND="${FP_VIDEO_BACKEND:-auto}"
+SESSION_WRAPPER="${FP_SESSION_WRAPPER:-auto}"
 USE_GAMESCOPE=0
 GAMESCOPE_ARGS=()
 WINDOW_MODE=""
@@ -21,6 +22,7 @@ WINDOW_SIZE=""
 WINDOW_RES_X=""
 WINDOW_RES_Y=""
 WINDOW_LOG_MESSAGE=""
+VULKAN_VALIDATION_ARGS=()
 
 parse_window_size() {
     local size="$1"
@@ -112,18 +114,11 @@ if [[ -z "${NUGET_AUDIT_MODE:-}" ]]; then
     export NUGET_AUDIT_MODE="none"
 fi
 
-if [[ -n "${FP_USE_GAMESCOPE:-}" ]]; then
-    case "${FP_USE_GAMESCOPE,,}" in
-        1|true|yes|on)
-            USE_GAMESCOPE=1
-            ;;
-    esac
+load_gamescope_args GAMESCOPE_ARGS
+if is_truthy "${FP_USE_GAMESCOPE:-0}"; then
+    USE_GAMESCOPE=1
 fi
-
-if [[ -n "${FP_GAMESCOPE_ARGS:-}" ]]; then
-    # shellcheck disable=SC2206 # intentional word splitting so users can pass a string with spaces.
-    GAMESCOPE_ARGS=(${FP_GAMESCOPE_ARGS})
-fi
+build_vulkan_validation_args VULKAN_VALIDATION_ARGS
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -189,6 +184,26 @@ while [[ $# -gt 0 ]]; do
             VIDEO_BACKEND="x11"
             shift
             ;;
+        --session-wrapper)
+            if [[ $# -lt 2 ]]; then
+                error "--session-wrapper expects a value (auto|uwsm|none)"
+                exit 1
+            fi
+            SESSION_WRAPPER="$2"
+            shift 2
+            ;;
+        --session-wrapper=*)
+            SESSION_WRAPPER="${1#*=}"
+            shift
+            ;;
+        --uwsm)
+            SESSION_WRAPPER="uwsm"
+            shift
+            ;;
+        --no-session-wrapper)
+            SESSION_WRAPPER="none"
+            shift
+            ;;
         --gamescope)
             USE_GAMESCOPE=1
             shift
@@ -231,7 +246,10 @@ Usage: $(basename "$0") [options] [-- FlightProject args]
   --video-backend <mode>  Display backend: auto (default), wayland, or x11.
   --wayland               Shortcut for --video-backend wayland.
   --x11                   Shortcut for --video-backend x11.
-  --gamescope             Wrap launch in gamescope (default flags: --expose-wayland --prefer-vk).
+  --session-wrapper <m>   Launch wrapper: auto (default), uwsm, or none.
+  --uwsm                  Shortcut for --session-wrapper uwsm.
+  --no-session-wrapper    Disable session wrapper even if FP_SESSION_WRAPPER is set.
+  --gamescope             Wrap launch in gamescope (default flags: --backend wayland --expose-wayland on Wayland sessions).
   --no-gamescope          Disable gamescope wrapper even if FP_USE_GAMESCOPE is set.
   --gamescope-arg <arg>   Append an argument to the gamescope invocation (repeatable).
   --gamescope-arg=<arg>   Append an argument to the gamescope invocation.
@@ -259,16 +277,7 @@ ensure_project_file
 configure_video_backend "$VIDEO_BACKEND"
 
 LAUNCH_PREFIX=()
-if (( USE_GAMESCOPE )); then
-    if ! command -v gamescope >/dev/null 2>&1; then
-        error "gamescope requested but not found in PATH"
-        exit 1
-    fi
-    if [[ ${#GAMESCOPE_ARGS[@]} -eq 0 ]]; then
-        GAMESCOPE_ARGS=(--expose-wayland --prefer-vk)
-    fi
-    LAUNCH_PREFIX=(gamescope "${GAMESCOPE_ARGS[@]}" --)
-fi
+build_launch_prefix LAUNCH_PREFIX "$SESSION_WRAPPER" "$USE_GAMESCOPE" GAMESCOPE_ARGS 1
 
 DEFAULT_ENGINE_CONFIG="$PROJECT_ROOT/Config/DefaultEngine.ini"
 BUILD_SH=$(resolve_ue_path "Engine/Build/BatchFiles/Linux/Build.sh")
@@ -419,6 +428,10 @@ elif [[ "$WINDOW_MODE" == "half" ]]; then
 fi
 
 CMD=("${LAUNCH_PREFIX[@]}" "$STAGED_LAUNCH_PATH" "-log")
+
+if [[ ${#VULKAN_VALIDATION_ARGS[@]} -gt 0 ]]; then
+    CMD+=("${VULKAN_VALIDATION_ARGS[@]}")
+fi
 
 if [[ -n "$WINDOW_RES_X" && -n "$WINDOW_RES_Y" ]]; then
     CMD+=("-windowed" "-ResX=$WINDOW_RES_X" "-ResY=$WINDOW_RES_Y")

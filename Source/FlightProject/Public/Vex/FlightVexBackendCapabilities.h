@@ -56,6 +56,10 @@ struct FLIGHTPROJECT_API FVexBackendCapabilityProfile
 	bool bSupportsDirectSchemaExecution = false;
 	bool bSupportsAccessorFallback = true;
 	bool bSupportsSimdBatching = false;
+	bool bSupportsBoundaryImports = false;
+	bool bSupportsBoundaryExports = false;
+	bool bSupportsBoundaryMirror = false;
+	bool bSupportsBoundaryAwait = false;
 	TSet<EFlightVexSymbolResidency> AllowedResidencies;
 	TSet<EFlightVexSymbolAffinity> AllowedAffinities;
 	TSet<EVexStorageKind> SupportedStorageKinds;
@@ -77,8 +81,14 @@ struct FLIGHTPROJECT_API FVexBackendCompatibilityReport
 	EVexBackendDecision Decision = EVexBackendDecision::Rejected;
 	bool bAllReadsSupported = false;
 	bool bAllWritesSupported = false;
+	bool bUsesBoundarySemantics = false;
+	bool bAllBoundaryOperatorsSupported = true;
 	bool bSupportsProgramTier = false;
 	bool bSupportsAsync = false;
+	bool bSupportsBoundaryImports = false;
+	bool bSupportsBoundaryExports = false;
+	bool bSupportsBoundaryMirror = false;
+	bool bSupportsBoundaryAwait = false;
 	TArray<FVexSymbolBackendCompatibility> SymbolResults;
 	TArray<FString> Reasons;
 };

@@ -470,7 +470,13 @@ FString BuildCompileArtifactReportJson(const FFlightCompileArtifactReport& Repor
 	AddBackendReportsToJson(Report.BackendReports, TEXT("backendReports"), Root);
 	AddStringArrayToJson(Report.ReadSymbols, TEXT("readSymbols"), Root);
 	AddStringArrayToJson(Report.WrittenSymbols, TEXT("writtenSymbols"), Root);
+	AddStringArrayToJson(Report.ImportedSymbols, TEXT("importedSymbols"), Root);
+	AddStringArrayToJson(Report.ExportedSymbols, TEXT("exportedSymbols"), Root);
 	AddStringArrayToJson(Report.ReferencedStorageKinds, TEXT("referencedStorageKinds"), Root);
+	Root->SetNumberField(TEXT("boundaryOperatorCount"), static_cast<double>(Report.BoundaryOperatorCount));
+	Root->SetBoolField(TEXT("hasBoundaryOperators"), Report.bHasBoundaryOperators);
+	Root->SetBoolField(TEXT("hasAwaitableBoundary"), Report.bHasAwaitableBoundary);
+	Root->SetBoolField(TEXT("hasMirrorRequest"), Report.bHasMirrorRequest);
 
 	TSharedRef<FJsonObject> CodeShapeObject = MakeShared<FJsonObject>();
 	CodeShapeObject->SetNumberField(TEXT("instructionCount"), Report.CodeShapeMetrics.InstructionCount);

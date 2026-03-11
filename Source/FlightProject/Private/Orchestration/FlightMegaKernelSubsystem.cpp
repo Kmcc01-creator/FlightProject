@@ -115,15 +115,34 @@ void UFlightMegaKernelSubsystem::Synthesize()
 							: FragmentBinding.FragmentType.ToString());
 					}
 					FragmentBindings.Sort();
+					TArray<FString> ImportedSymbols = Behavior->SchemaBinding->ImportedSymbols.Array();
+					ImportedSymbols.Sort();
+					TArray<FString> ExportedSymbols = Behavior->SchemaBinding->ExportedSymbols.Array();
+					ExportedSymbols.Sort();
 					BehaviorMetadataLines.Add(FString::Printf(
-						TEXT("// Behavior %u Type=%s LayoutHash=%u Reads=[%s] Writes=[%s] Storage=[%s] Fragments=[%s]"),
+						TEXT("// Behavior %u Type=%s LayoutHash=%u Reads=[%s] Writes=[%s] Storage=[%s] Fragments=[%s] BoundaryOps=%d Imports=[%s] Exports=[%s]"),
 						Step.BehaviorID,
 						Behavior->BoundTypeStableName.IsNone() ? TEXT("<unknown>") : *Behavior->BoundTypeStableName.ToString(),
 						Behavior->BoundSchemaLayoutHash,
 						*FString::Join(ReadSymbols, TEXT(", ")),
 						*FString::Join(WrittenSymbols, TEXT(", ")),
 						*FString::Join(OrderedStorageKinds, TEXT(", ")),
-						*FString::Join(FragmentBindings, TEXT(", "))));
+						*FString::Join(FragmentBindings, TEXT(", ")),
+						Behavior->SchemaBinding->BoundaryUses.Num(),
+						*FString::Join(ImportedSymbols, TEXT(", ")),
+						*FString::Join(ExportedSymbols, TEXT(", "))));
+
+					if (Behavior->SchemaBinding->bHasBoundaryOperators)
+					{
+						UE_LOG(
+							LogFlightProject,
+							Warning,
+							TEXT("MegaKernel: Skipping behavior %u because boundary operators are not yet lowered into mega-kernel contracts."),
+							Step.BehaviorID);
+						GpuScripts.Remove(Step.BehaviorID);
+						GpuWrittenSymbols.Remove(Step.BehaviorID);
+						continue;
+					}
 				}
 				else
 				{

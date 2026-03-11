@@ -22,6 +22,10 @@ Use this folder when you need architectural direction rather than dated implemen
   Mutation-centered VEX/compiler frame.
 - [MegaKernelOrchestration.md](MegaKernelOrchestration.md)
   GPU mega-kernel coordination layer.
+- [GpuComputeFrameworkRefinement.md](GpuComputeFrameworkRefinement.md)
+  GPU scheduling, latency classes, ownership boundaries, and refinement path.
+- [BoundaryAwareIrCandidates.md](BoundaryAwareIrCandidates.md)
+  Candidate IR and SchemaIR node/op names for boundary-aware lowering.
 - [GpuResourceSchemaContract.md](GpuResourceSchemaContract.md)
   GPU resource/schema contract direction.
 - [DataPipeline.md](DataPipeline.md)

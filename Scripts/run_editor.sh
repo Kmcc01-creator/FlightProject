@@ -9,12 +9,20 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "$SCRIPT_DIR/env_common.sh"
 
 VIDEO_BACKEND="${FP_VIDEO_BACKEND:-auto}"
+SESSION_WRAPPER="${FP_SESSION_WRAPPER:-auto}"
 USE_GAMESCOPE=0
 GAMESCOPE_ARGS=()
 ENABLE_TRACE=0
 ENABLE_GPU_DEBUG=0
 ENABLE_TIMESTAMPS=0
 EXTRA_EDITOR_ARGS=()
+VULKAN_VALIDATION_ARGS=()
+
+load_gamescope_args GAMESCOPE_ARGS
+if is_truthy "${FP_USE_GAMESCOPE:-0}"; then
+    USE_GAMESCOPE=1
+fi
+build_vulkan_validation_args VULKAN_VALIDATION_ARGS
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -36,6 +44,26 @@ while [[ $# -gt 0 ]]; do
             ;;
         --x11)
             VIDEO_BACKEND="x11"
+            shift
+            ;;
+        --session-wrapper)
+            if [[ $# -lt 2 ]]; then
+                error "--session-wrapper expects a value (auto|uwsm|none)"
+                exit 1
+            fi
+            SESSION_WRAPPER="$2"
+            shift 2
+            ;;
+        --session-wrapper=*)
+            SESSION_WRAPPER="${1#*=}"
+            shift
+            ;;
+        --uwsm)
+            SESSION_WRAPPER="uwsm"
+            shift
+            ;;
+        --no-session-wrapper)
+            SESSION_WRAPPER="none"
             shift
             ;;
         --trace)
@@ -86,6 +114,7 @@ echo "${c_blue}================================================================$
 echo "${c_blue}  FlightProject Editor Launcher${c_reset}"
 echo "${c_blue}================================================================${c_reset}"
 log_info "Video Backend: ${c_cyan}${VIDEO_BACKEND}${c_reset}"
+log_info "Session:       ${c_cyan}${SESSION_WRAPPER}${c_reset}"
 log_info "Trace Enabled: ${c_cyan}$(( ENABLE_TRACE ))${c_reset}"
 log_info "GPU Debug:     ${c_cyan}$(( ENABLE_GPU_DEBUG ))${c_reset}"
 if (( USE_GAMESCOPE )); then
@@ -95,16 +124,7 @@ echo "${c_blue}----------------------------------------------------------------$
 echo
 
 LAUNCH_PREFIX=()
-if (( USE_GAMESCOPE )); then
-    if ! command -v gamescope >/dev/null 2>&1; then
-        error "gamescope requested but not found in PATH"
-        exit 1
-    fi
-    if [[ ${#GAMESCOPE_ARGS[@]} -eq 0 ]]; then
-        GAMESCOPE_ARGS=(--expose-wayland --prefer-vk)
-    fi
-    LAUNCH_PREFIX=(gamescope "${GAMESCOPE_ARGS[@]}" --)
-fi
+build_launch_prefix LAUNCH_PREFIX "$SESSION_WRAPPER" "$USE_GAMESCOPE" GAMESCOPE_ARGS 1
 
 EDITOR_BIN=$(resolve_ue_path "Engine/Binaries/Linux/UnrealEditor")
 
@@ -119,6 +139,10 @@ fi
 
 if (( ENABLE_GPU_DEBUG )); then
     CMD+=("-d3ddebug" "-gpucrashdebugging")
+fi
+
+if [[ ${#VULKAN_VALIDATION_ARGS[@]} -gt 0 ]]; then
+    CMD+=("${VULKAN_VALIDATION_ARGS[@]}")
 fi
 
 if [[ ${#EXTRA_EDITOR_ARGS[@]} -gt 0 ]]; then

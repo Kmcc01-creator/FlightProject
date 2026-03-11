@@ -52,6 +52,10 @@ FVexBackendCapabilityProfile MakeNativeScalarProfile()
 	Profile.bSupportsDirectSchemaExecution = true;
 	Profile.bSupportsAccessorFallback = true;
 	Profile.bSupportsSimdBatching = false;
+	Profile.bSupportsBoundaryImports = false;
+	Profile.bSupportsBoundaryExports = false;
+	Profile.bSupportsBoundaryMirror = false;
+	Profile.bSupportsBoundaryAwait = false;
 	AddCommonCapabilities(Profile, true, true);
 	Profile.AllowedResidencies = {
 		EFlightVexSymbolResidency::Shared,
@@ -80,6 +84,10 @@ FVexBackendCapabilityProfile MakeNativeSimdProfile()
 	Profile.bSupportsDirectSchemaExecution = true;
 	Profile.bSupportsAccessorFallback = false;
 	Profile.bSupportsSimdBatching = true;
+	Profile.bSupportsBoundaryImports = false;
+	Profile.bSupportsBoundaryExports = false;
+	Profile.bSupportsBoundaryMirror = false;
+	Profile.bSupportsBoundaryAwait = false;
 	AddCommonCapabilities(Profile, true, false);
 	Profile.AllowedResidencies = {
 		EFlightVexSymbolResidency::Shared,
@@ -104,6 +112,10 @@ FVexBackendCapabilityProfile MakeVerseVmProfile()
 	Profile.bSupportsDirectSchemaExecution = true;
 	Profile.bSupportsAccessorFallback = true;
 	Profile.bSupportsSimdBatching = false;
+	Profile.bSupportsBoundaryImports = false;
+	Profile.bSupportsBoundaryExports = false;
+	Profile.bSupportsBoundaryMirror = false;
+	Profile.bSupportsBoundaryAwait = false;
 	AddCommonCapabilities(Profile, true, true);
 	Profile.AllowedResidencies = {
 		EFlightVexSymbolResidency::Shared,
@@ -131,6 +143,10 @@ FVexBackendCapabilityProfile MakeGpuKernelProfile()
 	Profile.bSupportsDirectSchemaExecution = true;
 	Profile.bSupportsAccessorFallback = false;
 	Profile.bSupportsSimdBatching = true;
+	Profile.bSupportsBoundaryImports = true;
+	Profile.bSupportsBoundaryExports = false;
+	Profile.bSupportsBoundaryMirror = false;
+	Profile.bSupportsBoundaryAwait = false;
 	AddCommonCapabilities(Profile, true, false);
 	Profile.ValueCapabilities.FindChecked(EVexValueType::Bool).bWritable = false;
 	Profile.AllowedResidencies = {
@@ -193,6 +209,10 @@ int32 ScoreBackendSelection(
 	if (Report.Decision == EVexBackendDecision::SupportedWithFallback)
 	{
 		Score -= 25;
+	}
+	if (Report.bUsesBoundarySemantics && Report.bAllBoundaryOperatorsSupported)
+	{
+		Score += Report.Backend == EVexBackendKind::GpuKernel ? 180 : 20;
 	}
 	if (Report.bSupportsProgramTier)
 	{
@@ -357,6 +377,58 @@ FVexSymbolBackendCompatibility EvaluateSymbolForBackend(
 	return Result;
 }
 
+bool EvaluateBoundaryUseForBackend(
+	const FVexSchemaBoundaryUse& BoundaryUse,
+	const FVexBackendCapabilityProfile& Profile,
+	FString& OutReason)
+{
+	const FString SymbolLabel = !BoundaryUse.DestinationSymbolName.IsEmpty()
+		? BoundaryUse.DestinationSymbolName
+		: (!BoundaryUse.SourceSymbolName.IsEmpty() ? BoundaryUse.SourceSymbolName : TEXT("<unnamed>"));
+
+	if (BoundaryUse.Metadata.Direction == EVexBoundaryDirection::Import && !Profile.bSupportsBoundaryImports)
+	{
+		OutReason = FString::Printf(
+			TEXT("Boundary import '%s' is not supported on backend '%s'."),
+			*SymbolLabel,
+			*VexBackendKindToString(Profile.Backend));
+		return false;
+	}
+
+	if (BoundaryUse.Metadata.Direction == EVexBoundaryDirection::Export && !Profile.bSupportsBoundaryExports)
+	{
+		OutReason = FString::Printf(
+			TEXT("Boundary export '%s' is not supported on backend '%s'."),
+			*SymbolLabel,
+			*VexBackendKindToString(Profile.Backend));
+		return false;
+	}
+
+	if (BoundaryUse.Metadata.bMirrorRequested && !Profile.bSupportsBoundaryMirror)
+	{
+		OutReason = FString::Printf(
+			TEXT("Boundary mirror requests for '%s' are not supported on backend '%s'."),
+			*SymbolLabel,
+			*VexBackendKindToString(Profile.Backend));
+		return false;
+	}
+
+	if (BoundaryUse.Metadata.bAwaitable && !Profile.bSupportsBoundaryAwait)
+	{
+		OutReason = FString::Printf(
+			TEXT("Awaitable boundary semantics for '%s' are not supported on backend '%s'."),
+			*SymbolLabel,
+			*VexBackendKindToString(Profile.Backend));
+		return false;
+	}
+
+	OutReason = FString::Printf(
+		TEXT("Boundary semantics for '%s' are supported on backend '%s'."),
+		*SymbolLabel,
+		*VexBackendKindToString(Profile.Backend));
+	return true;
+}
+
 FVexBackendCompatibilityReport EvaluateBindingForBackend(
 	const FVexSchemaBindingResult& Binding,
 	const FVexTypeSchema& Schema,
@@ -368,8 +440,14 @@ FVexBackendCompatibilityReport EvaluateBindingForBackend(
 	Report.Backend = Profile.Backend;
 	Report.bAllReadsSupported = true;
 	Report.bAllWritesSupported = true;
+	Report.bUsesBoundarySemantics = Binding.bHasBoundaryOperators;
+	Report.bAllBoundaryOperatorsSupported = true;
 	Report.bSupportsProgramTier = SupportsTier(Profile, Tier);
 	Report.bSupportsAsync = !bAsync || Profile.bSupportsAsync;
+	Report.bSupportsBoundaryImports = Profile.bSupportsBoundaryImports;
+	Report.bSupportsBoundaryExports = Profile.bSupportsBoundaryExports;
+	Report.bSupportsBoundaryMirror = Profile.bSupportsBoundaryMirror;
+	Report.bSupportsBoundaryAwait = Profile.bSupportsBoundaryAwait;
 
 	if (!Report.bSupportsProgramTier)
 	{
@@ -424,7 +502,25 @@ FVexBackendCompatibilityReport EvaluateBindingForBackend(
 		}
 	}
 
+	for (const FVexSchemaBoundaryUse& BoundaryUse : Binding.BoundaryUses)
+	{
+		FString BoundaryReason;
+		if (!EvaluateBoundaryUseForBackend(BoundaryUse, Profile, BoundaryReason))
+		{
+			Report.bAllBoundaryOperatorsSupported = false;
+			Report.Reasons.Add(BoundaryReason);
+		}
+		else
+		{
+			Report.Reasons.Add(BoundaryReason);
+		}
+	}
+
 	if (!Report.bSupportsProgramTier || !Report.bSupportsAsync || !Report.bAllReadsSupported || !Report.bAllWritesSupported)
+	{
+		Report.Decision = EVexBackendDecision::Rejected;
+	}
+	else if (!Report.bAllBoundaryOperatorsSupported)
 	{
 		Report.Decision = EVexBackendDecision::Rejected;
 	}
@@ -473,11 +569,6 @@ FVexBackendSelection SelectBackendForProgram(
 		{
 			Report.Decision = EVexBackendDecision::Rejected;
 			Report.Reasons.Add(TEXT("Verse VM is unavailable in this build."));
-		}
-		if (Profile.Backend == EVexBackendKind::GpuKernel)
-		{
-			Report.Decision = EVexBackendDecision::Rejected;
-			Report.Reasons.Add(TEXT("GPU kernel lowering is not yet executable in CompileVex."));
 		}
 
 		if (Report.Decision != EVexBackendDecision::Rejected)

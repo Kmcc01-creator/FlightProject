@@ -136,7 +136,13 @@ struct FLIGHTPROJECT_API FFlightCompileArtifactReport
 	TArray<FFlightCompileBackendReport> BackendReports;
 	TArray<FString> ReadSymbols;
 	TArray<FString> WrittenSymbols;
+	TArray<FString> ImportedSymbols;
+	TArray<FString> ExportedSymbols;
 	TArray<FString> ReferencedStorageKinds;
+	int32 BoundaryOperatorCount = 0;
+	bool bHasBoundaryOperators = false;
+	bool bHasAwaitableBoundary = false;
+	bool bHasMirrorRequest = false;
 	FFlightCodeShapeMetrics CodeShapeMetrics;
 	FFlightWarmupMetrics WarmupMetrics;
 	FFlightCompressionSummary CompressionSummary;

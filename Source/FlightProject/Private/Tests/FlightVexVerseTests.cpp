@@ -2,7 +2,10 @@
 
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
+#include "Orchestration/FlightOrchestrationSubsystem.h"
+#include "Verse/FlightGpuScriptBridge.h"
 #include "Vex/FlightVexParser.h"
+#include "Vex/FlightVexSymbolRegistry.h"
 #include "Verse/UFlightVerseSubsystem.h"
 #include "Schema/FlightRequirementRegistry.h"
 #include "FlightScriptingLibrary.h"
@@ -257,6 +260,8 @@ bool FFlightVerseCompileContractTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightCompileArtifactReportTest, "FlightProject.Functional.Vex.CompileArtifactReport", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightBoundaryCompileArtifactReportTest, "FlightProject.Functional.Vex.CompileArtifactReport.Boundary", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightGpuScriptBridgeDeferredCompletionTest, "FlightProject.Gpu.ScriptBridge.DeferredCompletion", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FFlightCompileArtifactReportTest::RunTest(const FString& Parameters)
 {
@@ -325,6 +330,219 @@ bool FFlightCompileArtifactReportTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("Warmup metrics should include totalCompileTimeMs"), (*WarmupObject)->TryGetNumberField(TEXT("totalCompileTimeMs"), TotalCompileTimeMs));
 		TestTrue(TEXT("Warmup metrics should report a non-negative total compile time"), TotalCompileTimeMs >= 0.0);
 	}
+
+	return true;
+}
+
+bool FFlightBoundaryCompileArtifactReportTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = FindAutomationWorld();
+	if (!World)
+	{
+		AddError(TEXT("No valid world context available for boundary compile artifact report test"));
+		return false;
+	}
+
+	UFlightVerseSubsystem* VerseSubsystem = World->GetSubsystem<UFlightVerseSubsystem>();
+	if (!VerseSubsystem)
+	{
+		AddError(TEXT("No FlightVerseSubsystem available for boundary compile artifact report test"));
+		return false;
+	}
+
+	FString CompileDiagnostics;
+	const FString BoundarySource = TEXT("@gpu { @velocity <| vec3(1,0,0); @shield = 1.0; }\n");
+	Flight::Vex::TTypeVexRegistry<Flight::Swarm::FDroidState>::Register();
+	const void* TypeKey = Flight::Vex::TTypeVexRegistry<Flight::Swarm::FDroidState>::GetTypeKey();
+	VerseSubsystem->CompileVex(9101, BoundarySource, CompileDiagnostics, TypeKey);
+
+	const FString ArtifactJson = UFlightScriptingLibrary::GetBehaviorCompileArtifactReportJson(World, 9101);
+	TestTrue(TEXT("Boundary compile artifact report JSON should be available"), !ArtifactJson.IsEmpty());
+
+	TSharedPtr<FJsonObject> RootObject;
+	const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ArtifactJson);
+	const bool bParsed = FJsonSerializer::Deserialize(Reader, RootObject) && RootObject.IsValid();
+	TestTrue(TEXT("Boundary compile artifact JSON should deserialize"), bParsed);
+	if (!bParsed || !RootObject.IsValid())
+	{
+		return false;
+	}
+
+	bool bHasBoundaryOperators = false;
+	TestTrue(TEXT("Boundary compile artifact JSON should contain hasBoundaryOperators"), RootObject->TryGetBoolField(TEXT("hasBoundaryOperators"), bHasBoundaryOperators));
+	TestTrue(TEXT("Boundary compile artifact report should record boundary operators"), bHasBoundaryOperators);
+
+	double BoundaryOperatorCount = 0.0;
+	TestTrue(TEXT("Boundary compile artifact JSON should contain boundaryOperatorCount"), RootObject->TryGetNumberField(TEXT("boundaryOperatorCount"), BoundaryOperatorCount));
+	TestEqual(TEXT("Boundary compile artifact report should record one boundary operator"), static_cast<int32>(BoundaryOperatorCount), 1);
+
+	bool bHasAwaitableBoundary = true;
+	TestTrue(TEXT("Boundary compile artifact JSON should contain hasAwaitableBoundary"), RootObject->TryGetBoolField(TEXT("hasAwaitableBoundary"), bHasAwaitableBoundary));
+	TestFalse(TEXT("Boundary compile artifact report should not mark awaitable boundaries yet"), bHasAwaitableBoundary);
+
+	const TArray<TSharedPtr<FJsonValue>>* ImportedSymbols = nullptr;
+	TestTrue(TEXT("Boundary compile artifact JSON should contain importedSymbols"), RootObject->TryGetArrayField(TEXT("importedSymbols"), ImportedSymbols));
+	TestTrue(TEXT("Boundary compile artifact report should record at least one imported symbol"), ImportedSymbols && ImportedSymbols->Num() == 1);
+	if (ImportedSymbols && ImportedSymbols->Num() == 1)
+	{
+		FString ImportedSymbol;
+		TestTrue(TEXT("Imported boundary symbol should be serialized as a string"), (*ImportedSymbols)[0]->TryGetString(ImportedSymbol));
+		TestEqual(TEXT("Boundary compile artifact report should record @velocity as the imported symbol"), ImportedSymbol, FString(TEXT("@velocity")));
+	}
+
+	const TArray<TSharedPtr<FJsonValue>>* ExportedSymbols = nullptr;
+	TestTrue(TEXT("Boundary compile artifact JSON should contain exportedSymbols"), RootObject->TryGetArrayField(TEXT("exportedSymbols"), ExportedSymbols));
+	TestTrue(TEXT("Boundary compile artifact report should record no exported symbols for a PipeIn script"), ExportedSymbols && ExportedSymbols->Num() == 0);
+
+	FString IrCompileErrors;
+	TestTrue(TEXT("Boundary compile artifact JSON should contain irCompileErrors"), RootObject->TryGetStringField(TEXT("irCompileErrors"), IrCompileErrors));
+	TestTrue(TEXT("Boundary compile artifact report should explain low-level IR rejection for boundary operators"), IrCompileErrors.Contains(TEXT("boundary operators")));
+
+	const TArray<TSharedPtr<FJsonValue>>* BackendReports = nullptr;
+	TestTrue(TEXT("Boundary compile artifact JSON should contain backendReports"), RootObject->TryGetArrayField(TEXT("backendReports"), BackendReports));
+	bool bFoundBoundaryAwareBackendReason = false;
+	if (BackendReports)
+	{
+		for (const TSharedPtr<FJsonValue>& BackendReportValue : *BackendReports)
+		{
+			const TSharedPtr<FJsonObject> BackendReportObject = BackendReportValue.IsValid() ? BackendReportValue->AsObject() : nullptr;
+			if (!BackendReportObject.IsValid())
+			{
+				continue;
+			}
+
+			const TArray<TSharedPtr<FJsonValue>>* Reasons = nullptr;
+			if (!BackendReportObject->TryGetArrayField(TEXT("reasons"), Reasons) || !Reasons)
+			{
+				continue;
+			}
+
+			for (const TSharedPtr<FJsonValue>& ReasonValue : *Reasons)
+			{
+				FString Reason;
+				if (ReasonValue.IsValid() && ReasonValue->TryGetString(Reason)
+					&& (Reason.Contains(TEXT("Boundary")) || Reason.Contains(TEXT("boundary"))))
+				{
+					bFoundBoundaryAwareBackendReason = true;
+					break;
+				}
+			}
+
+			if (bFoundBoundaryAwareBackendReason)
+			{
+				break;
+			}
+		}
+	}
+	TestTrue(TEXT("Boundary compile artifact report should surface boundary-aware backend compatibility reasons"), bFoundBoundaryAwareBackendReason);
+
+	const UFlightVerseSubsystem::FVerseBehavior* Behavior = VerseSubsystem->Behaviors.Find(9101);
+	TestNotNull(TEXT("Boundary compile should persist behavior metadata"), Behavior);
+	if (Behavior)
+	{
+		TestTrue(TEXT("Behavior should record boundary semantics"), Behavior->bHasBoundarySemantics);
+		TestFalse(TEXT("Behavior should truthfully report boundary semantics as non-executable for the current runtime path"), Behavior->bBoundarySemanticsExecutable);
+		TestEqual(TEXT("Behavior should retain one boundary operator"), Behavior->BoundaryOperatorCount, 1);
+		TestTrue(TEXT("Behavior should retain imported boundary symbols"), Behavior->ImportedSymbols.Contains(TEXT("@velocity")));
+		TestTrue(TEXT("Behavior should retain a boundary execution detail message"), !Behavior->BoundaryExecutionDetail.IsEmpty());
+	}
+
+	UFlightOrchestrationSubsystem* Orchestration = World->GetSubsystem<UFlightOrchestrationSubsystem>();
+	TestNotNull(TEXT("Boundary compile should have access to the orchestration subsystem"), Orchestration);
+	if (Orchestration)
+	{
+		const Flight::Orchestration::FFlightBehaviorRecord* BehaviorRecord = Orchestration->GetReport().Behaviors.FindByPredicate(
+			[](const Flight::Orchestration::FFlightBehaviorRecord& Candidate)
+			{
+				return Candidate.BehaviorID == 9101;
+			});
+		TestNotNull(TEXT("Orchestration report should surface the boundary-aware behavior"), BehaviorRecord);
+		if (BehaviorRecord)
+		{
+			TestTrue(TEXT("Orchestration behavior report should record boundary semantics"), BehaviorRecord->bHasBoundarySemantics);
+			TestFalse(TEXT("Orchestration behavior report should report boundary semantics as non-executable"), BehaviorRecord->bBoundarySemanticsExecutable);
+			TestFalse(TEXT("Orchestration behavior report should not advertise the boundary-aware behavior as executable yet"), BehaviorRecord->bExecutable);
+			TestEqual(TEXT("Orchestration behavior report should preserve the boundary operator count"), BehaviorRecord->BoundaryOperatorCount, 1);
+			TestTrue(TEXT("Orchestration behavior report should preserve imported symbols"), BehaviorRecord->ImportedSymbols.Contains(TEXT("@velocity")));
+			TestTrue(TEXT("Orchestration behavior report should include a boundary execution detail"), !BehaviorRecord->BoundaryExecutionDetail.IsEmpty());
+		}
+
+		const FString OrchestrationJson = Orchestration->BuildReportJson();
+		TestTrue(TEXT("Orchestration JSON should surface boundary semantics"), OrchestrationJson.Contains(TEXT("\"hasBoundarySemantics\"")));
+		TestTrue(TEXT("Orchestration JSON should surface boundary execution status"), OrchestrationJson.Contains(TEXT("\"boundarySemanticsExecutable\"")));
+		TestTrue(TEXT("Orchestration JSON should surface boundary execution detail"), OrchestrationJson.Contains(TEXT("\"boundaryExecutionDetail\"")));
+	}
+
+	return true;
+}
+
+bool FFlightGpuScriptBridgeDeferredCompletionTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+
+	UWorld* World = FindAutomationWorld();
+	if (!World)
+	{
+		AddError(TEXT("No valid world context available for GPU script bridge test"));
+		return false;
+	}
+
+	UFlightGpuScriptBridgeSubsystem* ScriptBridge = World->GetSubsystem<UFlightGpuScriptBridgeSubsystem>();
+	if (!ScriptBridge)
+	{
+		AddError(TEXT("No GPU script bridge subsystem available for test"));
+		return false;
+	}
+
+	FFlightGpuInvocation Invocation;
+	Invocation.ProgramId = TEXT("Automation.DeferredGpuBridge");
+	Invocation.BehaviorId = 99101;
+	Invocation.LatencyClass = EFlightGpuLatencyClass::CpuObserved;
+	Invocation.bAwaitRequested = true;
+	Invocation.bAllowDeferredExternalSignal = true;
+
+	FString SubmissionDetail;
+	const FFlightGpuSubmissionHandle Handle = ScriptBridge->Submit(Invocation, SubmissionDetail);
+	TestTrue(TEXT("Deferred GPU bridge submission should produce a valid handle"), Handle.IsValid());
+	TestTrue(TEXT("Deferred GPU bridge submission should explain deferred completion"), SubmissionDetail.Contains(TEXT("external")));
+
+	FString PollDetail;
+	TestEqual(
+		TEXT("Deferred GPU bridge submission should begin in submitted state"),
+		ScriptBridge->Poll(Handle, &PollDetail),
+		EFlightGpuSubmissionStatus::Submitted);
+	TestTrue(TEXT("Deferred GPU bridge poll detail should be populated"), !PollDetail.IsEmpty());
+
+	bool bResolved = false;
+	bool bSucceeded = false;
+	FString AwaitReason;
+	const bool bAwaitRegistered = ScriptBridge->Await(
+		Handle,
+		[&bResolved, &bSucceeded](EFlightGpuSubmissionStatus Status, const FString&)
+		{
+			bResolved = true;
+			bSucceeded = Status == EFlightGpuSubmissionStatus::Completed;
+		},
+		AwaitReason);
+	TestTrue(TEXT("Deferred GPU bridge should accept await registration"), bAwaitRegistered);
+	TestTrue(TEXT("Deferred GPU bridge should explain await registration"), !AwaitReason.IsEmpty());
+	TestFalse(TEXT("Deferred GPU bridge should not resolve before completion"), bResolved);
+
+	TestTrue(
+		TEXT("Deferred GPU bridge should accept explicit external completion"),
+		ScriptBridge->CompleteExternalSubmission(Handle, true, TEXT("Automation completion")));
+	TestTrue(TEXT("Deferred GPU bridge await callback should resolve"), bResolved);
+	TestTrue(TEXT("Deferred GPU bridge await callback should report success"), bSucceeded);
+	TestEqual(
+		TEXT("Deferred GPU bridge submission should report completed after explicit resolution"),
+		ScriptBridge->Poll(Handle, &PollDetail),
+		EFlightGpuSubmissionStatus::Completed);
+	TestTrue(TEXT("Deferred GPU bridge completion detail should be preserved"), PollDetail.Contains(TEXT("Automation completion")));
+
+	FFlightGpuAwaitToken AwaitToken;
+	TestTrue(TEXT("Deferred GPU bridge should build an await token"), ScriptBridge->TryBuildAwaitToken(Handle, AwaitToken));
+	TestEqual(TEXT("Await token should preserve the submission handle"), AwaitToken.Handle.Value, Handle.Value);
+	TestEqual(TEXT("Await token should default tracking id to zero for deferred completions"), AwaitToken.ExternalTrackingId, int64(0));
 
 	return true;
 }

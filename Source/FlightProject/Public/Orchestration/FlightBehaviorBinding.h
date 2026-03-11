@@ -28,6 +28,16 @@ struct FLIGHTPROJECT_API FFlightBehaviorRecord
 	bool bExecutable = false;
 	EFlightExecutionDomain ResolvedDomain = EFlightExecutionDomain::Unknown;
 	TArray<FName> RequiredContracts;
+	FString SelectedBackend;
+	FString CommittedBackend;
+	TArray<FString> ImportedSymbols;
+	TArray<FString> ExportedSymbols;
+	int32 BoundaryOperatorCount = 0;
+	bool bHasBoundarySemantics = false;
+	bool bBoundarySemanticsExecutable = true;
+	bool bHasAwaitableBoundary = false;
+	bool bHasMirrorRequest = false;
+	FString BoundaryExecutionDetail;
 	FString Diagnostics;
 };
 
@@ -42,4 +52,3 @@ struct FLIGHTPROJECT_API FFlightBehaviorBinding
 };
 
 } // namespace Flight::Orchestration
-

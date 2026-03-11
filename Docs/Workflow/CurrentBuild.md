@@ -87,6 +87,20 @@ This section captures the most recent observed build/test outcomes and commands 
 - Current conclusion: the prior GPU blocker was primarily loader/layer/device-selection environment on this runner, not the project’s semaphore-extension registration or the io_uring bridge initialization path.
 - Remaining GPU work is now about meaningful test coverage beyond initialization/discovery, not basic Vulkan bring-up.
 
+### Latest GPU/Vulkan Follow-Up (2026-03-11)
+- A fresh local rerun on March 11, 2026 did **not** reproduce the March 10 green bring-up on this runner.
+- `./Scripts/run_tests_full.sh` currently fails before automation discovery with:
+  - SDL/UDEV initialization errors under the dummy/offscreen path
+  - Vulkan profile/device enumeration returning `VK_ERROR_INITIALIZATION_FAILED`
+  - forced Vulkan device creation aborting before `Found ... automation tests`
+- A session-aware Hyprland launch changes that failure mode materially:
+  - `TEST_SCOPE=gpu_smoke TEST_VIDEO_BACKEND=wayland TEST_RENDER_OFFSCREEN=0 TEST_SESSION_WRAPPER=uwsm ./Scripts/run_tests_full.sh`
+  - and `... TEST_USE_GAMESCOPE=1 ...`
+  - both get past `InitSDL()` and later fail in `ShaderCompilerEditor.cpp` because `/FlightProject/Generated/VexMegaKernel.ush` is missing while compiling `FFlightSwarmForceCS` from `Shaders/Private/FlightSwarmForce.usf`
+- Current interpretation: the primary Hyprland compositor/session blocker is now reduced. The next non-green GPU blocker is project-side shader startup state, not basic SDL session attachment.
+- Current practical recommendation on Hyprland/CachyOS: treat `uwsm app --` as the preferred compositor/session wrapper for GPU-facing Unreal launches; plain inherited Wayland env vars are weaker evidence.
+- Also note that several GPU-required tests remain intentionally hard-skipped in source while the SCSL renderer pipeline is under development, so successful device creation is still stronger evidence than successful behavioral coverage at the moment.
+
 ### Key Learning: Discovery Context
 Tests defined with `EAutomationTestFlags::ClientContext` are **not** discovered when running via `UnrealEditor-Cmd`. To enable discovery in commandlet/CI environments, tests must use:
 - `EAutomationTestFlags::EditorContext`
@@ -133,10 +147,61 @@ export UE_ROOT=/home/kelly/Unreal/UnrealEngine
 export UE_ROOT=/home/kelly/Unreal/UnrealEngine
 ./Scripts/run_tests_full.sh
 ```
-*Optional scope: set `TEST_SCOPE=benchmark|gpu_smoke|all` (default `benchmark`).*
+*Optional scope: set `TEST_SCOPE=benchmark|gpu_smoke|swarm|gpu_domain|gpu_required|all` (default `benchmark`).*
 *Optional extension forcing: set `TEST_FORCE_VULKAN_EXTENSIONS=1` to add explicit semaphore-extension command-line flags for comparison runs.*
 *Default GPU-validation preset: `TEST_GPU_VALIDATION_PRESET=local-radv` (applies the RADV ICD plus `VK_LOADER_LAYERS_DISABLE='~implicit~'` on this runner). Set `TEST_GPU_VALIDATION_PRESET=off` to disable it.*
 *Optional log filtering: same `TEST_LOG_PROFILE` / `LOG_CMDS` behavior is supported for this path.*
+*Session wrapper controls: `TEST_SESSION_WRAPPER=auto|uwsm|none`, `TEST_USE_GAMESCOPE=1|0`, `TEST_GAMESCOPE_ARGS="..."`.*
+
+**GPU/Vulkan Recovery / Triage Sequence:**
+```bash
+export UE_ROOT=/home/kelly/Unreal/UnrealEngine
+./Scripts/run_tests_full.sh
+```
+
+```bash
+export UE_ROOT=/home/kelly/Unreal/UnrealEngine
+TEST_VK_DRIVER_FILES=/usr/share/vulkan/icd.d/radeon_icd.x86_64.json \
+TEST_VK_LOADER_LAYERS_DISABLE='~implicit~' \
+./Scripts/run_tests_full.sh
+```
+
+```bash
+export UE_ROOT=/home/kelly/Unreal/UnrealEngine
+TEST_GPU_VALIDATION_PRESET=off ./Scripts/run_tests_full.sh
+```
+
+```bash
+export UE_ROOT=/home/kelly/Unreal/UnrealEngine
+TEST_VIDEO_BACKEND=dummy TEST_RENDER_OFFSCREEN=1 ./Scripts/run_tests_full.sh
+```
+
+```bash
+export UE_ROOT=/home/kelly/Unreal/UnrealEngine
+TEST_SCOPE=gpu_smoke TEST_VIDEO_BACKEND=wayland TEST_RENDER_OFFSCREEN=0 \
+TEST_SESSION_WRAPPER=uwsm ./Scripts/run_tests_full.sh
+```
+
+```bash
+export UE_ROOT=/home/kelly/Unreal/UnrealEngine
+TEST_SCOPE=gpu_smoke TEST_VIDEO_BACKEND=wayland TEST_RENDER_OFFSCREEN=0 \
+TEST_SESSION_WRAPPER=uwsm TEST_USE_GAMESCOPE=1 ./Scripts/run_tests_full.sh
+```
+
+```bash
+export UE_ROOT=/home/kelly/Unreal/UnrealEngine
+TEST_FORCE_VULKAN_EXTENSIONS=1 ./Scripts/run_tests_full.sh
+```
+
+```bash
+export UE_ROOT=/home/kelly/Unreal/UnrealEngine
+TEST_SCOPE=gpu_smoke ./Scripts/run_tests_full.sh
+```
+
+Interpretation:
+- failure before `Found ... automation tests` points first to ICD/layer/display/device bring-up;
+- `TEST_SCOPE=gpu_domain` is the fallback when you want GPU-domain behavior coverage without relying on successful Vulkan device creation;
+- a green `benchmark` scope still does not imply meaningful GPU behavioral coverage if the benchmark body is intentionally skipped.
 
 **Schema Manifest Export (Code-First Contract):**
 ```python
