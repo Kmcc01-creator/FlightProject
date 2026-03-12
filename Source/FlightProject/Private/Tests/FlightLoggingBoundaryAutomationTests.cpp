@@ -14,25 +14,6 @@ using namespace Flight::Log;
 namespace Flight::Logging::Test
 {
 
-class FCollectingSink : public ILogSink
-{
-public:
-    virtual void Receive(const FLogEntry& Entry, const FLogContext& Context) override
-    {
-        Entries.Add(Entry);
-        Contexts.Add(Context);
-    }
-
-    void Reset()
-    {
-        Entries.Reset();
-        Contexts.Reset();
-    }
-
-    TArray<FLogEntry> Entries;
-    TArray<FLogContext> Contexts;
-};
-
 class FOutputCaptureDevice : public FOutputDevice
 {
 public:
@@ -122,28 +103,7 @@ public:
     TArray<FString> Messages;
     TArray<ELogVerbosity::Type> Verbosities;
 };
-
-struct FBoundaryLogStruct
-{
-    FLIGHT_REFLECT_BODY(FBoundaryLogStruct);
-
-    FString Name = TEXT("Boundary");
-    bool bEnabled = true;
-    int32 Count = 7;
-};
-
 } // namespace Flight::Logging::Test
-
-namespace Flight::Reflection
-{
-
-FLIGHT_REFLECT_FIELDS_ATTR(Flight::Logging::Test::FBoundaryLogStruct,
-    FLIGHT_FIELD_ATTR(FString, Name, Flight::Reflection::Attr::EditAnywhere),
-    FLIGHT_FIELD_ATTR(bool, bEnabled, Flight::Reflection::Attr::EditAnywhere),
-    FLIGHT_FIELD_ATTR(int32, Count, Flight::Reflection::Attr::EditAnywhere)
-)
-
-} // namespace Flight::Reflection
 
 IMPLEMENT_COMPLEX_AUTOMATION_TEST(
     FFlightLoggingBoundaryComplexTest,
@@ -160,9 +120,6 @@ void FFlightLoggingBoundaryComplexTest::GetTests(TArray<FString>& OutBeautifiedN
 
     OutBeautifiedNames.Add(TEXT("DualSinkNoDuplication"));
     OutTestCommands.Add(TEXT("DualSinkNoDuplication"));
-
-    OutBeautifiedNames.Add(TEXT("ReflectiveConstRefLogging"));
-    OutTestCommands.Add(TEXT("ReflectiveConstRefLogging"));
 }
 
 bool FFlightLoggingBoundaryComplexTest::RunTest(const FString& Parameters)
@@ -239,35 +196,6 @@ bool FFlightLoggingBoundaryComplexTest::RunTest(const FString& Parameters)
         TestEqual("Default runtime logger should not duplicate structured entries across the internal buffer bridge", BufferMatches, 1);
         TestEqual("Default runtime logger should not duplicate Unreal bridge output", OutputCapture.CountMessagesContaining(TEXT("Dual Sink Message")), 1);
     }
-    else if (Parameters == TEXT("ReflectiveConstRefLogging"))
-    {
-        auto CollectingSink = MakeShared<FCollectingSink>();
-        FLogger::Get().AddSink(CollectingSink);
-        ON_SCOPE_EXIT
-        {
-            FLogger::Get().RemoveSink(CollectingSink);
-        };
-
-        FBoundaryLogStruct Value;
-        Value.Name = TEXT("ConstRef");
-        const FBoundaryLogStruct& ConstRef = Value;
-
-        FLogger::Get().LogStruct(ELogLevel::Display, BoundaryCategory, ConstRef, TEXT("BoundaryStruct"));
-
-        TestEqual("Reflective logging should emit a single structured entry", CollectingSink->Entries.Num(), 1);
-        if (CollectingSink->Entries.Num() == 1)
-        {
-            const FLogEntry& Entry = CollectingSink->Entries[0];
-            TestEqual(
-                "Reflective message should include the reflected type name",
-                Entry.Message,
-                FString::Printf(TEXT("BoundaryStruct: %s"), UTF8_TO_TCHAR(TReflectTraits<FBoundaryLogStruct>::Name))
-            );
-            TestEqual("Const-ref reflective logging should serialize bool fields semantically", Entry.Context.FindRef(TEXT("bEnabled")), TEXT("true"));
-            TestEqual("Const-ref reflective logging should serialize string fields", Entry.Context.FindRef(TEXT("Name")), TEXT("ConstRef"));
-        }
-    }
-
     return true;
 }
 

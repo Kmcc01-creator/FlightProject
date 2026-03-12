@@ -105,7 +105,12 @@ namespace
 		}
 		case EVexExprKind::FunctionCall: {
 			const auto& Nm = N.Lexeme;
+			if (Nm == TEXT("vec2")) return EVexValueType::Float2;
+			if (Nm == TEXT("vec3")) return EVexValueType::Float3;
+			if (Nm == TEXT("vec4")) return EVexValueType::Float4;
 			if (Nm == TEXT("normalize")) return N.ArgumentNodeIndices.Num() > 0 ? InferExpressionTypeFromAst(N.ArgumentNodeIndices[0], Exprs, Syms, Locs) : EVexValueType::Unknown;
+			if (Nm == TEXT("sin") || Nm == TEXT("cos") || Nm == TEXT("exp") || Nm == TEXT("log")) return N.ArgumentNodeIndices.Num() > 0 ? InferExpressionTypeFromAst(N.ArgumentNodeIndices[0], Exprs, Syms, Locs) : EVexValueType::Unknown;
+			if (Nm == TEXT("pow")) return N.ArgumentNodeIndices.Num() > 0 ? InferExpressionTypeFromAst(N.ArgumentNodeIndices[0], Exprs, Syms, Locs) : EVexValueType::Unknown;
 			if (Nm == TEXT("curlnoise") || Nm == TEXT("gradient") || Nm == TEXT("sample_lattice")) return EVexValueType::Float3;
 			if (Nm == TEXT("dot") || Nm == TEXT("sample_sdf") || Nm == TEXT("sample_cloud") || Nm == TEXT("smoothstep")) return EVexValueType::Float;
 			if (Nm == TEXT("clamp")) return N.ArgumentNodeIndices.Num() > 0 ? InferExpressionTypeFromAst(N.ArgumentNodeIndices[0], Exprs, Syms, Locs) : EVexValueType::Unknown;

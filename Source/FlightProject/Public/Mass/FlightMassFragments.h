@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "MassEntityTypes.h"
+#include "Navigation/FlightNavigationCommitIdentity.h"
 #include "FlightMassFragments.generated.h"
 
 /**
@@ -85,16 +86,10 @@ struct FLIGHTPROJECT_API FFlightNavigationCommitSharedFragment : public FMassCon
 {
 	GENERATED_BODY()
 
-	FGuid SourceCandidateId;
-	FName SourceCandidateName = NAME_None;
-	FName CohortName = NAME_None;
-	FGuid RuntimePathId;
-	FVector InitialLocation = FVector::ZeroVector;
-	float PathLength = 0.0f;
-	uint8 CommitKind = 0;
-	uint8 SourceKind = 0;
-	bool bSynthetic = false;
-	bool bResolvedFromExecutionPlan = false;
+	// Mass const shared fragments are hashed and deduplicated from reflected data.
+	// Keep commit-identity fields reflected so distinct commit products stay distinct.
+	UPROPERTY()
+	FFlightNavigationCommitIdentity Identity;
 };
 
 /**

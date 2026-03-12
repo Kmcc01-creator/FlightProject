@@ -124,6 +124,12 @@ struct FLIGHTPROJECT_API FFlightCompileArtifactReport
 	FString BackendPath;
 	FString SelectedBackend;
 	FString CommittedBackend;
+	FString CommitDetail;
+	FString SelectedPolicyRow;
+	FString PolicyPreferredDomain;
+	bool bPolicyAllowsNativeFallback = true;
+	bool bPolicyAllowsGeneratedOnly = false;
+	bool bPolicyPrefersAsync = false;
 	FString Diagnostics;
 	FString GeneratedVerseCode;
 	FString IrCompileErrors;
@@ -139,6 +145,8 @@ struct FLIGHTPROJECT_API FFlightCompileArtifactReport
 	TArray<FString> ImportedSymbols;
 	TArray<FString> ExportedSymbols;
 	TArray<FString> ReferencedStorageKinds;
+	TArray<FString> PolicyRequiredContracts;
+	TArray<FString> PolicyRequiredSymbols;
 	int32 BoundaryOperatorCount = 0;
 	bool bHasBoundaryOperators = false;
 	bool bHasAwaitableBoundary = false;

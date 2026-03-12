@@ -8,7 +8,8 @@ This document should focus on validation topology and recommended execution stru
 
 Establish a repeatable full-suite validation flow for FlightProject that:
 
-- runs generated/complex validation before simple automation checks,
+- sorts tests by validation intent rather than only by macro type,
+- runs generated and architecture-shaping validation before broad simple automation checks,
 - surfaces architecture breakpoints early,
 - makes failures actionable from logs and source locations.
 
@@ -20,19 +21,81 @@ Use **[CurrentBuild.md](CurrentBuild.md)** for the latest dated snapshot of buil
 
 Based on current `Source/FlightProject/Private/Tests` declarations:
 
-- `81` simple automation tests (`IMPLEMENT_SIMPLE_AUTOMATION_TEST`)
-- `9` complex/generated tests (`IMPLEMENT_COMPLEX_AUTOMATION_TEST`)
+- `117` simple automation tests (`IMPLEMENT_SIMPLE_AUTOMATION_TEST`)
+- `11` complex automation tests (`IMPLEMENT_COMPLEX_AUTOMATION_TEST`)
 - `3` spec tests (`BEGIN_DEFINE_SPEC`)
-- `33` test files with declared automation/spec entries
+- `41` test files with declared automation/spec entries
 
-Generated test frameworks:
+Macro type is no longer a reliable topology boundary by itself:
 
+- some `IMPLEMENT_COMPLEX_AUTOMATION_TEST` suites are truly generated/data-driven
+- others are manually curated multi-case integration suites
+- a few simple tests are really development/discovery probes for source architecture seams
+
+## Proposed Topology Categories
+
+Treat topology as an intent-based classification.
+The macro used to register a test is an implementation detail, not the category.
+
+### 1. Simple Unit Automation
+
+Use for focused contract checks with one primary assertion surface.
+These are usually `IMPLEMENT_SIMPLE_AUTOMATION_TEST`, but the important property is scope, not macro choice.
+
+Current fit examples:
+
+- `FlightProject.Unit.*`
+- `FlightProject.Schema.*`
+- `FlightProject.Logging.Core.*`
+- `FlightProject.Unit.Navigation.*`
+- `FlightProject.Unit.Orchestration.*`
+
+### 2. Multi-Case Integration Tests
+
+Use for manually authored, cross-subsystem, world-backed, or multi-scenario suites.
+These may be simple, complex, or spec-based depending on the fixture shape.
+
+Current fit examples:
+
+- `FlightProject.Integration.Startup.Sequencing`
+- `FlightProject.Orchestration.*`
+- `FlightProject.Navigation.VerticalSlice.Contracts`
+- `FlightProject.Functional.*`
+- `FlightProject.Logging.Complex`
+- `FlightProject.Logging.Boundaries`
+- `FlightProject.Reflection.Complex`
+- `FlightProject.Integration.Verse.CompileContract`
+
+### 3. Generated Automation Tests
+
+Reserve this category for suites that actually emit cases from manifests, registries, reflected types, or other source-of-truth data in `GetTests(...)`.
+This should not be used for fixed manual dispatch tables.
+
+Current fit examples:
+
+- `FlightProject.Integration.Generative.ProjectManifest`
+- `FlightProject.Integration.Generative.StructuralParity`
 - `FlightProject.Integration.SchemaDriven`
-  - dynamically emits tests from manifest rows in `GetTests(...)`
-  - reference: `Source/FlightProject/Private/Tests/FlightSchemaDrivenTests.cpp:17`
 - `FlightProject.Integration.Vex.VerticalSlice`
-  - dynamically emits tests per symbol contract in `GetTests(...)`
-  - reference: `Source/FlightProject/Private/Tests/FlightVexVerticalSliceTests.cpp:87`
+
+### 4. Architecture / Development Tests
+
+Keep a narrow architecture-development bucket for discovery tests, refactor guards, and source-architecture seams that are valuable during active system evolution but are not the best long-term fit for product-facing `Unit` or `Integration` names.
+
+Recommended naming direction:
+
+- `FlightProject.Architecture.*` for durable architecture invariants
+- `FlightProject.Dev.Architecture.*` only when a suite is explicitly temporary or refactor-scoped
+
+Current likely candidates:
+
+- `FlightProject.Vex.Frontend.ModularRefactor`
+- `FlightProject.Vex.Generalization.*`
+- `FlightProject.Vex.Schema.*`
+- `FlightProject.IoUring.Vulkan.Complex`
+
+These should stay narrow.
+When an architecture/development test stabilizes into a normal runtime contract, move it into `Unit`, `Integration`, or `Generated` rather than letting the architecture bucket become a catch-all.
 
 ## Script Behavior Review
 
@@ -46,6 +109,17 @@ Generated test frameworks:
   - reference: `Scripts/run_tests_headless.sh:33-43`
 - `--no-shaders` also appends `-NoShaderCompile`
   - reference: `Scripts/run_tests_headless.sh:45-47`
+
+### `Scripts/run_tests_phased.sh`
+
+- Encodes the current topology directly:
+  - Phase 1: generated + spec
+  - Phase 2: architecture / development
+  - Phase 3: multi-case integration
+  - Phase 4: simple unit automation
+  - Phase 5: optional GPU/system pass
+- Runs one shared pre-test build before child phases by default.
+- Supports `--print-plan` / `--dry-run` to inspect resolved filters and build settings without launching Unreal.
 
 ### `Scripts/run_tests_full.sh`
 
@@ -61,25 +135,97 @@ Generated test frameworks:
 
 ## Recommended Full-Suite Execution Order
 
-Preferred entrypoint is `./Scripts/run_tests_phased.sh` (now encodes this ordering).  
-Equivalent explicit phased commands are listed below for manual/debug runs.
+Use the following as the intended topology order.
+`run_tests_phased.sh` now encodes this model directly.
 
-### Phase 1: Complex/Generated + Spec (run first)
+### Phase 1: Generated + Spec (run first)
+
+Run source-of-truth expansion suites and spec-based architecture checks first so schema/registry/runtime breakpoints fail early.
+
+Current candidate namespaces:
+
+- `FlightProject.Integration.Generative.*`
+- `FlightProject.Integration.SchemaDriven`
+- `FlightProject.Integration.Vex.VerticalSlice`
+- `FlightProject.Integration.Concurrency`
+- `FlightProject.Vex.Parser.Spec`
+- `FlightProject.Unit.Safety.MemoryLayout`
+
+### Phase 2: Architecture / Development (optional but early)
+
+If retained as a distinct lane, run these after generated suites and before broad integration sweeps so active refactor seams fail close to the source.
+
+Current candidate namespaces:
+
+- `FlightProject.Vex.Frontend.*`
+- `FlightProject.Vex.Generalization.*`
+- `FlightProject.Vex.Schema.*`
+- `FlightProject.IoUring.Vulkan.Complex`
+
+### Phase 3: Multi-Case Integration
+
+Run world-backed, cross-subsystem, and manually curated multi-scenario suites after generated and architecture-specific checks.
+
+Current candidate namespaces:
+
+- `FlightProject.Integration.Startup.Sequencing`
+- `FlightProject.Orchestration.*`
+- `FlightProject.Navigation.*`
+- `FlightProject.Functional.*`
+- `FlightProject.Logging.Complex`
+- `FlightProject.Logging.Boundaries`
+- `FlightProject.Reflection.Complex`
+- `FlightProject.Integration.Verse.*`
+- `FlightProject.Integration.AutoRTFM`
+- `FlightProject.Integration.Vex.SimdParity`
+
+### Phase 4: Simple Unit Automation
+
+Run broad contract-level simple automation after the higher-leverage generated and integration surfaces.
+
+Current candidate namespaces:
+
+- `FlightProject.Unit.*`
+- `FlightProject.Schema.*`
+- `FlightProject.Logging.Core.*`
+- `FlightProject.Vex.RewriteRegistry.*`
+- `FlightProject.Vex.UI.*`
+
+### Phase 5: Optional GPU / Perf / System pass
+
+Keep GPU-required and performance-sensitive validation as an explicit final lane.
+These are still important, but they should not define the base CPU/headless topology.
+
+Current candidate namespaces:
+
+- `FlightProject.Gpu.*`
+- `FlightProject.Perf.*`
+
+## Recommended Runner Entry Points
+
+Inspect the resolved topology without launching Unreal:
 
 ```bash
-TEST_STREAM_FILTER=errors ./Scripts/run_tests_headless.sh --timestamps --filter="FlightProject.Integration.SchemaDriven+FlightProject.Integration.Vex.VerticalSlice+FlightProject.Integration.Concurrency+FlightProject.Integration.Startup.Sequencing+FlightProject.Unit.Safety.MemoryLayout+FlightProject.Vex.Parser.Spec"
+./Scripts/run_tests_phased.sh --print-plan
 ```
 
-### Phase 2: Simple Automation (run second)
+Run the full headless topology with the shared pre-test build:
 
 ```bash
-TEST_STREAM_FILTER=errors ./Scripts/run_tests_headless.sh --timestamps --filter="FlightProject.Schema+FlightProject.Vex.RewriteRegistry+FlightProject.Vex.TreeTraits.IR.PostOrder+FlightProject.Vex.Parsing+FlightProject.Vex.Simd+FlightProject.Vex.UI+FlightProject.Verse+FlightProject.Verse.Bytecode+FlightProject.AutoRTFM+FlightProject.Gpu.Reactive+FlightProject.Logging+FlightProject.Orchestration+FlightProject.Swarm.Pipeline+FlightProject.Spatial.GpuPerception+FlightProject.Benchmark.GpuPerception+FlightProject.Reactive+FlightProject.Reflection+FlightProject.Functional"
+./Scripts/run_tests_phased.sh
 ```
 
-### Phase 3: Optional GPU/System pass
+Run only generated and architecture-shaping validation:
 
 ```bash
-TEST_SCOPE=all TEST_STREAM_FILTER=errors ./Scripts/run_tests_full.sh
+./Scripts/run_tests_phased.sh --phase1-only
+./Scripts/run_tests_phased.sh --phase2-only
+```
+
+Run the full topology plus the optional GPU lane:
+
+```bash
+./Scripts/run_tests_phased.sh --with-gpu
 ```
 
 ## Immediate Next Targets

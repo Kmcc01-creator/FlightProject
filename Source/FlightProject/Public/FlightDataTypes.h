@@ -287,6 +287,25 @@ enum class EFlightBehaviorCompileDomainPreference : uint8
     Gpu
 };
 
+inline FString FlightBehaviorCompileDomainPreferenceToString(const EFlightBehaviorCompileDomainPreference Preference)
+{
+    switch (Preference)
+    {
+    case EFlightBehaviorCompileDomainPreference::NativeCpu:
+        return TEXT("NativeCpu");
+    case EFlightBehaviorCompileDomainPreference::TaskGraph:
+        return TEXT("TaskGraph");
+    case EFlightBehaviorCompileDomainPreference::VerseVm:
+        return TEXT("VerseVm");
+    case EFlightBehaviorCompileDomainPreference::Simd:
+        return TEXT("Simd");
+    case EFlightBehaviorCompileDomainPreference::Gpu:
+        return TEXT("Gpu");
+    default:
+        return TEXT("Unspecified");
+    }
+}
+
 /**
  * Data table row describing procedural anchor overrides for editor-placeable layout sources.
  */

@@ -112,6 +112,16 @@ public:
         Sinks.Remove(Sink);
     }
 
+    void SetUnrealSinkEnabled(const bool bEnabled)
+    {
+        bUnrealSinkEnabled = bEnabled;
+    }
+
+    bool IsUnrealSinkEnabled() const
+    {
+        return bUnrealSinkEnabled;
+    }
+
     /**
      * Primary logging entry point.
      * Use this instead of UE_LOG for core FlightProject logic.
@@ -135,6 +145,16 @@ public:
         {
             if (Sink.IsValid())
             {
+                if (!bInternalSinkEnabled && Sink == DefaultInternalSink)
+                {
+                    continue;
+                }
+
+                if (!bUnrealSinkEnabled && Sink == DefaultUnrealSink)
+                {
+                    continue;
+                }
+
                 Sink->Receive(Entry, Context);
             }
         }
@@ -199,6 +219,8 @@ private:
     TSharedPtr<ILogSink> DefaultInternalSink;
     TSharedPtr<ILogSink> DefaultUnrealSink;
     TArray<TSharedPtr<ILogSink>> Sinks;
+    bool bInternalSinkEnabled = true;
+    bool bUnrealSinkEnabled = true;
 };
 
 // ============================================================================

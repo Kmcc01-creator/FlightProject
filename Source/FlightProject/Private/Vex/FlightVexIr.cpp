@@ -180,7 +180,35 @@ TSharedPtr<FVexIrProgram> FVexIrCompiler::Compile(const FVexProgramAst& Program,
 				Inst.Args.Add(Arg);
 			}
 
-			if (Node.Lexeme == TEXT("normalize")) Inst.Op = EVexIrOp::Normalize;
+			if (Node.Lexeme == TEXT("vec2") || Node.Lexeme == TEXT("vec3") || Node.Lexeme == TEXT("vec4"))
+			{
+				const int32 ExpectedArity = Node.Lexeme == TEXT("vec2") ? 2 : (Node.Lexeme == TEXT("vec3") ? 3 : 4);
+				const EVexValueType VectorType =
+					Node.Lexeme == TEXT("vec2") ? EVexValueType::Float2 :
+					(Node.Lexeme == TEXT("vec3") ? EVexValueType::Float3 : EVexValueType::Float4);
+
+				if (Inst.Args.Num() != ExpectedArity)
+				{
+					AppendError(FString::Printf(
+						TEXT("IR lowering failed: vector constructor '%s' expects %d arguments but received %d."),
+						*Node.Lexeme,
+						ExpectedArity,
+						Inst.Args.Num()));
+					return MakeInvalidValue(Val.Type);
+				}
+
+				if (Inst.Dest.Type == EVexValueType::Unknown)
+				{
+					Inst.Dest.Type = VectorType;
+				}
+				Inst.Op = EVexIrOp::VectorCompose;
+			}
+			else if (Node.Lexeme.StartsWith(TEXT("vec")))
+			{
+				AppendError(FString::Printf(TEXT("IR lowering failed: unsupported vector constructor '%s'."), *Node.Lexeme));
+				return MakeInvalidValue(Val.Type);
+			}
+			else if (Node.Lexeme == TEXT("normalize")) Inst.Op = EVexIrOp::Normalize;
 			else if (Node.Lexeme == TEXT("sin")) Inst.Op = EVexIrOp::Sin;
 			else if (Node.Lexeme == TEXT("cos")) Inst.Op = EVexIrOp::Cos;
 			else if (Node.Lexeme == TEXT("exp")) Inst.Op = EVexIrOp::Exp;
@@ -492,6 +520,17 @@ FString FVexIrCompiler::LowerToHLSL(const FVexIrProgram& Program, const TMap<FSt
 		case EVexIrOp::Pow:
 			Source += FString::Printf(TEXT("%s v%d = pow(%s, %s);\n"), *DestType, Inst.Dest.Index, *GetVal(Inst.Args[0]), *GetVal(Inst.Args[1]));
 			break;
+		case EVexIrOp::VectorCompose:
+		{
+			TArray<FString> Components;
+			Components.Reserve(Inst.Args.Num());
+			for (const FVexIrValue& Arg : Inst.Args)
+			{
+				Components.Add(GetVal(Arg));
+			}
+			Source += FString::Printf(TEXT("%s v%d = %s(%s);\n"), *DestType, Inst.Dest.Index, *DestType, *FString::Join(Components, TEXT(", ")));
+			break;
+		}
 		case EVexIrOp::JumpIf:
 			// inverted jump for block-skipping
 			Source += FString::Printf(TEXT("if (!(%s)) goto Label%d;\n"), *GetVal(Inst.Args[0]), Inst.Args[1].Index);
@@ -619,11 +658,22 @@ FString FVexIrCompiler::LowerToVerse(const FVexIrProgram& Program, const TMap<FS
 		case EVexIrOp::Log:
 			Source += FString::Printf(TEXT("%svar Var%d:%s = log(%s)\n"), *GetIndent(), Inst.Dest.Index, *DestType, *GetVal(Inst.Args[0]));
 			break;
-		case EVexIrOp::Pow:
-			Source += FString::Printf(TEXT("%svar Var%d:%s = pow(%s, %s)\n"), *GetIndent(), Inst.Dest.Index, *DestType, *GetVal(Inst.Args[0]), *GetVal(Inst.Args[1]));
-			break;
-		default: break;
-		}
+			case EVexIrOp::Pow:
+				Source += FString::Printf(TEXT("%svar Var%d:%s = pow(%s, %s)\n"), *GetIndent(), Inst.Dest.Index, *DestType, *GetVal(Inst.Args[0]), *GetVal(Inst.Args[1]));
+				break;
+			case EVexIrOp::VectorCompose:
+			{
+				TArray<FString> Components;
+				Components.Reserve(Inst.Args.Num());
+				for (const FVexIrValue& Arg : Inst.Args)
+				{
+					Components.Add(GetVal(Arg));
+				}
+				Source += FString::Printf(TEXT("%svar Var%d:%s = {%s}\n"), *GetIndent(), Inst.Dest.Index, *DestType, *FString::Join(Components, TEXT(", ")));
+				break;
+			}
+			default: break;
+			}
 	}
 
 	// Final block closing

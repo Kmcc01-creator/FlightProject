@@ -3,12 +3,246 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Engine/Engine.h"
+#include "MassExecutionContext.h"
+#include "MassEntityQuery.h"
+#include "MassEntitySubsystem.h"
+#include "Mass/FlightMassFragments.h"
+#include "Navigation/FlightNavigationCommitProduct.h"
+#include "Orchestration/FlightOrchestrationSubsystem.h"
 #include "RHI.h"
-#include "Vex/FlightVexParser.h"
 #include "Schema/FlightRequirementRegistry.h"
+#include "UObject/UnrealType.h"
+#include "Verse/UFlightVerseSubsystem.h"
+#include "Vex/FlightVexParser.h"
 
 namespace Flight::Test
 {
+	inline UWorld* FindAutomationWorld()
+	{
+		if (!GEngine)
+		{
+			return nullptr;
+		}
+
+		for (const FWorldContext& Context : GEngine->GetWorldContexts())
+		{
+			if (Context.WorldType == EWorldType::Editor || Context.WorldType == EWorldType::PIE)
+			{
+				if (UWorld* World = Context.World())
+				{
+					return World;
+				}
+			}
+		}
+
+		return nullptr;
+	}
+
+	inline UWorldSubsystem* FindOptionalWorldSubsystem(UWorld* World, const TCHAR* ClassPath)
+	{
+		if (!World)
+		{
+			return nullptr;
+		}
+
+		if (UClass* SubsystemClass = FindObject<UClass>(nullptr, ClassPath))
+		{
+			return World->GetSubsystemBase(SubsystemClass);
+		}
+
+		return nullptr;
+	}
+
+	inline bool InvokeSubsystemNoArg(UWorld* World, const TCHAR* ClassPath, const TCHAR* FunctionName)
+	{
+		UWorldSubsystem* Subsystem = FindOptionalWorldSubsystem(World, ClassPath);
+		if (!Subsystem)
+		{
+			return false;
+		}
+
+		UFunction* Function = Subsystem->GetClass()->FindFunctionByName(FunctionName);
+		if (!Function)
+		{
+			return false;
+		}
+
+		Subsystem->ProcessEvent(Function, nullptr);
+		return true;
+	}
+
+	inline bool SetObjectNameProperty(UObject* Object, const TCHAR* PropertyName, const FName Value)
+	{
+		if (!Object)
+		{
+			return false;
+		}
+
+		if (FNameProperty* Property = FindFProperty<FNameProperty>(Object->GetClass(), PropertyName))
+		{
+			Property->SetPropertyValue_InContainer(Object, Value);
+			return true;
+		}
+
+		return false;
+	}
+
+	inline bool SetObjectReferenceProperty(UObject* Object, const TCHAR* PropertyName, UObject* Value)
+	{
+		if (!Object)
+		{
+			return false;
+		}
+
+		if (FObjectProperty* Property = FindFProperty<FObjectProperty>(Object->GetClass(), PropertyName))
+		{
+			Property->SetObjectPropertyValue_InContainer(Object, Value);
+			return true;
+		}
+
+		return false;
+	}
+
+	inline TArray<FGuid> GatherPathIdsForCohort(UWorld* World, const FName CohortName)
+	{
+		TArray<FGuid> PathIds;
+		if (!World)
+		{
+			return PathIds;
+		}
+
+		UMassEntitySubsystem* MassSubsystem = World->GetSubsystem<UMassEntitySubsystem>();
+		if (!MassSubsystem)
+		{
+			return PathIds;
+		}
+
+		FMassEntityManager& EntityManager = MassSubsystem->GetMutableEntityManager();
+		FMassEntityQuery Query(EntityManager.AsShared());
+		Query.AddTagRequirement<FFlightSwarmMemberTag>(EMassFragmentPresence::All);
+		Query.AddRequirement<FFlightPathFollowFragment>(EMassFragmentAccess::ReadOnly);
+		Query.AddConstSharedRequirement<FFlightBehaviorCohortFragment>(EMassFragmentPresence::Optional);
+
+		FMassExecutionContext Context(EntityManager, 0.0f);
+		Query.ForEachEntityChunk(Context, [&PathIds, CohortName](FMassExecutionContext& ChunkContext)
+		{
+			const FFlightBehaviorCohortFragment* CohortFragment = ChunkContext.GetConstSharedFragmentPtr<FFlightBehaviorCohortFragment>();
+			const FName ChunkCohortName = CohortFragment ? CohortFragment->CohortName : NAME_None;
+			if (ChunkCohortName != CohortName)
+			{
+				return;
+			}
+
+			const TConstArrayView<FFlightPathFollowFragment> PathFragments = ChunkContext.GetFragmentView<FFlightPathFollowFragment>();
+			for (const FFlightPathFollowFragment& PathFragment : PathFragments)
+			{
+				PathIds.Add(PathFragment.PathId);
+			}
+		});
+
+		return PathIds;
+	}
+
+	inline bool FindNavigationCommitSharedFragmentForCohort(
+		UWorld* World,
+		const FName CohortName,
+		const FGuid& ExpectedRuntimePathId,
+		FFlightNavigationCommitSharedFragment& OutCommitFragment)
+	{
+		if (!World)
+		{
+			return false;
+		}
+
+		UMassEntitySubsystem* MassSubsystem = World->GetSubsystem<UMassEntitySubsystem>();
+		if (!MassSubsystem)
+		{
+			return false;
+		}
+
+		FMassEntityManager& EntityManager = MassSubsystem->GetMutableEntityManager();
+		FMassEntityQuery Query(EntityManager.AsShared());
+		Query.AddTagRequirement<FFlightSwarmMemberTag>(EMassFragmentPresence::All);
+		Query.AddConstSharedRequirement<FFlightBehaviorCohortFragment>(EMassFragmentPresence::Optional);
+		Query.AddConstSharedRequirement<FFlightNavigationCommitSharedFragment>(EMassFragmentPresence::Optional);
+
+		bool bFound = false;
+		FMassExecutionContext Context(EntityManager, 0.0f);
+		Query.ForEachEntityChunk(Context, [&OutCommitFragment, CohortName, ExpectedRuntimePathId, &bFound](FMassExecutionContext& ChunkContext)
+		{
+			if (bFound)
+			{
+				return;
+			}
+
+			const FFlightBehaviorCohortFragment* CohortFragment = ChunkContext.GetConstSharedFragmentPtr<FFlightBehaviorCohortFragment>();
+			const FName ChunkCohortName = CohortFragment ? CohortFragment->CohortName : NAME_None;
+			if (ChunkCohortName != CohortName)
+			{
+				return;
+			}
+
+			const FFlightNavigationCommitSharedFragment* CommitFragment =
+				ChunkContext.GetConstSharedFragmentPtr<FFlightNavigationCommitSharedFragment>();
+			if (!CommitFragment)
+			{
+				return;
+			}
+			if (ExpectedRuntimePathId.IsValid() && CommitFragment->Identity.RuntimePathId != ExpectedRuntimePathId)
+			{
+				return;
+			}
+
+			OutCommitFragment = *CommitFragment;
+			bFound = true;
+		});
+
+		return bFound;
+	}
+
+	inline void DestroySwarmEntitiesDirect(UWorld* World)
+	{
+		if (!World)
+		{
+			return;
+		}
+
+		UMassEntitySubsystem* MassSubsystem = World->GetSubsystem<UMassEntitySubsystem>();
+		if (!MassSubsystem)
+		{
+			return;
+		}
+
+		FMassEntityManager& EntityManager = MassSubsystem->GetMutableEntityManager();
+		FMassEntityQuery Query(EntityManager.AsShared());
+		Query.AddTagRequirement<FFlightSwarmMemberTag>(EMassFragmentPresence::All);
+
+		TArray<FMassEntityHandle> EntitiesToDestroy = Query.GetMatchingEntityHandles();
+		if (!EntitiesToDestroy.IsEmpty())
+		{
+			EntityManager.BatchDestroyEntities(EntitiesToDestroy);
+			EntityManager.FlushCommands();
+		}
+	}
+
+	inline void RemoveVisibleBehaviorRecords(UFlightOrchestrationSubsystem& Orchestration)
+	{
+		for (const Flight::Orchestration::FFlightBehaviorRecord& Behavior : Orchestration.GetReport().Behaviors)
+		{
+			Orchestration.UnregisterBehavior(Behavior.BehaviorID);
+		}
+	}
+
+	inline UFlightVerseSubsystem::FVerseBehavior MakeExecutableBehavior(const uint32 FrameInterval)
+	{
+		UFlightVerseSubsystem::FVerseBehavior Behavior;
+		Behavior.FrameInterval = FrameInterval;
+		Behavior.bHasExecutableProcedure = true;
+		Behavior.bUsesNativeFallback = true;
+		return Behavior;
+	}
+
 	/** Setup standard symbol definitions for testing */
 	inline TArray<Vex::FVexSymbolDefinition> GetMockSymbols()
 	{

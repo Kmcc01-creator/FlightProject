@@ -52,6 +52,7 @@ public class FlightProject : ModuleRules
             "RenderCore",
             "Renderer",
             "RHI",
+            "AssetRegistry",
             "Projects",
             "Json",
             "JsonUtilities",

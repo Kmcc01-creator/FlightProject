@@ -135,7 +135,7 @@ bool FFlightNavigationContractsTest::RunTest(const FString& Parameters)
 
 	Flight::Navigation::FFlightNavigationCommitProduct EmptyProduct;
 	TestEqual(TEXT("Default navigation commit product should classify as None"),
-		EmptyProduct.Kind,
+		EmptyProduct.GetKind(),
 		Flight::Navigation::EFlightNavigationCommitProductKind::None);
 	TestFalse(TEXT("Default navigation commit product should be invalid"),
 		EmptyProduct.IsValid());

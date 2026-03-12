@@ -1,6 +1,7 @@
 // Copyright Kelly Rey Wilson. All Rights Reserved.
 
 #include "Verse/UFlightVerseSubsystem.h"
+#include "FlightDataSubsystem.h"
 #include "Verse/FlightGpuScriptBridge.h"
 #include "Vex/FlightCompileArtifacts.h"
 #include "Vex/FlightVexBackendCapabilities.h"
@@ -14,6 +15,7 @@
 #include "Mass/FlightMassFragments.h"
 #include "Swarm/SwarmSimulationTypes.h"
 #include "Orchestration/FlightOrchestrationSubsystem.h"
+#include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "FlightProject.h"
 
@@ -941,15 +943,18 @@ bool UFlightVerseSubsystem::ExecuteResolvedStorageHost(
 bool UFlightVerseSubsystem::ExecuteResolvedDirectStorageHost(
 	const FResolvedStorageHost& Host,
 	const FVerseBehavior& Behavior,
+	const Flight::Vex::EVexBackendKind BackendKind,
 	TArrayView<FFlightTransformFragment> Transforms,
 	TArrayView<FFlightDroidStateFragment> DroidStates)
 {
 	switch (Host.Kind)
 	{
 	case EStorageHostKind::MassFragments:
-		return ExecuteOnMassSchemaHost(Behavior, Transforms, DroidStates);
+		return ExecuteOnMassSchemaHost(Behavior, BackendKind, Transforms, DroidStates);
 	case EStorageHostKind::GpuBuffer:
-		return ExecuteOnGpuSchemaHost(Behavior);
+		return BackendKind == Flight::Vex::EVexBackendKind::GpuKernel
+			? ExecuteOnGpuSchemaHost(Behavior)
+			: false;
 	default:
 		return false;
 	}
@@ -973,6 +978,7 @@ void UFlightVerseSubsystem::ExecuteOnAccessorSchemaHost(
 
 bool UFlightVerseSubsystem::ExecuteOnMassSchemaHost(
 	const FVerseBehavior& Behavior,
+	const Flight::Vex::EVexBackendKind BackendKind,
 	TArrayView<FFlightTransformFragment> Transforms,
 	TArrayView<FFlightDroidStateFragment> DroidStates)
 {
@@ -989,10 +995,20 @@ bool UFlightVerseSubsystem::ExecuteOnMassSchemaHost(
 		return false;
 	}
 
-	if (Behavior.Tier == Flight::Vex::EVexTier::Literal && Behavior.SimdPlan.IsValid())
+	if (BackendKind == Flight::Vex::EVexBackendKind::NativeSimd)
 	{
+		if (Behavior.Tier != Flight::Vex::EVexTier::Literal || !Behavior.SimdPlan.IsValid())
+		{
+			return false;
+		}
+
 		Behavior.SimdPlan->ExecuteDirect(Transforms, DroidStates);
 		return true;
+	}
+
+	if (BackendKind != Flight::Vex::EVexBackendKind::NativeScalar)
+	{
+		return false;
 	}
 
 	const int32 NumEntities = FMath::Min(Transforms.Num(), DroidStates.Num());
@@ -1064,7 +1080,12 @@ bool UFlightVerseSubsystem::ExecuteOnGpuSchemaHost(const FVerseBehavior& Behavio
 	return false;
 }
 
-bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSource, FString& OutErrors, UScriptStruct* TargetStruct)
+bool UFlightVerseSubsystem::CompileVex(
+	uint32 BehaviorID,
+	const FString& VexSource,
+	FString& OutErrors,
+	UScriptStruct* TargetStruct,
+	const FCompilePolicyContext& CompilePolicyContext)
 {
 	const Flight::Vex::FVexTypeSchema* Schema = nullptr;
 	if (TargetStruct)
@@ -1076,10 +1097,30 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 		}
 	}
 
-	return CompileVex(BehaviorID, VexSource, OutErrors, Schema ? Schema->TypeId.RuntimeKey : static_cast<const void*>(nullptr));
+	return CompileVex(
+		BehaviorID,
+		VexSource,
+		OutErrors,
+		Schema ? Schema->TypeId.RuntimeKey : static_cast<const void*>(nullptr),
+		CompilePolicyContext);
+}
+
+bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSource, FString& OutErrors, UScriptStruct* TargetStruct)
+{
+	return CompileVex(BehaviorID, VexSource, OutErrors, TargetStruct, FCompilePolicyContext());
 }
 
 bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSource, FString& OutErrors, const void* TypeKey)
+{
+	return CompileVex(BehaviorID, VexSource, OutErrors, TypeKey, FCompilePolicyContext());
+}
+
+bool UFlightVerseSubsystem::CompileVex(
+	uint32 BehaviorID,
+	const FString& VexSource,
+	FString& OutErrors,
+	const void* TypeKey,
+	const FCompilePolicyContext& CompilePolicyContext)
 {
 	// Initialize behavior state pessimistically; flip to executable only when a runnable path is available.
 	FVerseBehavior& Behavior = Behaviors.FindOrAdd(BehaviorID);
@@ -1096,6 +1137,14 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 	Behavior.LastCompileDiagnostics.Reset();
 	Behavior.SelectedBackend.Reset();
 	Behavior.CommittedBackend.Reset();
+	Behavior.CommitDetail.Reset();
+	Behavior.SelectedPolicyRowName = NAME_None;
+	Behavior.PolicyPreferredDomain = EFlightBehaviorCompileDomainPreference::Unspecified;
+	Behavior.bPolicyAllowsNativeFallback = true;
+	Behavior.bPolicyAllowsGeneratedOnly = false;
+	Behavior.bPolicyPrefersAsync = false;
+	Behavior.RequiredContracts.Reset();
+	Behavior.PolicyRequiredSymbols.Reset();
 	Behavior.ImportedSymbols.Reset();
 	Behavior.ExportedSymbols.Reset();
 	Behavior.BoundaryOperatorCount = 0;
@@ -1114,6 +1163,24 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 	ArtifactReport.SourceHash = FCrc::StrCrc32(*VexSource);
 	ArtifactReport.TargetFingerprint = BuildCompileTargetFingerprint();
 
+	const FFlightBehaviorCompilePolicyRow* CompilePolicy = ResolveCompilePolicy(BehaviorID, CompilePolicyContext);
+	if (CompilePolicy)
+	{
+		Behavior.SelectedPolicyRowName = CompilePolicy->RowName;
+		Behavior.PolicyPreferredDomain = CompilePolicy->PreferredDomain;
+		Behavior.bPolicyAllowsNativeFallback = CompilePolicy->AllowsNativeFallback();
+		Behavior.bPolicyAllowsGeneratedOnly = CompilePolicy->AllowsGeneratedOnly();
+		Behavior.bPolicyPrefersAsync = CompilePolicy->PrefersAsync();
+		Behavior.RequiredContracts = CompilePolicy->RequiredContracts;
+		for (const FName RequiredSymbol : CompilePolicy->RequiredSymbols)
+		{
+			if (!RequiredSymbol.IsNone())
+			{
+				Behavior.PolicyRequiredSymbols.Add(RequiredSymbol.ToString());
+			}
+		}
+	}
+
 	const double CompileStartTime = FPlatformTime::Seconds();
 	FString BackendPath = TEXT("GeneratedPreviewOnly");
 	FString IrErrors;
@@ -1125,11 +1192,7 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 
 	auto FinalizeArtifactReport = [&]()
 	{
-		const FString LegacyCommittedBackend = Behavior.bUsesVmEntryPoint
-			? Flight::Vex::VexBackendKindToString(Flight::Vex::EVexBackendKind::VerseVm)
-			: (Behavior.bUsesNativeFallback
-				? Flight::Vex::VexBackendKindToString(Flight::Vex::EVexBackendKind::NativeScalar)
-				: TEXT("Unknown"));
+		const FString LegacyCommittedBackend = ResolveCommittedExecutionBackend(Behavior, TypeKey);
 
 		ArtifactReport.GeneratedAtUtc = FDateTime::UtcNow();
 		ArtifactReport.CompileOutcome = CompileStateToString(Behavior.CompileState);
@@ -1142,6 +1205,18 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 			? Flight::Vex::VexBackendKindToString(BackendSelection->ChosenBackend)
 			: LegacyCommittedBackend;
 		ArtifactReport.CommittedBackend = LegacyCommittedBackend;
+		ArtifactReport.CommitDetail = BuildCommitDetail(
+			ArtifactReport.SelectedBackend,
+			ArtifactReport.CommittedBackend,
+			CompilePolicy,
+			Behavior.bHasExecutableProcedure);
+		ArtifactReport.SelectedPolicyRow = Behavior.SelectedPolicyRowName.IsNone()
+			? FString()
+			: Behavior.SelectedPolicyRowName.ToString();
+		ArtifactReport.PolicyPreferredDomain = FlightBehaviorCompileDomainPreferenceToString(Behavior.PolicyPreferredDomain);
+		ArtifactReport.bPolicyAllowsNativeFallback = Behavior.bPolicyAllowsNativeFallback;
+		ArtifactReport.bPolicyAllowsGeneratedOnly = Behavior.bPolicyAllowsGeneratedOnly;
+		ArtifactReport.bPolicyPrefersAsync = Behavior.bPolicyPrefersAsync;
 		ArtifactReport.Diagnostics = Behavior.LastCompileDiagnostics;
 		ArtifactReport.GeneratedVerseCode = Behavior.GeneratedVerseCode;
 		ArtifactReport.IrCompileErrors = IrErrors;
@@ -1157,6 +1232,8 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 		ArtifactReport.ImportedSymbols.Reset();
 		ArtifactReport.ExportedSymbols.Reset();
 		ArtifactReport.ReferencedStorageKinds.Reset();
+		ArtifactReport.PolicyRequiredContracts.Reset();
+		ArtifactReport.PolicyRequiredSymbols.Reset();
 		ArtifactReport.BoundaryOperatorCount = 0;
 		ArtifactReport.bHasBoundaryOperators = false;
 		ArtifactReport.bHasAwaitableBoundary = false;
@@ -1193,6 +1270,17 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 			ArtifactReport.ReferencedStorageKinds = ReferencedStorageKinds.Array();
 			ArtifactReport.ReferencedStorageKinds.Sort();
 		}
+
+		for (const FName RequiredContract : Behavior.RequiredContracts)
+		{
+			if (!RequiredContract.IsNone())
+			{
+				ArtifactReport.PolicyRequiredContracts.Add(RequiredContract.ToString());
+			}
+		}
+		ArtifactReport.PolicyRequiredContracts.Sort();
+		ArtifactReport.PolicyRequiredSymbols = Behavior.PolicyRequiredSymbols;
+		ArtifactReport.PolicyRequiredSymbols.Sort();
 
 		if (BackendSelection.IsSet())
 		{
@@ -1232,6 +1320,7 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 
 		Behavior.SelectedBackend = ArtifactReport.SelectedBackend;
 		Behavior.CommittedBackend = ArtifactReport.CommittedBackend;
+		Behavior.CommitDetail = ArtifactReport.CommitDetail;
 		Behavior.ImportedSymbols = ArtifactReport.ImportedSymbols;
 		Behavior.ExportedSymbols = ArtifactReport.ExportedSymbols;
 		Behavior.BoundaryOperatorCount = ArtifactReport.BoundaryOperatorCount;
@@ -1283,6 +1372,36 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 	TArray<Flight::Vex::FVexSymbolDefinition> LocalDefinitions = CompileSchema
 		? Flight::Vex::FVexSchemaBinder::BuildSymbolDefinitions(*CompileSchema, SymbolDefinitions)
 		: SymbolDefinitions;
+
+	if (!Behavior.PolicyRequiredSymbols.IsEmpty())
+	{
+		TSet<FString> AvailableSymbols;
+		for (const Flight::Vex::FVexSymbolDefinition& Definition : LocalDefinitions)
+		{
+			AvailableSymbols.Add(Definition.SymbolName);
+		}
+
+		TArray<FString> MissingPolicySymbols;
+		for (const FString& RequiredSymbol : Behavior.PolicyRequiredSymbols)
+		{
+			if (!AvailableSymbols.Contains(RequiredSymbol))
+			{
+				MissingPolicySymbols.Add(RequiredSymbol);
+			}
+		}
+		MissingPolicySymbols.Sort();
+
+		if (MissingPolicySymbols.Num() > 0)
+		{
+			OutErrors += FString::Printf(
+				TEXT("VEX Policy Error: selected policy requires symbols that are unavailable for this compile: %s\n"),
+				*FString::Join(MissingPolicySymbols, TEXT(", ")));
+			Behavior.LastCompileDiagnostics = OutErrors;
+			BackendPath = TEXT("PolicyValidationOnly");
+			FinalizeArtifactReport();
+			return false;
+		}
+	}
 
 	const double ParseStartTime = FPlatformTime::Seconds();
 	const Flight::Vex::FVexParseResult Result = Flight::Vex::ParseAndValidate(VexSource, LocalDefinitions, false);
@@ -1344,6 +1463,8 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 		return Statement.Kind == Flight::Vex::EVexStatementKind::TargetDirective && Statement.SourceSpan == TEXT("@async");
 	});
 
+	TOptional<Flight::Vex::EVexBackendKind> SelectedBackendKind;
+
 	TOptional<Flight::Vex::FVexSchemaBindingResult> SchemaBinding;
 	if (CompileSchema)
 	{
@@ -1373,6 +1494,32 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 			Behavior.bIsAsync,
 			bVerseVmAvailable,
 			/* bPreferSimd */ true);
+		SelectedBackendKind = BackendSelection->ChosenBackend;
+		if (CompilePolicy)
+		{
+			if (const TOptional<Flight::Vex::EVexBackendKind> PolicyPreferredBackend =
+				ResolvePreferredBackendFromPolicy(*CompilePolicy, Behavior.bIsAsync))
+			{
+				if (const Flight::Vex::FVexBackendCompatibilityReport* PolicyBackendReport =
+					BackendSelection->Reports.Find(PolicyPreferredBackend.GetValue());
+					PolicyBackendReport
+					&& (PolicyBackendReport->Decision != Flight::Vex::EVexBackendDecision::Rejected
+						|| PolicyPreferredBackend.GetValue() == Flight::Vex::EVexBackendKind::GpuKernel))
+				{
+					BackendSelection->ChosenBackend = PolicyPreferredBackend.GetValue();
+					BackendSelection->SelectionReason = PolicyBackendReport->Decision != Flight::Vex::EVexBackendDecision::Rejected
+						? FString::Printf(
+							TEXT("Policy row '%s' preferred %s and that backend is legal for this binding."),
+							*CompilePolicy->RowName.ToString(),
+							*Flight::Vex::VexBackendKindToString(PolicyPreferredBackend.GetValue()))
+						: FString::Printf(
+							TEXT("Policy row '%s' prefers %s even though the current backend report rejects it; runtime commit must remain explicit."),
+							*CompilePolicy->RowName.ToString(),
+							*Flight::Vex::VexBackendKindToString(PolicyPreferredBackend.GetValue()));
+					SelectedBackendKind = PolicyPreferredBackend;
+				}
+			}
+		}
 		SchemaBinding->BackendDiagnostics.Reset();
 		SchemaBinding->BackendLegality.Reset();
 		for (const TPair<Flight::Vex::EVexBackendKind, Flight::Vex::FVexBackendCompatibilityReport>& Pair : BackendSelection->Reports)
@@ -1453,6 +1600,49 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 	Behavior.NativeProgram = Result.Program;
 	Behavior.CompileState = EFlightVerseCompileState::GeneratedOnly;
 
+	auto IsSelectedBackendSatisfied = [&SelectedBackendKind, &Behavior](
+		const bool bCanUseVmPath,
+		const bool bCanUseNativePath,
+		const bool bCanUseSimdPath,
+		const bool bCanUseGpuCommit) -> bool
+	{
+		if (!SelectedBackendKind.IsSet())
+		{
+			return true;
+		}
+
+		switch (SelectedBackendKind.GetValue())
+		{
+		case Flight::Vex::EVexBackendKind::NativeScalar:
+			return bCanUseNativePath;
+		case Flight::Vex::EVexBackendKind::NativeSimd:
+			return bCanUseNativePath && bCanUseSimdPath;
+		case Flight::Vex::EVexBackendKind::VerseVm:
+			return bCanUseVmPath;
+		case Flight::Vex::EVexBackendKind::GpuKernel:
+			return bCanUseGpuCommit;
+		default:
+			return Behavior.bHasExecutableProcedure;
+		}
+	};
+
+	auto MarkGeneratedOnlyByPolicy = [&Behavior, &SelectedBackendKind]()
+	{
+		Behavior.bHasExecutableProcedure = false;
+		Behavior.bUsesVmEntryPoint = false;
+		Behavior.CompileState = EFlightVerseCompileState::GeneratedOnly;
+		if (SelectedBackendKind.IsSet())
+		{
+			const FString PolicyDowngradeMessage = FString::Printf(
+				TEXT("Selected backend '%s' is not currently executable and policy does not allow fallback; compile remains generated-only."),
+				*Flight::Vex::VexBackendKindToString(SelectedBackendKind.GetValue()));
+			if (!Behavior.LastCompileDiagnostics.Contains(PolicyDowngradeMessage))
+			{
+				Behavior.LastCompileDiagnostics += TEXT("\n") + PolicyDowngradeMessage;
+			}
+		}
+	};
+
 	FString NativeFallbackReason;
 	if (CanCompileNativeFallback(Result.Program, NativeFallbackReason))
 	{
@@ -1481,9 +1671,15 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 				BehaviorID, Behavior.ExecutionRateHz, Behavior.FrameInterval, Behavior.bIsAsync ? TEXT("[Async]") : TEXT(""));
 			OutErrors += Behavior.LastCompileDiagnostics + TEXT("\n");
 			OutErrors += TEXT("Generated Verse:\n") + VerseCode;
-			BackendPath = TEXT("VerseVmProcedure+NativeFallback");
-			FinalizeArtifactReport();
-			return true;
+			if (IsSelectedBackendSatisfied(true, true, Behavior.SimdPlan.IsValid(), false)
+				|| Behavior.bPolicyAllowsNativeFallback)
+			{
+				BackendPath = TEXT("VerseVmProcedure+NativeFallback");
+				FinalizeArtifactReport();
+				return true;
+			}
+
+			MarkGeneratedOnlyByPolicy();
 		}
 
 		if (!VmDiagnostics.IsEmpty())
@@ -1502,9 +1698,15 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 			BehaviorID, Behavior.ExecutionRateHz, Behavior.FrameInterval, Behavior.bIsAsync ? TEXT("[Async]") : TEXT(""));
 		OutErrors += Behavior.LastCompileDiagnostics + TEXT("\n");
 		OutErrors += TEXT("Generated Verse:\n") + VerseCode;
-		BackendPath = TEXT("NativeFallback");
-		FinalizeArtifactReport();
-		return true;
+		if (IsSelectedBackendSatisfied(false, true, Behavior.SimdPlan.IsValid(), false)
+			|| Behavior.bPolicyAllowsNativeFallback)
+		{
+			BackendPath = TEXT("NativeFallback");
+			FinalizeArtifactReport();
+			return true;
+		}
+
+		MarkGeneratedOnlyByPolicy();
 	}
 
 	const FString FallbackPrefix = NativeFallbackReason.IsEmpty() ? FString() : (NativeFallbackReason + TEXT(" "));
@@ -1532,9 +1734,15 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 			BehaviorID, Behavior.ExecutionRateHz, Behavior.FrameInterval, Behavior.bIsAsync ? TEXT("[Async]") : TEXT(""));
 		OutErrors += Behavior.LastCompileDiagnostics + TEXT("\n");
 		OutErrors += TEXT("Generated Verse (preview):\n") + VerseCode;
-		BackendPath = TEXT("VerseVmProcedure");
-		FinalizeArtifactReport();
-		return true;
+		if (IsSelectedBackendSatisfied(true, false, false, false)
+			|| Behavior.bPolicyAllowsNativeFallback)
+		{
+			BackendPath = TEXT("VerseVmProcedure");
+			FinalizeArtifactReport();
+			return true;
+		}
+
+		MarkGeneratedOnlyByPolicy();
 	}
 
 	Behavior.LastCompileDiagnostics = FString::Printf(
@@ -1551,7 +1759,7 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 	OutErrors += TEXT("Generated Verse:\n") + VerseCode;
 	BackendPath = TEXT("GeneratedPreviewOnly");
 	FinalizeArtifactReport();
-	return false;
+	return Behavior.bPolicyAllowsGeneratedOnly;
 #else
 	Behavior.LastCompileDiagnostics = FString::Printf(
 		TEXT("Behavior is not executable: %sVerse VM is unavailable in this build; generated Verse is preview-only."),
@@ -1563,7 +1771,7 @@ bool UFlightVerseSubsystem::CompileVex(uint32 BehaviorID, const FString& VexSour
 	OutErrors += TEXT("Generated Verse:\n") + VerseCode;
 	BackendPath = TEXT("GeneratedPreviewOnly");
 	FinalizeArtifactReport();
-	return false;
+	return Behavior.bPolicyAllowsGeneratedOnly;
 #endif
 }
 
@@ -1581,19 +1789,12 @@ void UFlightVerseSubsystem::ExecuteBehaviorOnStruct(uint32 BehaviorID, void* Str
 	}
 
 	const FResolvedStorageHost Host = ResolveStorageHost(*Behavior, TypeKey);
+	const TOptional<Flight::Vex::EVexBackendKind> RuntimeBackend = ResolveStructExecutionBackendKind(*Behavior, Host.TypeKey);
 
 #if WITH_VERSE_VM || defined(__INTELLISENSE__)
-	// Zero-cost Tier 1 path (Literal scripts)
-	if (Behavior->Tier == Flight::Vex::EVexTier::Literal)
-	{
-		if (ExecuteResolvedStorageHost(Host, *Behavior, StructPtr))
-		{
-			return;
-		}
-	}
-
-	// Dynamic Tier 2/3 path (Verse VM)
-	if (Behavior->bUsesVmEntryPoint && Behavior->Procedure.Get())
+	if (RuntimeBackend.IsSet()
+		&& RuntimeBackend.GetValue() == Flight::Vex::EVexBackendKind::VerseVm
+		&& Behavior->Procedure.Get())
 	{
 		VerseContext.EnterVM([&]()
 		{
@@ -1604,7 +1805,8 @@ void UFlightVerseSubsystem::ExecuteBehaviorOnStruct(uint32 BehaviorID, void* Str
 	}
 #endif
 
-	if (Behavior->bUsesNativeFallback)
+	if (RuntimeBackend.IsSet()
+		&& RuntimeBackend.GetValue() == Flight::Vex::EVexBackendKind::NativeScalar)
 	{
 		if (!ExecuteResolvedStorageHost(Host, *Behavior, StructPtr))
 		{
@@ -1758,17 +1960,37 @@ void UFlightVerseSubsystem::ExecuteBehaviorBulk(uint32 BehaviorID, TArrayView<Fl
 		return;
 	}
 
-	// TIER 1: Optimized SIMD-ready path (Literal math)
-	if (Behavior->Tier == Flight::Vex::EVexTier::Literal && Behavior->bUsesNativeFallback)
-	{
-		if (Behavior->SimdPlan.IsValid())
-		{
-			Behavior->SimdPlan->Execute(DroidStates);
-			return;
-		}
+	const TOptional<Flight::Vex::EVexBackendKind> RuntimeBackend = ResolveBulkExecutionBackendKind(*Behavior);
+	const FResolvedStorageHost DroidHost = ResolveStorageHost(*Behavior, GetDroidStateTypeKey());
 
-		// Fallback to loop if plan compilation failed
-		const FResolvedStorageHost DroidHost = ResolveStorageHost(*Behavior, GetDroidStateTypeKey());
+	if (RuntimeBackend.IsSet()
+		&& RuntimeBackend.GetValue() == Flight::Vex::EVexBackendKind::NativeSimd)
+	{
+		check(Behavior->SimdPlan.IsValid());
+		Behavior->SimdPlan->Execute(DroidStates);
+		return;
+	}
+
+#if WITH_VERSE_VM || defined(__INTELLISENSE__)
+	if (RuntimeBackend.IsSet()
+		&& RuntimeBackend.GetValue() == Flight::Vex::EVexBackendKind::VerseVm
+		&& Behavior->Procedure.Get())
+	{
+		VerseContext.EnterVM([&]()
+		{
+			Verse::FAllocationContext AllocContext(VerseContext);
+			for (Flight::Swarm::FDroidState& Droid : DroidStates)
+			{
+				ExecuteBehaviorInContext(BehaviorID, *Behavior, &Droid, GetDroidStateTypeKey(), AllocContext);
+			}
+		});
+		return;
+	}
+#endif
+
+	if (RuntimeBackend.IsSet()
+		&& RuntimeBackend.GetValue() == Flight::Vex::EVexBackendKind::NativeScalar)
+	{
 		for (Flight::Swarm::FDroidState& Droid : DroidStates)
 		{
 			(void)ExecuteResolvedStorageHost(DroidHost, *Behavior, &Droid);
@@ -1776,23 +1998,6 @@ void UFlightVerseSubsystem::ExecuteBehaviorBulk(uint32 BehaviorID, TArrayView<Fl
 		return;
 	}
 
-	// TIER 2/3: Standard dispatch via Fusion Reduction
-#if WITH_VERSE_VM || defined(__INTELLISENSE__)
-	if (Behavior->bUsesVmEntryPoint && Behavior->Procedure.Get())
-	{
-		VerseContext.EnterVM([&]()
-		{
-			Verse::FAllocationContext AllocContext(VerseContext);
-			for (Flight::Swarm::FDroidState& Droid : DroidStates)
-			{
-				ExecuteBehaviorInContext(BehaviorID, *Behavior, Droid, AllocContext);
-			}
-		});
-		return;
-	}
-#endif
-
-	// Fallback to individual dispatch
 	for (Flight::Swarm::FDroidState& Droid : DroidStates)
 	{
 		ExecuteBehavior(BehaviorID, Droid);
@@ -1843,18 +2048,27 @@ void UFlightVerseSubsystem::FlushDeferredBehaviors()
 		for (const auto& Deferred : DeferredBehaviors)
 		{
 			const FVerseBehavior* Behavior = Behaviors.Find(Deferred.BehaviorID);
-			if (Behavior && Behavior->bHasExecutableProcedure && Behavior->bUsesVmEntryPoint)
+			if (!Behavior || !Behavior->bHasExecutableProcedure)
+			{
+				continue;
+			}
+
+			const FResolvedStorageHost DeferredHost = ResolveStorageHost(*Behavior, Deferred.TypeKey);
+			const TOptional<Flight::Vex::EVexBackendKind> RuntimeBackend = ResolveStructExecutionBackendKind(*Behavior, DeferredHost.TypeKey);
+			if (RuntimeBackend.IsSet()
+				&& RuntimeBackend.GetValue() == Flight::Vex::EVexBackendKind::VerseVm
+				&& Behavior->Procedure.Get())
 			{
 				ExecuteBehaviorInContext(
 					Deferred.BehaviorID,
 					*Behavior,
 					Deferred.StatePtr,
-					ResolveStorageHost(*Behavior, Deferred.TypeKey).TypeKey,
+					DeferredHost.TypeKey,
 					AllocContext);
 			}
-			else if (Behavior && Behavior->bUsesNativeFallback)
+			else if (RuntimeBackend.IsSet()
+				&& RuntimeBackend.GetValue() == Flight::Vex::EVexBackendKind::NativeScalar)
 			{
-				const FResolvedStorageHost DeferredHost = ResolveStorageHost(*Behavior, Deferred.TypeKey);
 				(void)ExecuteResolvedStorageHost(DeferredHost, *Behavior, Deferred.StatePtr);
 			}
 		}
@@ -1880,15 +2094,10 @@ void UFlightVerseSubsystem::ExecuteBehaviorDirect(
 		return;
 	}
 
-	// TIER 1: Direct SIMD path
-	if (Behavior->Tier == Flight::Vex::EVexTier::Literal && Behavior->SimdPlan.IsValid())
-	{
-		Behavior->SimdPlan->ExecuteDirect(Transforms, DroidStates);
-		return;
-	}
-
 	const FResolvedStorageHost Host = ResolveStorageHost(*Behavior, Behavior->BoundTypeKey);
-	if (!ExecuteResolvedDirectStorageHost(Host, *Behavior, Transforms, DroidStates))
+	const TOptional<Flight::Vex::EVexBackendKind> RuntimeBackend = ResolveDirectExecutionBackendKind(*Behavior);
+	if (!RuntimeBackend.IsSet()
+		|| !ExecuteResolvedDirectStorageHost(Host, *Behavior, RuntimeBackend.GetValue(), Transforms, DroidStates))
 	{
 		const TCHAR* HostName = TEXT("None");
 		switch (Host.Kind)
@@ -1951,6 +2160,24 @@ FString UFlightVerseSubsystem::GetBehaviorCompileArtifactReportJson(uint32 Behav
 	return Report ? Flight::Vex::BuildCompileArtifactReportJson(*Report) : FString();
 }
 
+FString UFlightVerseSubsystem::DescribeCommittedExecutionBackend(uint32 BehaviorID, const void* TypeKey) const
+{
+	const FVerseBehavior* Behavior = Behaviors.Find(BehaviorID);
+	return Behavior ? ResolveCommittedExecutionBackend(*Behavior, TypeKey) : FString(TEXT("Unknown"));
+}
+
+FString UFlightVerseSubsystem::DescribeBulkExecutionBackend(uint32 BehaviorID) const
+{
+	const FVerseBehavior* Behavior = Behaviors.Find(BehaviorID);
+	return Behavior ? DescribeRuntimeExecutionBackend(ResolveBulkExecutionBackendKind(*Behavior)) : FString(TEXT("Unknown"));
+}
+
+FString UFlightVerseSubsystem::DescribeDirectExecutionBackend(uint32 BehaviorID) const
+{
+	const FVerseBehavior* Behavior = Behaviors.Find(BehaviorID);
+	return Behavior ? DescribeRuntimeExecutionBackend(ResolveDirectExecutionBackendKind(*Behavior)) : FString(TEXT("Unknown"));
+}
+
 FString UFlightVerseSubsystem::DescribeResolvedStorageHost(uint32 BehaviorID, const void* TypeKey) const
 {
 	const FVerseBehavior* Behavior = Behaviors.Find(BehaviorID);
@@ -1974,6 +2201,332 @@ FString UFlightVerseSubsystem::DescribeResolvedStorageHost(uint32 BehaviorID, co
 	default:
 		return TEXT("None");
 	}
+}
+
+bool UFlightVerseSubsystem::CanExecuteResolvedStorageHostDirect(const FResolvedStorageHost& Host) const
+{
+	switch (Host.Kind)
+	{
+	case EStorageHostKind::SchemaAos:
+	case EStorageHostKind::SchemaAccessor:
+	case EStorageHostKind::LegacyDroidState:
+		return true;
+	default:
+		return false;
+	}
+}
+
+const FFlightBehaviorCompilePolicyRow* UFlightVerseSubsystem::ResolveCompilePolicy(
+	const uint32 BehaviorID,
+	const FCompilePolicyContext& CompilePolicyContext) const
+{
+	if (CompilePolicyContext.ExplicitPolicy)
+	{
+		return CompilePolicyContext.ExplicitPolicy;
+	}
+
+	const UWorld* World = GetWorld();
+	if (!World)
+	{
+		return nullptr;
+	}
+
+	const UGameInstance* GameInstance = World->GetGameInstance();
+	const UFlightDataSubsystem* DataSubsystem = GameInstance ? GameInstance->GetSubsystem<UFlightDataSubsystem>() : nullptr;
+	return DataSubsystem
+		? DataSubsystem->FindBehaviorCompilePolicy(BehaviorID, CompilePolicyContext.CohortName, CompilePolicyContext.ProfileName)
+		: nullptr;
+}
+
+TOptional<Flight::Vex::EVexBackendKind> UFlightVerseSubsystem::ResolvePreferredBackendFromPolicy(
+	const FFlightBehaviorCompilePolicyRow& Policy,
+	const bool bIsAsync)
+{
+	using namespace Flight::Vex;
+
+	switch (Policy.PreferredDomain)
+	{
+	case EFlightBehaviorCompileDomainPreference::NativeCpu:
+		return EVexBackendKind::NativeScalar;
+	case EFlightBehaviorCompileDomainPreference::VerseVm:
+		return EVexBackendKind::VerseVm;
+	case EFlightBehaviorCompileDomainPreference::Simd:
+		return EVexBackendKind::NativeSimd;
+	case EFlightBehaviorCompileDomainPreference::Gpu:
+		return EVexBackendKind::GpuKernel;
+	case EFlightBehaviorCompileDomainPreference::TaskGraph:
+		return bIsAsync ? TOptional<EVexBackendKind>(EVexBackendKind::VerseVm) : TOptional<EVexBackendKind>();
+	default:
+		return {};
+	}
+}
+
+FString UFlightVerseSubsystem::BuildCommitDetail(
+	const FString& SelectedBackend,
+	const FString& CommittedBackend,
+	const FFlightBehaviorCompilePolicyRow* Policy,
+	const bool bHasExecutableProcedure)
+{
+	if (!bHasExecutableProcedure)
+	{
+		if (Policy && Policy->AllowsGeneratedOnly())
+		{
+			return FString::Printf(
+				TEXT("Policy row '%s' allows generated-only output; no executable runtime path was committed."),
+				*Policy->RowName.ToString());
+		}
+
+		return TEXT("No executable runtime path was committed.");
+	}
+
+	if (SelectedBackend.IsEmpty() || SelectedBackend == CommittedBackend)
+	{
+		return Policy
+			? FString::Printf(TEXT("Committed backend satisfies policy row '%s'."), *Policy->RowName.ToString())
+			: TEXT("Committed backend matches the selected executable backend.");
+	}
+
+	if (CommittedBackend.IsEmpty() || CommittedBackend == TEXT("Unknown"))
+	{
+		return Policy
+			? FString::Printf(
+				TEXT("Selected backend '%s' came from policy row '%s', but runtime commit remains unproven or pending."),
+				*SelectedBackend,
+				*Policy->RowName.ToString())
+			: FString::Printf(TEXT("Selected backend '%s' is not yet a committed runtime path."), *SelectedBackend);
+	}
+
+	return Policy
+		? FString::Printf(
+			TEXT("Policy row '%s' selected '%s', but runtime committed '%s' after fallback."),
+			*Policy->RowName.ToString(),
+			*SelectedBackend,
+			*CommittedBackend)
+		: FString::Printf(TEXT("Selected backend '%s' downgraded to committed backend '%s'."), *SelectedBackend, *CommittedBackend);
+}
+
+TOptional<Flight::Vex::EVexBackendKind> UFlightVerseSubsystem::ResolveSelectedBackendKind(const FVerseBehavior& Behavior) const
+{
+	using namespace Flight::Vex;
+
+	if (Behavior.SelectedBackend == VexBackendKindToString(EVexBackendKind::NativeScalar))
+	{
+		return EVexBackendKind::NativeScalar;
+	}
+
+	if (Behavior.SelectedBackend == VexBackendKindToString(EVexBackendKind::NativeSimd))
+	{
+		return EVexBackendKind::NativeSimd;
+	}
+
+	if (Behavior.SelectedBackend == VexBackendKindToString(EVexBackendKind::VerseVm))
+	{
+		return EVexBackendKind::VerseVm;
+	}
+
+	if (Behavior.SelectedBackend == VexBackendKindToString(EVexBackendKind::GpuKernel))
+	{
+		return EVexBackendKind::GpuKernel;
+	}
+
+	return {};
+}
+
+TOptional<Flight::Vex::EVexBackendKind> UFlightVerseSubsystem::ResolveStructExecutionBackendKind(
+	const FVerseBehavior& Behavior,
+	const void* RequestedTypeKey) const
+{
+	using namespace Flight::Vex;
+
+	if (!Behavior.bHasExecutableProcedure)
+	{
+		return {};
+	}
+
+	const void* EffectiveTypeKey = RequestedTypeKey
+		? RequestedTypeKey
+		: (Behavior.BoundTypeKey ? Behavior.BoundTypeKey : GetDroidStateTypeKey());
+	const FResolvedStorageHost Host = ResolveStorageHost(Behavior, EffectiveTypeKey);
+	const bool bCanUseNativeScalar = Behavior.bUsesNativeFallback && CanExecuteResolvedStorageHostDirect(Host);
+
+#if WITH_VERSE_VM || defined(__INTELLISENSE__)
+	const bool bCanUseVm = Behavior.bUsesVmEntryPoint && Behavior.Procedure.Get();
+#else
+	const bool bCanUseVm = false;
+#endif
+
+	if (const TOptional<EVexBackendKind> SelectedBackend = ResolveSelectedBackendKind(Behavior))
+	{
+		switch (SelectedBackend.GetValue())
+		{
+		case EVexBackendKind::NativeScalar:
+			if (bCanUseNativeScalar)
+			{
+				return EVexBackendKind::NativeScalar;
+			}
+			break;
+		case EVexBackendKind::VerseVm:
+			if (bCanUseVm)
+			{
+				return EVexBackendKind::VerseVm;
+			}
+			break;
+		default:
+			break;
+		}
+	}
+
+	if (Behavior.Tier == Flight::Vex::EVexTier::Literal && bCanUseNativeScalar)
+	{
+		return EVexBackendKind::NativeScalar;
+	}
+
+	if (bCanUseVm)
+	{
+		return EVexBackendKind::VerseVm;
+	}
+
+	if (bCanUseNativeScalar)
+	{
+		return EVexBackendKind::NativeScalar;
+	}
+
+	return {};
+}
+
+TOptional<Flight::Vex::EVexBackendKind> UFlightVerseSubsystem::ResolveBulkExecutionBackendKind(const FVerseBehavior& Behavior) const
+{
+	using namespace Flight::Vex;
+
+	if (!Behavior.bHasExecutableProcedure)
+	{
+		return {};
+	}
+
+	const FResolvedStorageHost Host = ResolveStorageHost(Behavior, GetDroidStateTypeKey());
+	const bool bCanUseNativeScalar = Behavior.bUsesNativeFallback && CanExecuteResolvedStorageHostDirect(Host);
+	const bool bCanUseSimd = Behavior.Tier == EVexTier::Literal && Behavior.bUsesNativeFallback && Behavior.SimdPlan.IsValid();
+
+#if WITH_VERSE_VM || defined(__INTELLISENSE__)
+	const bool bCanUseVm = Behavior.bUsesVmEntryPoint && Behavior.Procedure.Get();
+#else
+	const bool bCanUseVm = false;
+#endif
+
+	if (const TOptional<EVexBackendKind> SelectedBackend = ResolveSelectedBackendKind(Behavior))
+	{
+		switch (SelectedBackend.GetValue())
+		{
+		case EVexBackendKind::NativeSimd:
+			if (bCanUseSimd)
+			{
+				return EVexBackendKind::NativeSimd;
+			}
+			break;
+		case EVexBackendKind::VerseVm:
+			if (bCanUseVm)
+			{
+				return EVexBackendKind::VerseVm;
+			}
+			break;
+		case EVexBackendKind::NativeScalar:
+			if (bCanUseNativeScalar)
+			{
+				return EVexBackendKind::NativeScalar;
+			}
+			break;
+		default:
+			break;
+		}
+	}
+
+	if (bCanUseSimd)
+	{
+		return EVexBackendKind::NativeSimd;
+	}
+
+	if (bCanUseVm)
+	{
+		return EVexBackendKind::VerseVm;
+	}
+
+	if (bCanUseNativeScalar)
+	{
+		return EVexBackendKind::NativeScalar;
+	}
+
+	return {};
+}
+
+TOptional<Flight::Vex::EVexBackendKind> UFlightVerseSubsystem::ResolveDirectExecutionBackendKind(const FVerseBehavior& Behavior) const
+{
+	using namespace Flight::Vex;
+
+	if (!Behavior.bHasExecutableProcedure)
+	{
+		return {};
+	}
+
+	const FResolvedStorageHost Host = ResolveStorageHost(Behavior, Behavior.BoundTypeKey);
+	const bool bCanUseNativeScalar = Behavior.bUsesNativeFallback && Host.Kind == EStorageHostKind::MassFragments;
+	const bool bCanUseSimd = bCanUseNativeScalar && Behavior.Tier == EVexTier::Literal && Behavior.SimdPlan.IsValid();
+	const bool bCanUseGpu = Host.Kind == EStorageHostKind::GpuBuffer;
+
+	if (const TOptional<EVexBackendKind> SelectedBackend = ResolveSelectedBackendKind(Behavior))
+	{
+		switch (SelectedBackend.GetValue())
+		{
+		case EVexBackendKind::NativeSimd:
+			if (bCanUseSimd)
+			{
+				return EVexBackendKind::NativeSimd;
+			}
+			break;
+		case EVexBackendKind::NativeScalar:
+			if (bCanUseNativeScalar)
+			{
+				return EVexBackendKind::NativeScalar;
+			}
+			break;
+		case EVexBackendKind::GpuKernel:
+			if (bCanUseGpu)
+			{
+				return EVexBackendKind::GpuKernel;
+			}
+			break;
+		default:
+			break;
+		}
+	}
+
+	if (bCanUseSimd)
+	{
+		return EVexBackendKind::NativeSimd;
+	}
+
+	if (bCanUseNativeScalar)
+	{
+		return EVexBackendKind::NativeScalar;
+	}
+
+	if (bCanUseGpu)
+	{
+		return EVexBackendKind::GpuKernel;
+	}
+
+	return {};
+}
+
+FString UFlightVerseSubsystem::DescribeRuntimeExecutionBackend(const TOptional<Flight::Vex::EVexBackendKind>& BackendKind)
+{
+	return BackendKind.IsSet()
+		? Flight::Vex::VexBackendKindToString(BackendKind.GetValue())
+		: FString(TEXT("Unknown"));
+}
+
+FString UFlightVerseSubsystem::ResolveCommittedExecutionBackend(const FVerseBehavior& Behavior, const void* RequestedTypeKey) const
+{
+	return DescribeRuntimeExecutionBackend(ResolveStructExecutionBackendKind(Behavior, RequestedTypeKey));
 }
 
 #if WITH_VERSE_VM || defined(__INTELLISENSE__)

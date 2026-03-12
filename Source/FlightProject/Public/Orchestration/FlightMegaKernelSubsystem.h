@@ -19,6 +19,15 @@ public:
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
 
+	/** Ensure the generated mega-kernel shader include path is mapped and has a bootstrap file. */
+	static void EnsureGeneratedShaderBootstrap();
+
+	/** Absolute path to the generated mega-kernel shader include on disk. */
+	static FString GetGeneratedShaderFilePath();
+
+	/** Build the bootstrap mega-kernel shader include used before orchestration synthesis runs. */
+	static FString BuildBootstrapMegaKernelSource();
+
 	/** Get the current synthesized Mega-Kernel HLSL. */
 	const FString& GetMegaKernelSource() const { return MegaKernelSource; }
 

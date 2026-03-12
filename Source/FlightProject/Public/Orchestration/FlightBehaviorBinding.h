@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Core/FlightReflection.h"
 
 namespace Flight::Orchestration
 {
@@ -15,6 +16,23 @@ enum class EFlightExecutionDomain : uint8
 	VerseVm,
 	Simd,
 	Gpu
+};
+
+enum class EFlightBehaviorBindingSelectionSource : uint8
+{
+	None,
+	ManualBinding,
+	AutomaticSelection,
+	GeneratedFallback,
+	VerseFallback
+};
+
+enum class EFlightBehaviorBindingSelectionRule : uint8
+{
+	None,
+	ExplicitRegistration,
+	LowestExecutableBehaviorId,
+	PreferredBehaviorId
 };
 
 struct FLIGHTPROJECT_API FFlightBehaviorRecord
@@ -30,6 +48,9 @@ struct FLIGHTPROJECT_API FFlightBehaviorRecord
 	TArray<FName> RequiredContracts;
 	FString SelectedBackend;
 	FString CommittedBackend;
+	FString CommitDetail;
+	FString SelectedPolicyRow;
+	FString PolicyPreferredDomain;
 	TArray<FString> ImportedSymbols;
 	TArray<FString> ExportedSymbols;
 	int32 BoundaryOperatorCount = 0;
@@ -43,12 +64,130 @@ struct FLIGHTPROJECT_API FFlightBehaviorRecord
 
 struct FLIGHTPROJECT_API FFlightBehaviorBinding
 {
-	FName CohortName = NAME_None;
-	uint32 BehaviorID = 0;
-	EFlightExecutionDomain ExecutionDomain = EFlightExecutionDomain::Unknown;
-	uint32 FrameInterval = 1;
-	bool bAsync = false;
-	TArray<FName> RequiredContracts;
+	FLIGHT_REFLECT_BODY(FFlightBehaviorBinding);
+
+	struct FLIGHTPROJECT_API FIdentity
+	{
+		FName CohortName = NAME_None;
+		uint32 BehaviorID = 0;
+
+		FLIGHT_REFLECT_BODY(FIdentity);
+
+		bool IsValid() const
+		{
+			return !CohortName.IsNone() && BehaviorID != 0;
+		}
+	};
+
+	struct FLIGHTPROJECT_API FReport
+	{
+		struct FLIGHTPROJECT_API FSelectionProvenance
+		{
+			EFlightBehaviorBindingSelectionSource Source = EFlightBehaviorBindingSelectionSource::None;
+			EFlightBehaviorBindingSelectionRule Rule = EFlightBehaviorBindingSelectionRule::None;
+			FName RequestedCohortName = NAME_None;
+			FName FallbackCohortName = NAME_None;
+			bool bUsedDefaultCohortFallback = false;
+
+			FLIGHT_REFLECT_BODY(FSelectionProvenance);
+
+			bool HasSelectionSource() const
+			{
+				return Source != EFlightBehaviorBindingSelectionSource::None;
+			}
+
+			void ApplyDefaultCohortFallback(const FName InRequestedCohortName, const FName InFallbackCohortName)
+			{
+				bUsedDefaultCohortFallback = true;
+				RequestedCohortName = InRequestedCohortName;
+				FallbackCohortName = InFallbackCohortName;
+			}
+		};
+
+		FIdentity Identity;
+		EFlightExecutionDomain ExecutionDomain = EFlightExecutionDomain::Unknown;
+		uint32 FrameInterval = 1;
+		bool bAsync = false;
+		TArray<FName> RequiredContracts;
+		FSelectionProvenance Selection;
+
+		FLIGHT_REFLECT_BODY(FReport);
+	};
+
+	FIdentity Identity;
+	FReport Report;
+
+	bool IsValid() const
+	{
+		return Identity.IsValid();
+	}
+
+	void SyncReportIdentity()
+	{
+		Report.Identity = Identity;
+	}
+
+	FName GetCohortName() const
+	{
+		return Identity.CohortName;
+	}
+
+	uint32 GetBehaviorID() const
+	{
+		return Identity.BehaviorID;
+	}
+
+	EFlightExecutionDomain GetExecutionDomain() const
+	{
+		return Report.ExecutionDomain;
+	}
+
+	uint32 GetFrameInterval() const
+	{
+		return Report.FrameInterval;
+	}
+
+	bool IsAsync() const
+	{
+		return Report.bAsync;
+	}
+
+	const TArray<FName>& GetRequiredContracts() const
+	{
+		return Report.RequiredContracts;
+	}
 };
 
 } // namespace Flight::Orchestration
+
+namespace Flight::Reflection
+{
+
+FLIGHT_REFLECT_FIELDS_ATTR(Flight::Orchestration::FFlightBehaviorBinding::FIdentity,
+	FLIGHT_FIELD_ATTR(FName, CohortName),
+	FLIGHT_FIELD_ATTR(uint32, BehaviorID)
+)
+
+FLIGHT_REFLECT_FIELDS_ATTR(Flight::Orchestration::FFlightBehaviorBinding::FReport,
+	FLIGHT_FIELD_ATTR(Flight::Orchestration::FFlightBehaviorBinding::FIdentity, Identity),
+	FLIGHT_FIELD_ATTR(Flight::Orchestration::EFlightExecutionDomain, ExecutionDomain),
+	FLIGHT_FIELD_ATTR(uint32, FrameInterval),
+	FLIGHT_FIELD_ATTR(bool, bAsync),
+	FLIGHT_FIELD_ATTR(TArray<FName>, RequiredContracts),
+	FLIGHT_FIELD_ATTR(Flight::Orchestration::FFlightBehaviorBinding::FReport::FSelectionProvenance, Selection)
+)
+
+FLIGHT_REFLECT_FIELDS_ATTR(Flight::Orchestration::FFlightBehaviorBinding::FReport::FSelectionProvenance,
+	FLIGHT_FIELD_ATTR(Flight::Orchestration::EFlightBehaviorBindingSelectionSource, Source),
+	FLIGHT_FIELD_ATTR(Flight::Orchestration::EFlightBehaviorBindingSelectionRule, Rule),
+	FLIGHT_FIELD_ATTR(FName, RequestedCohortName),
+	FLIGHT_FIELD_ATTR(FName, FallbackCohortName),
+	FLIGHT_FIELD_ATTR(bool, bUsedDefaultCohortFallback)
+)
+
+FLIGHT_REFLECT_FIELDS_ATTR(Flight::Orchestration::FFlightBehaviorBinding,
+	FLIGHT_FIELD_ATTR(Flight::Orchestration::FFlightBehaviorBinding::FIdentity, Identity),
+	FLIGHT_FIELD_ATTR(Flight::Orchestration::FFlightBehaviorBinding::FReport, Report)
+)
+
+} // namespace Flight::Reflection

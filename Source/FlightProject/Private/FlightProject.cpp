@@ -11,6 +11,7 @@
 #endif
 
 #include "Core/FlightLogging.h"
+#include "Orchestration/FlightMegaKernelSubsystem.h"
 #include "UI/FlightLogCapture.h"
 
 DEFINE_LOG_CATEGORY(LogFlightProject);
@@ -50,6 +51,8 @@ void FFlightProjectModule::StartupModule()
         UE_LOG(LogFlightProject, Warning,
             TEXT("Shader directory not found at %s - custom shaders unavailable"), *ShaderDirectory);
     }
+
+    UFlightMegaKernelSubsystem::EnsureGeneratedShaderBootstrap();
 
 #if WITH_VERSE_VM || defined(__INTELLISENSE__)
 	if (!GVerseAssemblerPassHandle.IsValid())

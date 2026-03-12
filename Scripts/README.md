@@ -7,6 +7,7 @@ This directory hosts thin wrappers around Unreal's native tooling so we do not h
 - Exports `UE_ROOT`, defaulting to `$HOME/Unreal/UnrealEngine` if the variable is unset.
 - Provides helper guards (`ensure_project_file`, `ensure_file_exists`, `ensure_executable`, `resolve_ue_path`) that each script can reuse.
 - Centralises script output defaults through `FP_SCRIPT_COLOR_MODE`, `FP_SCRIPT_TIMESTAMPS`, `FP_TEST_LOG_PROFILE`, `FP_TEST_OUTPUT_MODE`, and `FP_TEST_EXTRA_LOG_CMDS`.
+- Centralises test build policy through `FP_TEST_BUILD_BEFORE_RUN`, `FP_TEST_BUILD_CONFIGURATION`, and `FP_TEST_BUILD_EXTRA_ARGS` so test runners can rebuild changed source before validation.
 - Provides shared helpers for banners, timestamp prefixes, color decisions, and test `-LogCmds` profile construction.
 - Centralises Wayland/X11 environment tweaks with `configure_video_backend` so every launcher shares the same display defaults.
 - Shares compositor/session launch wrappers through `FP_SESSION_WRAPPER`, `FP_USE_GAMESCOPE`, `FP_GAMESCOPE_ARGS`, and `build_launch_prefix`.
@@ -25,7 +26,7 @@ When adding new automation, source `env_common.sh` first so every helper shares 
 4. `./Scripts/run_game.sh [options]`  
    Builds (unless `--no-build`), cooks content, stages a Linux build via `RunUAT.sh BuildCookRun -nocompileuat`, and launches the staged `Saved/StagedBuilds/Linux*/FlightProject.sh` wrapper. It auto-cooks the default map when one is not specified and will reuse the staged build on subsequent runs; pass `--no-cook` to skip the staging step if you know the staged artifacts are current. Display helpers such as `--video-backend`, `--session-wrapper`, `--gamescope`, `--half-window`, and `--windowed-size WxH` tune the launch before the staged binary spawns. Use `--` to forward extra flags to the game binary (for example `-- -windowed -opengl4` when Vulkan drivers misbehave). The helper also sandbox’s .NET state under `Saved/DotNetCli` so first-run sentinels never touch the global home directory. See `Docs/Troubleshooting.md` for the history behind these safeguards.
 5. `./Scripts/run_tests_phased.sh [options]`  
-   Runs validation in explicit phases: **Phase 1** (complex/generated + spec, including the lightweight startup sequencing suite), **Phase 2** (simple automation), and optional **Phase 3** GPU/system checks (`--with-gpu`). Use `--phase1-only`, `--phase2-only`, or `--phase3-only` for focused triage.
+   Runs validation in explicit phases: **Phase 1** generated + spec, **Phase 2** architecture/development, **Phase 3** multi-case integration, **Phase 4** simple unit automation, and optional **Phase 5** GPU/system checks (`--with-gpu`). By default it now triggers `build_targets.sh` once before the phases run; use `--no-build` to skip or `--build-config <Debug|Development|Shipping>` to override the build configuration for that preflight compile. Use `--print-plan` to inspect the resolved build policy and phase filters without launching Unreal.
 6. `./Scripts/run_tests_full.sh`  
    Runs Vulkan GPU validation. It now relies on project/plugin Vulkan extension registration by default; set `TEST_FORCE_VULKAN_EXTENSIONS=1` only when you want to compare against explicit `-vulkanextension=...` forcing. On the current Linux runner the default GPU-validation preset is `TEST_GPU_VALIDATION_PRESET=local-radv`, which applies `TEST_VK_DRIVER_FILES=/usr/share/vulkan/icd.d/radeon_icd.x86_64.json` and `TEST_VK_LOADER_LAYERS_DISABLE='~implicit~'` unless you override them. Set `TEST_GPU_VALIDATION_PRESET=off` to disable that default. The runner exposes explicit scopes:
    - `TEST_SCOPE=benchmark` for `FlightProject.Perf.GpuPerception`
@@ -34,7 +35,7 @@ When adding new automation, source `env_common.sh` first so every helper shares 
    - `TEST_SCOPE=gpu_domain` for CPU-safe GPU-domain tests
    - `TEST_SCOPE=gpu_required` / `all` for the full GPU-required lane
    Additional comparison toggles: `TEST_VIDEO_BACKEND=auto|wayland|x11|dummy`, `TEST_RENDER_OFFSCREEN=1|0`, `TEST_SESSION_WRAPPER=auto|uwsm|none`, `TEST_USE_GAMESCOPE=1|0`, `TEST_GAMESCOPE_ARGS="..."`, `TEST_VK_VALIDATION=0..5`, `TEST_VK_GPU_VALIDATION=1|0`, `TEST_VK_DEBUG_SYNC=1|0`, `TEST_VK_BEST_PRACTICES=1|0`, `TEST_VK_DEBUG_UTILS=1|0`, `TEST_VK_DRIVER_FILES=/path/to/icd.json`, `TEST_VK_ICD_FILENAMES=/path/to/icd.json`, and `TEST_VK_LOADER_LAYERS_DISABLE='~implicit~'`.
-   The GPU runner also now honors the shared output controls: `--preset`, `--profile`, `--output`, `--automation-only`, `--summary`, `--errors-only`, `--all-output`, `--show-python`, `--show-startup`, `--extra-log-cmds`, `--timestamps`, and `--scope`.
+   The GPU runner also now honors the shared output controls: `--preset`, `--profile`, `--output`, `--automation-only`, `--summary`, `--errors-only`, `--all-output`, `--show-python`, `--show-startup`, `--extra-log-cmds`, `--timestamps`, and `--scope`. Like the headless runner, it rebuilds by default before test execution; use `--no-build` or `--build-config <Debug|Development|Shipping>` to override.
 
 ## Vulkan Recovery / Triage
 
@@ -191,6 +192,9 @@ Matching environment variables:
 - `FP_TEST_LOG_PROFILE`
 - `FP_TEST_OUTPUT_MODE`
 - `FP_TEST_EXTRA_LOG_CMDS`
+- `FP_TEST_BUILD_BEFORE_RUN`
+- `FP_TEST_BUILD_CONFIGURATION`
+- `FP_TEST_BUILD_EXTRA_ARGS`
 - `TEST_INCLUDE_PYTHON_LOGS=1`
 - `TEST_INCLUDE_STARTUP_LOGS=1`
 
@@ -215,8 +219,18 @@ Examples:
 ```
 
 ```bash
-FP_TEST_LOG_PROFILE=minimal FP_TEST_OUTPUT_MODE=automation ./Scripts/run_tests_phased.sh --phase2-only
+FP_TEST_LOG_PROFILE=minimal FP_TEST_OUTPUT_MODE=automation ./Scripts/run_tests_phased.sh --phase4-only
 ```
+
+```bash
+./Scripts/run_tests_phased.sh --print-plan
+```
+
+Build-before-test behavior:
+- `run_tests_headless.sh`, `run_tests_full.sh`, and `run_tests_phased.sh` now rebuild by default before automation starts.
+- Use `--no-build` for one-off runs against an already current binary state.
+- Use `--build-config <Debug|Development|Shipping>` when a specific build configuration must match the intended validation target.
+- Use `FP_TEST_BUILD_BEFORE_RUN=0` to disable the default project-wide, or `FP_TEST_BUILD_EXTRA_ARGS="-NoUBA"` / similar to push shared flags into the pre-test `build_targets.sh` invocation.
 
 ```bash
 FP_TEST_PRESET=startup-debug ./Scripts/run_tests_phased.sh --phase1-only

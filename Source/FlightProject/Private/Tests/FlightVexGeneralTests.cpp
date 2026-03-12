@@ -6,6 +6,7 @@
 #include "Engine/World.h"
 #include "Mass/FlightMassFragments.h"
 #include "Verse/UFlightVerseSubsystem.h"
+#include "Vex/FlightVexBackendCapabilities.h"
 #include "Vex/FlightVexSchemaOrchestrator.h"
 #include "Vex/FlightVexSchemaTypes.h"
 #include "Vex/FlightVexSymbolRegistry.h"
@@ -128,6 +129,9 @@ Flight::Vex::FVexTypeSchema BuildStorageClassificationSchema(
 	FVexSymbolRecord Shield;
 	Shield.SymbolName = TEXT("@shield");
 	Shield.ValueType = EVexValueType::Float;
+	Shield.Residency = StorageKind == EVexStorageKind::GpuBufferElement
+		? EFlightVexSymbolResidency::GpuOnly
+		: EFlightVexSymbolResidency::Shared;
 	Shield.Storage.Kind = StorageKind;
 	Shield.Storage.FragmentType = FName(TEXT("FFlightDroidStateFragment"));
 	Shield.Storage.ElementStride = sizeof(float);
@@ -266,6 +270,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVexGeneralizationTest, "FlightProject.Ve
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVexAccessorHostTest, "FlightProject.Vex.Generalization.ExecuteOnAccessorHost", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVexMassHostClassificationTest, "FlightProject.Vex.Generalization.ClassifyMassHost", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVexGpuHostClassificationTest, "FlightProject.Vex.Generalization.ClassifyGpuHost", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVexGpuPolicyCommitmentTest, "FlightProject.Vex.Generalization.GpuPolicyCommitment", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVexMassHostExecutionTest, "FlightProject.Vex.Generalization.ExecuteOnMassHost", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVexManualProviderResolutionTest, "FlightProject.Vex.Generalization.ResolveManualMassProvider", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
@@ -448,6 +453,78 @@ bool FFlightVexGpuHostClassificationTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+bool FFlightVexGpuPolicyCommitmentTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+
+	UWorld* World = nullptr;
+	for (const FWorldContext& Context : GEngine->GetWorldContexts())
+	{
+		if (Context.WorldType == EWorldType::Editor || Context.WorldType == EWorldType::PIE)
+		{
+			World = Context.World();
+			break;
+		}
+	}
+
+	if (!World) return false;
+
+	UFlightVerseSubsystem* VerseSubsystem = World->GetSubsystem<UFlightVerseSubsystem>();
+	if (!VerseSubsystem) return false;
+
+	Flight::Vex::FVexSymbolRegistry::Get().RegisterSchema(
+		BuildStorageClassificationSchema(
+			TEXT("FGpuBackedPolicyState"),
+			GetGpuBackedVexTypeKey(),
+			Flight::Vex::EVexStorageKind::GpuBufferElement));
+
+	FFlightBehaviorCompilePolicyRow PolicyRow;
+	PolicyRow.RowName = TEXT("Policy.GpuOnly");
+	PolicyRow.PreferredDomain = EFlightBehaviorCompileDomainPreference::Gpu;
+	PolicyRow.bAllowNativeFallback = 0;
+	PolicyRow.bAllowGeneratedOnly = 1;
+	PolicyRow.RequiredSymbols = { TEXT("@shield") };
+
+	UFlightVerseSubsystem::FCompilePolicyContext CompilePolicyContext;
+	CompilePolicyContext.ExplicitPolicy = &PolicyRow;
+
+	const uint32 BehaviorID = 10005;
+	FString Errors;
+	const bool bCompiled = VerseSubsystem->CompileVex(
+		BehaviorID,
+		TEXT("@gpu { @shield = @shield + 1.0; }"),
+		Errors,
+		GetGpuBackedVexTypeKey(),
+		CompilePolicyContext);
+
+	TestTrue(TEXT("GPU policy should allow generated-only success when fallback is disallowed"), bCompiled);
+
+	const UFlightVerseSubsystem::FVerseBehavior* Behavior = VerseSubsystem->Behaviors.Find(BehaviorID);
+	TestNotNull(TEXT("GPU policy compile should persist behavior metadata"), Behavior);
+	if (!Behavior)
+	{
+		return false;
+	}
+
+	TestEqual(TEXT("GPU policy should record the selected policy row"), Behavior->SelectedPolicyRowName, PolicyRow.RowName);
+	TestEqual(TEXT("GPU policy should steer selected backend to GpuKernel"), Behavior->SelectedBackend, FString(TEXT("GpuKernel")));
+	TestEqual(TEXT("GPU policy should keep committed backend unproven"), Behavior->CommittedBackend, FString(TEXT("Unknown")));
+	TestFalse(TEXT("Generated-only GPU policy compile should not mark the behavior executable"), Behavior->bHasExecutableProcedure);
+	TestTrue(TEXT("GPU policy compile should retain a commit detail explanation"), Behavior->CommitDetail.Contains(TEXT("generated-only")));
+
+	const Flight::Vex::FFlightCompileArtifactReport* Report = VerseSubsystem->GetBehaviorCompileArtifactReport(BehaviorID);
+	TestNotNull(TEXT("GPU policy compile should produce an artifact report"), Report);
+	if (Report)
+	{
+		TestEqual(TEXT("Artifact report should preserve selected backend"), Report->SelectedBackend, FString(TEXT("GpuKernel")));
+		TestEqual(TEXT("Artifact report should preserve committed backend truth"), Report->CommittedBackend, FString(TEXT("Unknown")));
+		TestEqual(TEXT("Artifact report should preserve the selected policy row"), Report->SelectedPolicyRow, PolicyRow.RowName.ToString());
+		TestTrue(TEXT("Artifact report should preserve policy-required symbols"), Report->PolicyRequiredSymbols.Contains(TEXT("@shield")));
+	}
+
+	return true;
+}
+
 bool FFlightVexMassHostExecutionTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
@@ -486,7 +563,27 @@ bool FFlightVexMassHostExecutionTest::RunTest(const FString& Parameters)
 
 	TestTrue(TEXT("Mass-host behavior should persist fragment-binding metadata"), Behavior->SchemaBinding.IsSet() && Behavior->SchemaBinding->FragmentBindings.Num() >= 2);
 
-	Behavior->SimdPlan.Reset();
+	const FString OriginalSelectedBackend = Behavior->SelectedBackend;
+	Behavior->SelectedBackend = Flight::Vex::VexBackendKindToString(Flight::Vex::EVexBackendKind::NativeScalar);
+	TestEqual(
+		TEXT("Mass-host direct execution should honor an explicit native-scalar selection"),
+		VerseSubsystem->DescribeDirectExecutionBackend(BehaviorID),
+		FString(TEXT("NativeScalar")));
+
+	if (Behavior->SimdPlan.IsValid())
+	{
+		Behavior->SelectedBackend = Flight::Vex::VexBackendKindToString(Flight::Vex::EVexBackendKind::NativeSimd);
+		TestEqual(
+			TEXT("Mass-host direct execution should honor an explicit SIMD selection when a SIMD plan exists"),
+			VerseSubsystem->DescribeDirectExecutionBackend(BehaviorID),
+			FString(TEXT("NativeSimd")));
+	}
+	else
+	{
+		AddInfo(TEXT("Skipping NativeSimd direct-dispatch assertion because no SIMD plan was produced for the Mass-host behavior."));
+	}
+
+	Behavior->SelectedBackend = Flight::Vex::VexBackendKindToString(Flight::Vex::EVexBackendKind::NativeScalar);
 
 	TArray<FFlightTransformFragment> Transforms;
 	Transforms.SetNum(1);
@@ -507,6 +604,7 @@ bool FFlightVexMassHostExecutionTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Mass host should read fragment-backed shield and energy through schema bindings"), DroidStates[0].Shield, 5.0f);
 	TestEqual(TEXT("Mass host should write back to fragment-backed energy through schema bindings"), DroidStates[0].Energy, 6.0f);
 	TestTrue(TEXT("Mass host writes should dirty the droid-state fragment"), DroidStates[0].bIsDirty);
+	Behavior->SelectedBackend = OriginalSelectedBackend;
 
 	return true;
 }

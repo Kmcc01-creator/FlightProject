@@ -2,11 +2,15 @@
 
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
+#include "AssetRegistry/AssetData.h"
+#include "AssetRegistry/AssetRegistryModule.h"
 #include "Schema/FlightRequirementRegistry.h"
 #include "Schema/FlightRequirementSchema.h"
 #include "Interfaces/IPluginManager.h"
 #include "HAL/IConsoleManager.h"
 #include "Engine/Engine.h"
+#include "Modules/ModuleManager.h"
+#include "Misc/PackageName.h"
 #include "UObject/SoftObjectPath.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -83,15 +87,17 @@ bool FFlightGenerativeManifestTest::RunTest(const FString& Parameters)
 
 		const FString AssetPath = Parts[2];
 		FSoftObjectPath Path(AssetPath);
-		// In a real test we might try to load it, but for a fast manifest check we just validate the path format
 		TestTrue(FString::Printf(TEXT("Asset path should be valid for %s"), *ReqId), Path.IsValid());
-		
-		// If we are in a headless environment with assets, we could TryLoad()
-		if (!IsRunningCommandlet())
-		{
-			UObject* Loaded = Path.TryLoad();
-			TestNotNull(FString::Printf(TEXT("Asset %s should be loadable"), *AssetPath), Loaded);
-		}
+		TestTrue(
+			FString::Printf(TEXT("Asset package should exist for %s"), *AssetPath),
+			FPackageName::DoesPackageExist(Path.GetLongPackageName()));
+
+		FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
+		const FAssetData AssetData = AssetRegistryModule.Get().GetAssetByObjectPath(Path);
+		TestTrue(FString::Printf(TEXT("Asset %s should exist in the asset registry"), *AssetPath), AssetData.IsValid());
+
+		UObject* Loaded = Path.TryLoad();
+		TestNotNull(FString::Printf(TEXT("Asset %s should be loadable"), *AssetPath), Loaded);
 	}
 	else if (Type == TEXT("PLUGIN"))
 	{

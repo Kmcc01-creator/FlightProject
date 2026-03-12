@@ -20,11 +20,30 @@ TEST_INCLUDE_PYTHON_LOGS="${TEST_INCLUDE_PYTHON_LOGS:-0}"
 TEST_INCLUDE_STARTUP_LOGS="${TEST_INCLUDE_STARTUP_LOGS:-0}"
 ENABLE_TIMESTAMPS="${FP_SCRIPT_TIMESTAMPS}"
 TEST_PRESET="${TEST_PRESET:-$FP_TEST_PRESET}"
+TEST_BUILD_BEFORE_RUN="${TEST_BUILD_BEFORE_RUN:-$FP_TEST_BUILD_BEFORE_RUN}"
+TEST_BUILD_CONFIGURATION="${TEST_BUILD_CONFIGURATION:-$FP_TEST_BUILD_CONFIGURATION}"
 
 # Parse extra args
 EXTRA_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --build)
+            TEST_BUILD_BEFORE_RUN=1
+            shift
+            ;;
+        --no-build)
+            TEST_BUILD_BEFORE_RUN=0
+            shift
+            ;;
+        --build-config=*)
+            TEST_BUILD_CONFIGURATION="${1#*=}"
+            shift
+            ;;
+        --build-config)
+            if [[ $# -lt 2 ]]; then echo "Error: --build-config expects a value"; exit 1; fi
+            TEST_BUILD_CONFIGURATION="$2"
+            shift 2
+            ;;
         --all-cpu)
             TEST_FILTER="FlightProject.Unit+FlightProject.Integration+FlightProject.Functional"
             shift
@@ -143,6 +162,8 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+run_pretest_build_if_enabled "run_tests_headless.sh"
 
 if [[ -n "$TEST_PRESET" ]]; then
     IFS=$'\t' read -r TEST_LOG_PROFILE TEST_OUTPUT_MODE TEST_INCLUDE_PYTHON_LOGS TEST_INCLUDE_STARTUP_LOGS ENABLE_TIMESTAMPS TEST_EXTRA_LOG_CMDS <<< "$(apply_test_preset_overrides \

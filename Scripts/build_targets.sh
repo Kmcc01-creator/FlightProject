@@ -123,7 +123,7 @@ echo
 if (( SHOULD_VERIFY )); then
     echo
     log_info "Build successful. Initiating integrity verification..."
-    TEST_PRESET="$VERIFY_TEST_PRESET" "$SCRIPT_DIR/run_tests_headless.sh" --breaking --timestamps
+    TEST_PRESET="$VERIFY_TEST_PRESET" TEST_BUILD_BEFORE_RUN=0 "$SCRIPT_DIR/run_tests_headless.sh" --breaking --timestamps
 fi
 
 echo

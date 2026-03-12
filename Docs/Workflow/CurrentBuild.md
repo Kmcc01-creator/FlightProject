@@ -5,6 +5,126 @@ This document outlines the build system configuration, test execution patterns, 
 ## 1. Test Execution & Discovery
 This section captures the most recent observed build/test outcomes and commands used for repeatable triage.
 
+### Latest Build Snapshot (2026-03-12)
+- `./Scripts/build_targets.sh Development --no-uba` succeeds with the current mega-kernel startup/bootstrap changes.
+- The generated mega-kernel shader include now has an explicit commandlet-safe bootstrap path:
+  - `FlightProject` module startup now ensures `/FlightProject/Generated` is registered before shader-type initialization.
+  - `UFlightMegaKernelSubsystem` now exposes a shared bootstrap helper and guarantees `Intermediate/Shaders/Generated/VexMegaKernel.ush` exists before later synthesis updates it.
+- Verified on March 12, 2026 by deleting `Intermediate/Shaders/Generated/VexMegaKernel.ush`, then running:
+  - `./Scripts/run_tests_headless.sh --preset=triage --filter="FlightProject.Integration.Orchestration.MegaKernel.Synthesis"`
+- The commandlet run recreated the generated file and `Saved/Logs/FlightProject.log` now shows:
+  - `LogShaders: Shader directory mapping /FlightProject/Generated -> ../../../../Projects/FlightProject/Intermediate/Shaders/Generated`
+- The orchestration mega-kernel synthesis lane remains green after the startup change:
+  - `FlightProject.Integration.Orchestration.MegaKernel.Synthesis`
+
+### Latest Runtime Dispatch Gating Snapshot (2026-03-12)
+- VEX/Verse runtime dispatch now resolves struct, bulk, and direct execution through shared backend-selection helpers instead of each surface using its own fallback ordering.
+- `UFlightVerseSubsystem` now:
+  - honors the recorded selected backend when that lane is executable on the current surface,
+  - resolves `CommittedBackend` for direct struct execution through the same runtime selection logic,
+  - exposes bulk/direct debug surfaces via `DescribeBulkExecutionBackend(...)` and `DescribeDirectExecutionBackend(...)`.
+- Verified on March 12, 2026 with:
+  - `./Scripts/run_tests_headless.sh --filter="FlightProject.Functional.Verse.BackendCommitTruth+FlightProject.Functional.Verse.RuntimeDispatchGating+FlightProject.Vex.Generalization.ExecuteOnMassHost+FlightProject.Functional.Vex.CompileArtifactReport.Core+FlightProject.Integration.Verse.CompileContract" --profile=focused --summary`
+  - `./Scripts/run_tests_phased.sh --no-build --phase3-only`
+  - `./Scripts/run_tests_phased.sh --no-build --phase4-only`
+- Current result:
+  - targeted runtime-dispatch and compile-artifact coverage passes,
+  - the Mass-host direct execution surface still passes under the shared resolver,
+  - Phase 3 passes,
+  - Phase 4 passes.
+
+### Latest Compile Policy / GPU Commitment Snapshot (2026-03-12)
+- `CompileVex(...)` now resolves authored behavior compile policy through either explicit compile context or `UFlightDataSubsystem`, and carries selected policy metadata through behavior state, compile artifacts, and orchestration reports.
+- Current policy-driven behavior:
+  - preferred domain can steer selected backend,
+  - native fallback and generated-only acceptance now respect policy,
+  - policy-required symbols are validated during compile,
+  - policy-required contracts now flow into orchestration legality surfaces.
+- GPU-preferred policy is now explicit about commitment truth:
+  - selected backend can remain `GpuKernel` when policy prefers that path,
+  - committed backend stays `Unknown` until a real committed GPU runtime path exists,
+  - orchestration no longer treats `resolvedDomain == Gpu` as executable by itself.
+- Verified on March 12, 2026 with:
+  - `./Scripts/run_tests_headless.sh --no-build --filter="FlightProject.Functional.Verse.CompilePolicyIntegration+FlightProject.Vex.Generalization.GpuPolicyCommitment+FlightProject.Functional.Verse.BackendCommitTruth+FlightProject.Functional.Verse.RuntimeDispatchGating+FlightProject.Vex.Generalization.ClassifyGpuHost+FlightProject.Integration.Verse.CompileContract" --profile=focused --summary`
+  - `./Scripts/run_tests_phased.sh --no-build --phase3-only`
+  - `./Scripts/run_tests_phased.sh --no-build --phase4-only`
+- Current result:
+  - explicit policy-selection coverage passes,
+  - GPU-policy generated-only commitment truth passes,
+  - Phase 3 passes,
+  - Phase 4 passes.
+
+### Latest Headless Automation Snapshot (2026-03-12)
+- The Phase 2 order issue is now resolved and the headless phased lane is green again.
+- Verified on March 12, 2026 with:
+  - `./Scripts/run_tests_headless.sh --preset=triage --filter="FlightProject.Unit.Mass.NavigationCommitConstSharedFragmentIdentity"`
+  - `./Scripts/run_tests_headless.sh --preset=triage --filter="FlightProject.Orchestration.Adapters.SpawnUsesExecutionPlanNavigationCommit+FlightProject.Orchestration.Adapters.SpawnUsesSelectedCandidateCommit"`
+  - `TEST_PRESET=triage ./Scripts/run_tests_phased.sh --timestamps`
+- Root cause:
+  - `FFlightNavigationCommitSharedFragment` was being used as a Mass const shared fragment without reflected fields on its commit metadata,
+  - so `GetOrCreateConstSharedFragment(...)` collapsed distinct navigation-commit instances to the same previously-created shared-fragment value,
+  - which made the second spawn-commit test inherit the first test's waypoint-path commit metadata even though its `PathFollowFragment.PathId` was already the synthetic node path.
+- Landed fix:
+  - added `UPROPERTY()` reflection coverage to the navigation-commit shared-fragment fields in `Mass/FlightMassFragments.h`,
+  - added a direct Mass-level regression test proving identical commit metadata reuses a const shared fragment while distinct commit metadata produces a different one,
+  - kept the spawn/test hardening from the debugging pass:
+    - explicit `AnchorId` seeding in the two spawn-commit automation tests,
+    - stricter shared-fragment lookup in the test helper using the expected runtime path id,
+    - batch-destroy + `FlushCommands()` in `DestroySwarmEntitiesDirect(...)`,
+    - a spawner-side remove/reapply step for const shared fragments before adding new cohort/commit fragments.
+- Current result:
+  - `SpawnUsesExecutionPlanNavigationCommit` passes,
+  - `SpawnUsesSelectedCandidateCommit` passes both in isolation and when run immediately after the waypoint-path commit test,
+  - Phase 1 passes,
+  - Phase 2 passes.
+
+### Latest Reflected Identity Prototype Snapshot (2026-03-12)
+- Preparatory architecture notes now live in:
+  - `Docs/Architecture/ReflectedIdentityTypes.md`
+- Navigation commit identity now has an explicit dual-reflection prototype:
+  - `FFlightNavigationCommitIdentity` is a separate `USTRUCT` with reflected identity-bearing fields,
+  - `FFlightNavigationCommitReport` now carries explanation/provenance fields separately,
+  - both types are registered with FlightProject's trait reflection system,
+  - `FFlightNavigationCommitSharedFragment` now carries `Identity` only instead of mixing runtime sameness with explanation fields.
+- A reusable reflected-field dump utility now exists for both reflection lanes:
+  - trait-reflected values via `Flight::Reflection::Debug::DumpReflectableFieldsToString(...)`
+  - native `UStruct` values via `Flight::Reflection::Debug::DumpNativeStructFieldsToString(...)`
+- Verified on March 12, 2026 with:
+  - `./Scripts/build_targets.sh Development --no-uba`
+  - `./Scripts/run_tests_headless.sh --preset=triage --filter="FlightProject.Unit.Navigation.CommitIdentityTraitReflection+FlightProject.Unit.Navigation.CommitIdentityNativeDump+FlightProject.Unit.Navigation.CommitReportTraitReflection+FlightProject.Unit.Navigation.CommitReportNativeDump+FlightProject.Unit.Mass.NavigationCommitConstSharedFragmentIdentity+FlightProject.Orchestration.Adapters.SpawnUsesExecutionPlanNavigationCommit+FlightProject.Orchestration.Adapters.SpawnUsesSelectedCandidateCommit+FlightProject.Navigation.VerticalSlice.Contracts"`
+- Current result:
+  - the new identity/report trait-reflection and native-reflection dump tests pass,
+  - the Mass const-shared-fragment identity regression still passes,
+  - the ordered spawn-commit tests still pass after the identity/report split,
+  - the navigation contracts vertical slice still passes.
+
+### Latest Orchestration Binding Identity/Report Snapshot (2026-03-12)
+- Orchestration binding selection now follows the same role split used by navigation commit metadata:
+  - `FFlightBehaviorBinding::FIdentity` carries the binding key (`CohortName`, `BehaviorID`),
+  - `FFlightBehaviorBinding::FReport` carries execution and selection explanation (`ExecutionDomain`, `FrameInterval`, `bAsync`, `RequiredContracts`, and structured `Selection` provenance),
+  - `FFlightBehaviorBinding` now composes those roles instead of mixing selection identity and explanation in one flat field bag.
+- `UFlightOrchestrationSubsystem` now:
+  - resolves bindings through `Identity`,
+  - stamps `Report` during automatic selection, manual binding registration, default-cohort fallback, and generated fallback resolution,
+  - exports both compatibility strings and a structured `selection` object in orchestration report JSON.
+- `UFlightVexBehaviorProcessor` fallback resolution now also emits a structured binding report instead of only a chosen behavior id.
+- Binding provenance is now less stringly:
+  - source and rule are separate enums,
+  - default-cohort fallback is a separate reflected fact instead of being concatenated into the selection rule string,
+  - the fallback path now preserves the original source/rule rather than overwriting them.
+- Added focused trait-reflection tests for the new binding roles:
+  - `FlightProject.Unit.Orchestration.BindingIdentityReflection`
+  - `FlightProject.Unit.Orchestration.BindingSelectionReflection`
+  - `FlightProject.Unit.Orchestration.BindingReportReflection`
+- Verified on March 12, 2026 with:
+  - `./Scripts/build_targets.sh Development --no-uba`
+  - `./Scripts/run_tests_headless.sh --preset=triage --filter="FlightProject.Unit.Orchestration.BindingIdentityReflection+FlightProject.Unit.Orchestration.BindingSelectionReflection+FlightProject.Unit.Orchestration.BindingReportReflection+FlightProject.Orchestration.Bindings.PlanPrefersExecutableBehavior+FlightProject.Orchestration.Bindings.ProcessorResolverPrefersOrchestration+FlightProject.Orchestration.Bindings.DefaultCohortFallbackProvenance+FlightProject.Orchestration.Bindings.AnchorPreferenceLegality+FlightProject.Orchestration.Bindings.AnchorContractLegality+FlightProject.Orchestration.Bindings.ProcessorResolverFallback"`
+- Current result:
+  - the new binding identity/selection/report reflection tests pass,
+  - default-cohort fallback now preserves manual/automatic selection provenance while recording the fallback separately,
+  - orchestration binding plan selection still prefers legal executable behaviors,
+  - processor-side orchestration resolution and Verse fallback both still pass after the split.
+
 ### Latest Build Snapshot (2026-03-10)
 - `./Scripts/build_targets.sh Development --no-uba` succeeded for `FlightProjectEditor` on Linux.
 - `./Scripts/build_targets.sh Development --no-uba --verify` also succeeded; verify now uses the `triage` preset by default.

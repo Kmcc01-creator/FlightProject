@@ -8,6 +8,7 @@
 5. **CI/RENDER Stability**: Establish a software-Vulkan (lavapipe) lane so GPU automation can reach discovery even when hardware Vulkan is unavailable or unstable.
 6. **Navigation Redesign Investigation**: Investigate whether the current nav/probe/mesh system should be redesigned or reimplemented so it fits the project vision of explicit contracts, projected future states, validation before commit, and meaningful reports.
 7. **GPU Resource Contract Generalization**: Keep the new runtime GPU contract seam moving from the current buffer-first `FDroidState` slice toward images, transient attachments, and additional reflected resource types.
+8. **Dual-Reflection Formalization**: Turn the current navigation-commit prototype into a clearer authoring pattern with explicit `Identity` vs `Report` roles and reusable base variants for dual-reflected systems.
 
 ## Current Status (2026-03-10)
 - **Milestone 0 Landed**:
@@ -44,14 +45,28 @@
     - executable-plan preference,
     - anchor preference legality,
     - anchor contract legality.
-- **Behavior Compile Policy Contract Landed**:
-  - `UFlightDataSubsystem` now hosts a typed `FFlightBehaviorCompilePolicyRow` contract for authored compile/execution policy inputs.
-  - policy matching now supports behavior ID, cohort name, startup/profile name, specificity, and priority.
-  - this policy is intentionally still authored intent, not compile/runtime truth.
-  - next TODO:
-    - thread policy resolution into `UFlightVerseSubsystem::CompileVex(...)`,
-    - use it to influence preferred domain, fallback allowance, and required symbol/contract checks,
-    - expose the selected policy in orchestration/report surfaces.
+- **Dual-Reflection Formalization Expanded (2026-03-12)**:
+  - the `Identity` vs `Report` split is no longer only a navigation-commit prototype;
+  - orchestration binding selection now uses the same pattern through `FFlightBehaviorBinding::FIdentity` and `FFlightBehaviorBinding::FReport`;
+  - binding provenance is now being pushed one level further into structured `Selection` data so source, rule, and fallback can evolve independently;
+  - current next step is to add structured ranking/evidence data for binding selection so startup-profile policy, contract filtering, and backend-availability inputs do not regress into stringly explanation fields;
+  - after that, keep pushing explanation-only fields out of runtime selection carriers and into explicit report/provenance types as additional projection boundaries are formalized.
+- **Behavior Compile Policy Integration Landed (2026-03-12)**:
+  - `CompileVex(...)` now resolves behavior compile policy through explicit compile context or `UFlightDataSubsystem`.
+  - selected policy metadata now flows through:
+    - `UFlightVerseSubsystem::FVerseBehavior`,
+    - compile artifact reports,
+    - orchestration behavior reports.
+  - current policy effects now include:
+    - preferred-domain steering of selected backend,
+    - fallback allowance,
+    - generated-only acceptance,
+    - required-symbol validation,
+    - required-contract propagation into orchestration legality surfaces.
+  - GPU-preferred policy is now explicit about current truth:
+    - selected backend may remain `GpuKernel`,
+    - committed backend stays unproven/`Unknown` until a real GPU commit path exists,
+    - orchestration no longer treats `resolvedDomain == Gpu` as executable by itself.
 - **Editor & GC Stability Landed**:
   - Silenced fatal `LogGarbage` warnings by properly implementing `Super::AddReferencedObjects` in `UFlightVerseSubsystem`.
   - Resolved `NumEvents` bound parameter ensures on startup for `FFlightSwarmForceCS` and `FFlightSwarmPredictiveCS`.
@@ -73,18 +88,20 @@
   - compile artifact reports now include `selectedBackend` plus per-backend decision/reason entries.
   - `CompileVex(...)` now records backend legality and per-symbol backend diagnostics after schema binding.
   - this slice is intentionally reporting-first; the runtime dispatch path has not been fully re-gated yet.
-- **Backend Dispatch Next TODO**:
-  - teach `CompileVex(...)` and `ExecuteBehavior(...)` to honor the selected backend when that backend is both legal and executable in the current build.
-  - keep fallback explicit and report why runtime commit downgraded from the preferred backend.
+- **Backend Dispatch / Policy Next TODO**:
+  - adopt compile-policy context at real startup/orchestration call-sites so cohort/profile selectors influence compile truth outside explicit/manual compile calls.
+  - keep tightening GPU runtime commitment so selected `GpuKernel` can move from reporting/pending into a real terminal-state commit contract.
 
 ## Risks / Watch Items
-- **Backend Commit Gap**: compile-time backend selection/reporting now exists, but runtime dispatch still follows the older executable-path logic instead of the selected backend contract.
+- **GPU Commit Gap**: selected `GpuKernel` can now be reported explicitly, but runtime still lacks a terminal-state GPU commit path that upgrades committed backend from `Unknown` to a proven GPU execution result.
 - **Binding Policy Next Gap**: anchor-aware legality now exists, but startup-profile-aware legality and richer "why this binding was chosen" reporting are still TODO.
-- **Compile Policy Integration Gap**: the behavior compile policy contract now exists in `UFlightDataSubsystem`, but the actual VEX/Verse compile path and orchestration reports do not consume it yet.
+- **Binding Provenance Depth Gap**: binding `Report` is now structured enough for source/rule/fallback, but it still lacks full ranking evidence, startup-profile policy inputs, and backend-availability justification.
+- **Compile Policy Call-Site Gap**: `CompileVex(...)` now consumes policy and reports it, but most production compile callers still use default behavior-id-only context instead of passing richer cohort/profile selectors.
 - **GPU Resource Generalization Gap**: the new runtime GPU contract seam is still buffer-first and `FDroidState`-first; images, transient attachments, and additional reflected resource types are still TODO.
 - **Navigation Architecture Gap**: the current nav/probe/mesh direction still needs an explicit design pass to decide whether it should remain incremental or be reimplemented around clearer orchestration/spatial contracts.
 - **Startup Test Depth**: The new startup sequencing automation proves the light callable/report surfaces, but it does not yet assert full `StartPlay()` behavior against a dedicated world/profile fixture.
 - **Reflection Performance**: Ensuring generalized symbol lookups via C++ trait reflection do not incur unacceptable overhead compared to the hardcoded `FDroidState` accessors.
+- **Reflection Role Drift**: Preventing `Identity`, `Contract`, `Product`, and `Report` concerns from collapsing back into one type as dual-reflected systems spread.
 - **VVM Bytecode Fidelity**: Ensuring our IR Jumps map correctly to VVM's stack-based branching.
 - **Module Cycles**: Maintaining strict decoupling between the Core Meta module and the VEX/Verse higher-level systems.
 - **GPU Environment Noise**: Headless runs still report Vulkan bridge startup errors in this environment even though the non-GPU phases are passing.

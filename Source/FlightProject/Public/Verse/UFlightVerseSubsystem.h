@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Subsystems/WorldSubsystem.h"
+#include "FlightDataTypes.h"
 #include "Vex/FlightVexSchema.h"
 #include "Vex/FlightVexSchemaIr.h"
 #include "Vex/FlightCompileArtifacts.h"
@@ -46,6 +47,13 @@ class FLIGHTPROJECT_API UFlightVerseSubsystem : public UWorldSubsystem
 	GENERATED_BODY()
 
 public:
+	struct FCompilePolicyContext
+	{
+		FName CohortName = NAME_None;
+		FName ProfileName = NAME_None;
+		const FFlightBehaviorCompilePolicyRow* ExplicitPolicy = nullptr;
+	};
+
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
 
@@ -54,9 +62,21 @@ public:
 
 	/**
 	 * Compiles VEX source for a specific behavior ID.
-	 * Returns true only when an executable behavior is produced.
+	 * Returns true when compilation succeeds; selected policy may allow generated-only output without an executable runtime.
+	 */
+	bool CompileVex(uint32 BehaviorID, const FString& VexSource, FString& OutErrors, const void* TypeKey, const FCompilePolicyContext& CompilePolicyContext);
+
+	/**
+	 * Compiles VEX source for a specific behavior ID.
+	 * Returns true when compilation succeeds; selected policy may allow generated-only output without an executable runtime.
 	 */
 	bool CompileVex(uint32 BehaviorID, const FString& VexSource, FString& OutErrors, const void* TypeKey);
+
+	/**
+	 * Compatibility overload that accepts an optional reflected native struct bridge.
+	 * Prefer the explicit type-key overload for generalized schema-driven compilation.
+	 */
+	bool CompileVex(uint32 BehaviorID, const FString& VexSource, FString& OutErrors, UScriptStruct* TargetStruct, const FCompilePolicyContext& CompilePolicyContext);
 
 	/**
 	 * Compatibility overload that accepts an optional reflected native struct bridge.
@@ -111,6 +131,15 @@ public:
 	/** Returns the latest compile artifact report as JSON for a behavior ID, if available. */
 	FString GetBehaviorCompileArtifactReportJson(uint32 BehaviorID) const;
 
+	/** Returns the currently committed direct-execution backend for this behavior and type key. */
+	FString DescribeCommittedExecutionBackend(uint32 BehaviorID, const void* TypeKey = nullptr) const;
+
+	/** Returns the resolved bulk-execution backend for this behavior on FDroidState payloads. */
+	FString DescribeBulkExecutionBackend(uint32 BehaviorID) const;
+
+	/** Returns the resolved direct Mass/GPU execution backend for this behavior. */
+	FString DescribeDirectExecutionBackend(uint32 BehaviorID) const;
+
 	/** Returns the resolved storage host kind used for this behavior and type key. */
 	FString DescribeResolvedStorageHost(uint32 BehaviorID, const void* TypeKey = nullptr) const;
 
@@ -138,6 +167,14 @@ public:
 		FString LastCompileDiagnostics;
 		FString SelectedBackend;
 		FString CommittedBackend;
+		FString CommitDetail;
+		FName SelectedPolicyRowName = NAME_None;
+		EFlightBehaviorCompileDomainPreference PolicyPreferredDomain = EFlightBehaviorCompileDomainPreference::Unspecified;
+		bool bPolicyAllowsNativeFallback = true;
+		bool bPolicyAllowsGeneratedOnly = false;
+		bool bPolicyPrefersAsync = false;
+		TArray<FName> RequiredContracts;
+		TArray<FString> PolicyRequiredSymbols;
 		TArray<FString> ImportedSymbols;
 		TArray<FString> ExportedSymbols;
 		int32 BoundaryOperatorCount = 0;
@@ -211,6 +248,42 @@ private:
 	/** Resolve the concrete storage host used to execute a behavior on a state payload. */
 	FResolvedStorageHost ResolveStorageHost(const FVerseBehavior& Behavior, const void* RequestedTypeKey) const;
 
+	/** Resolve the authored compile policy for this compile request. */
+	const FFlightBehaviorCompilePolicyRow* ResolveCompilePolicy(uint32 BehaviorID, const FCompilePolicyContext& CompilePolicyContext) const;
+
+	/** Map an authored preferred domain into a concrete backend preference when supported. */
+	static TOptional<Flight::Vex::EVexBackendKind> ResolvePreferredBackendFromPolicy(
+		const FFlightBehaviorCompilePolicyRow& Policy,
+		bool bIsAsync);
+
+	/** Build a structured explanation for selected-vs-committed backend truth. */
+	static FString BuildCommitDetail(
+		const FString& SelectedBackend,
+		const FString& CommittedBackend,
+		const FFlightBehaviorCompilePolicyRow* Policy,
+		bool bHasExecutableProcedure);
+
+	/** Returns true when the resolved host can execute through the direct scalar/native struct path. */
+	bool CanExecuteResolvedStorageHostDirect(const FResolvedStorageHost& Host) const;
+
+	/** Resolve the compile-selected backend string back into an execution kind when available. */
+	TOptional<Flight::Vex::EVexBackendKind> ResolveSelectedBackendKind(const FVerseBehavior& Behavior) const;
+
+	/** Resolve the runtime backend for struct/native execution. */
+	TOptional<Flight::Vex::EVexBackendKind> ResolveStructExecutionBackendKind(const FVerseBehavior& Behavior, const void* RequestedTypeKey) const;
+
+	/** Resolve the runtime backend for bulk FDroidState execution. */
+	TOptional<Flight::Vex::EVexBackendKind> ResolveBulkExecutionBackendKind(const FVerseBehavior& Behavior) const;
+
+	/** Resolve the runtime backend for direct Mass/GPU execution. */
+	TOptional<Flight::Vex::EVexBackendKind> ResolveDirectExecutionBackendKind(const FVerseBehavior& Behavior) const;
+
+	/** Convert an optional runtime backend kind into report/debug text. */
+	static FString DescribeRuntimeExecutionBackend(const TOptional<Flight::Vex::EVexBackendKind>& BackendKind);
+
+	/** Resolve the direct-execution backend currently committed for this behavior and type key. */
+	FString ResolveCommittedExecutionBackend(const FVerseBehavior& Behavior, const void* RequestedTypeKey) const;
+
 	/** Execute a behavior on a previously resolved storage host. */
 	bool ExecuteResolvedStorageHost(const FResolvedStorageHost& Host, const FVerseBehavior& Behavior, void* StructPtr);
 
@@ -218,6 +291,7 @@ private:
 	bool ExecuteResolvedDirectStorageHost(
 		const FResolvedStorageHost& Host,
 		const FVerseBehavior& Behavior,
+		Flight::Vex::EVexBackendKind BackendKind,
 		TArrayView<struct FFlightTransformFragment> Transforms,
 		TArrayView<struct FFlightDroidStateFragment> DroidStates);
 
@@ -230,6 +304,7 @@ private:
 	/** Explicit Mass/direct host for fragment-backed execution. */
 	bool ExecuteOnMassSchemaHost(
 		const FVerseBehavior& Behavior,
+		Flight::Vex::EVexBackendKind BackendKind,
 		TArrayView<struct FFlightTransformFragment> Transforms,
 		TArrayView<struct FFlightDroidStateFragment> DroidStates);
 

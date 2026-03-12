@@ -11,7 +11,9 @@
 #include "Vex/FlightVexSymbolRegistry.h"
 #include "Swarm/SwarmSimulationTypes.h"
 #include "HAL/FileManager.h"
+#include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "ShaderCore.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -19,6 +21,39 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMegaKernelSynthesisTest,
 	"FlightProject.Integration.Orchestration.MegaKernel.Synthesis",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMegaKernelBootstrapTest,
+	"FlightProject.Unit.Orchestration.MegaKernel.Bootstrap",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMegaKernelBootstrapTest::RunTest(const FString& Parameters)
+{
+	const FString FilePath = UFlightMegaKernelSubsystem::GetGeneratedShaderFilePath();
+
+	FString OriginalSource;
+	const bool bHadOriginalSource = FFileHelper::LoadFileToString(OriginalSource, *FilePath);
+	IFileManager::Get().Delete(*FilePath, false, true, true);
+
+	UFlightMegaKernelSubsystem::EnsureGeneratedShaderBootstrap();
+
+	FString BootstrapSource;
+	TestTrue(TEXT("Generated shader bootstrap file should exist"), FFileHelper::LoadFileToString(BootstrapSource, *FilePath));
+	TestTrue(TEXT("Generated shader bootstrap should register the generated shader mapping"),
+		AllShaderSourceDirectoryMappings().Contains(TEXT("/FlightProject/Generated")));
+	TestTrue(TEXT("Generated shader bootstrap should define the mega-kernel guard"),
+		BootstrapSource.Contains(TEXT("#define VEX_MEGA_KERNEL_DEFINED")));
+	TestTrue(TEXT("Generated shader bootstrap should provide a no-op ExecuteVexBehavior"),
+		BootstrapSource.Contains(TEXT("void ExecuteVexBehavior")));
+
+	if (bHadOriginalSource)
+	{
+		TestTrue(TEXT("Original generated shader source should be restorable"),
+			FFileHelper::SaveStringToFile(OriginalSource, *FilePath));
+	}
+
+	return true;
+}
 
 bool FMegaKernelSynthesisTest::RunTest(const FString& Parameters)
 {

@@ -8,8 +8,10 @@
 #include "FlightSpawnSwarmAnchor.h"
 #include "FlightWaypointPath.h"
 #include "FlightScriptingLibrary.h"
+#include "FlightTestUtils.h"
 #include "FlightWorldBootstrapSubsystem.h"
 #include "Core/FlightReflection.h"
+#include "Core/FlightReflectionDebug.h"
 #include "Core/FlightSchemaProviderAdapter.h"
 #include "MassEntityQuery.h"
 #include "MassEntitySubsystem.h"
@@ -27,32 +29,23 @@
 #include "Dom/JsonObject.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
+#include "StructUtils/SharedStruct.h"
 
 #if WITH_AUTOMATION_TESTS
 
 namespace
 {
 
-UWorld* FindAutomationWorld()
-{
-	if (!GEngine)
-	{
-		return nullptr;
-	}
-
-	for (const FWorldContext& Context : GEngine->GetWorldContexts())
-	{
-		if (Context.WorldType == EWorldType::Editor || Context.WorldType == EWorldType::PIE)
-		{
-			if (UWorld* World = Context.World())
-			{
-				return World;
-			}
-		}
-	}
-
-	return nullptr;
-}
+using Flight::Test::DestroySwarmEntitiesDirect;
+using Flight::Test::FindAutomationWorld;
+using Flight::Test::FindNavigationCommitSharedFragmentForCohort;
+using Flight::Test::FindOptionalWorldSubsystem;
+using Flight::Test::GatherPathIdsForCohort;
+using Flight::Test::InvokeSubsystemNoArg;
+using Flight::Test::MakeExecutableBehavior;
+using Flight::Test::RemoveVisibleBehaviorRecords;
+using Flight::Test::SetObjectNameProperty;
+using Flight::Test::SetObjectReferenceProperty;
 
 bool ParseJsonObject(const FString& Json, TSharedPtr<FJsonObject>& OutObject)
 {
@@ -60,205 +53,96 @@ bool ParseJsonObject(const FString& Json, TSharedPtr<FJsonObject>& OutObject)
 	return FJsonSerializer::Deserialize(Reader, OutObject) && OutObject.IsValid();
 }
 
-UWorldSubsystem* FindOptionalWorldSubsystem(UWorld* World, const TCHAR* ClassPath)
+} // namespace
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightNavigationCommitConstSharedFragmentIdentityTest,
+	"FlightProject.Unit.Mass.NavigationCommitConstSharedFragmentIdentity",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FFlightNavigationCommitConstSharedFragmentIdentityTest::RunTest(const FString& Parameters)
 {
+	(void)Parameters;
+
+	UWorld* World = FindAutomationWorld();
 	if (!World)
 	{
-		return nullptr;
+		AddError(TEXT("No automation world available for const shared-fragment identity test"));
+		return false;
 	}
 
-	if (UClass* SubsystemClass = FindObject<UClass>(nullptr, ClassPath))
+	UMassEntitySubsystem* MassSubsystem = World->GetSubsystem<UMassEntitySubsystem>();
+	if (!MassSubsystem)
 	{
-		return World->GetSubsystemBase(SubsystemClass);
+		AddError(TEXT("Mass entity subsystem not available for const shared-fragment identity test"));
+		return false;
 	}
 
-	return nullptr;
-}
+	FMassEntityManager& EntityManager = MassSubsystem->GetMutableEntityManager();
 
-bool InvokeSubsystemNoArg(UWorld* World, const TCHAR* ClassPath, const TCHAR* FunctionName)
-{
-	UWorldSubsystem* Subsystem = FindOptionalWorldSubsystem(World, ClassPath);
-	if (!Subsystem)
+	FFlightNavigationCommitSharedFragment FirstCommit;
+	FirstCommit.Identity.SourceCandidateId = FGuid::NewGuid();
+	FirstCommit.Identity.CohortName = TEXT("Automation.Commit.Cohort");
+	FirstCommit.Identity.RuntimePathId = FGuid::NewGuid();
+	FirstCommit.Identity.CommitKind = 1;
+	FirstCommit.Identity.SourceKind = 2;
+
+	FFlightNavigationCommitSharedFragment DuplicateFirstCommit = FirstCommit;
+
+	FFlightNavigationCommitSharedFragment SecondCommit = FirstCommit;
+	SecondCommit.Identity.SourceCandidateId = FGuid::NewGuid();
+	SecondCommit.Identity.RuntimePathId = FGuid::NewGuid();
+	SecondCommit.Identity.CommitKind = 3;
+	SecondCommit.Identity.SourceKind = 4;
+
+	const FConstSharedStruct& FirstShared = EntityManager.GetOrCreateConstSharedFragment(FirstCommit);
+	const FConstSharedStruct& DuplicateFirstShared = EntityManager.GetOrCreateConstSharedFragment(DuplicateFirstCommit);
+	const FConstSharedStruct& SecondShared = EntityManager.GetOrCreateConstSharedFragment(SecondCommit);
+
+	TestTrue(TEXT("First navigation commit should produce a valid const shared fragment"), FirstShared.IsValid());
+	TestTrue(TEXT("Duplicate navigation commit should produce a valid const shared fragment"), DuplicateFirstShared.IsValid());
+	TestTrue(TEXT("Second navigation commit should produce a valid const shared fragment"), SecondShared.IsValid());
+	TestTrue(TEXT("Identical reflected navigation commits should reuse the same const shared fragment instance"),
+		FirstShared == DuplicateFirstShared);
+	TestFalse(TEXT("Distinct reflected navigation commits should not collapse to the same const shared fragment instance"),
+		FirstShared == SecondShared);
+	TestFalse(TEXT("Distinct navigation commits should not compare as equal by reflected struct values"),
+		FirstShared.CompareStructValues(SecondShared));
+	TestTrue(TEXT("Reflectable dump utility should expose the first commit cohort"),
+		Flight::Reflection::Debug::DumpReflectableFieldsToString(FirstCommit.Identity).Contains(TEXT("CohortName=Automation.Commit.Cohort")));
+
+	const FFlightNavigationCommitSharedFragment* FirstData =
+		FirstShared.GetPtr<const FFlightNavigationCommitSharedFragment>();
+	const FFlightNavigationCommitSharedFragment* SecondData =
+		SecondShared.GetPtr<const FFlightNavigationCommitSharedFragment>();
+	TestNotNull(TEXT("First shared fragment should expose navigation commit data"), FirstData);
+	TestNotNull(TEXT("Second shared fragment should expose navigation commit data"), SecondData);
+	if (!FirstData || !SecondData)
 	{
 		return false;
 	}
 
-	UFunction* Function = Subsystem->GetClass()->FindFunctionByName(FunctionName);
-	if (!Function)
-	{
-		return false;
-	}
+	TestEqual(TEXT("First shared fragment should preserve its source candidate id"),
+		FirstData->Identity.SourceCandidateId,
+		FirstCommit.Identity.SourceCandidateId);
+	TestEqual(TEXT("First shared fragment should preserve its runtime path id"),
+		FirstData->Identity.RuntimePathId,
+		FirstCommit.Identity.RuntimePathId);
+	TestEqual(TEXT("Second shared fragment should preserve its source candidate id"),
+		SecondData->Identity.SourceCandidateId,
+		SecondCommit.Identity.SourceCandidateId);
+	TestEqual(TEXT("Second shared fragment should preserve its runtime path id"),
+		SecondData->Identity.RuntimePathId,
+		SecondCommit.Identity.RuntimePathId);
+	TestEqual(TEXT("Second shared fragment should preserve its commit kind"),
+		static_cast<int32>(SecondData->Identity.CommitKind),
+		static_cast<int32>(SecondCommit.Identity.CommitKind));
+	TestEqual(TEXT("Second shared fragment should preserve its source kind"),
+		static_cast<int32>(SecondData->Identity.SourceKind),
+		static_cast<int32>(SecondCommit.Identity.SourceKind));
 
-	Subsystem->ProcessEvent(Function, nullptr);
 	return true;
 }
-
-bool SetObjectNameProperty(UObject* Object, const TCHAR* PropertyName, const FName Value)
-{
-	if (!Object)
-	{
-		return false;
-	}
-
-	if (FNameProperty* Property = FindFProperty<FNameProperty>(Object->GetClass(), PropertyName))
-	{
-		Property->SetPropertyValue_InContainer(Object, Value);
-		return true;
-	}
-
-	return false;
-}
-
-bool SetObjectReferenceProperty(UObject* Object, const TCHAR* PropertyName, UObject* Value)
-{
-	if (!Object)
-	{
-		return false;
-	}
-
-	if (FObjectProperty* Property = FindFProperty<FObjectProperty>(Object->GetClass(), PropertyName))
-	{
-		Property->SetObjectPropertyValue_InContainer(Object, Value);
-		return true;
-	}
-
-	return false;
-}
-
-TArray<FGuid> GatherPathIdsForCohort(UWorld* World, const FName CohortName)
-{
-	TArray<FGuid> PathIds;
-	if (!World)
-	{
-		return PathIds;
-	}
-
-	UMassEntitySubsystem* MassSubsystem = World->GetSubsystem<UMassEntitySubsystem>();
-	if (!MassSubsystem)
-	{
-		return PathIds;
-	}
-
-	FMassEntityManager& EntityManager = MassSubsystem->GetMutableEntityManager();
-	FMassEntityQuery Query(EntityManager.AsShared());
-	Query.AddTagRequirement<FFlightSwarmMemberTag>(EMassFragmentPresence::All);
-	Query.AddRequirement<FFlightPathFollowFragment>(EMassFragmentAccess::ReadOnly);
-	Query.AddConstSharedRequirement<FFlightBehaviorCohortFragment>(EMassFragmentPresence::Optional);
-
-	FMassExecutionContext Context(EntityManager, 0.0f);
-	Query.ForEachEntityChunk(Context, [&PathIds, CohortName](FMassExecutionContext& ChunkContext)
-	{
-		const FFlightBehaviorCohortFragment* CohortFragment = ChunkContext.GetConstSharedFragmentPtr<FFlightBehaviorCohortFragment>();
-		const FName ChunkCohortName = CohortFragment ? CohortFragment->CohortName : NAME_None;
-		if (ChunkCohortName != CohortName)
-		{
-			return;
-		}
-
-		const TConstArrayView<FFlightPathFollowFragment> PathFragments = ChunkContext.GetFragmentView<FFlightPathFollowFragment>();
-		for (const FFlightPathFollowFragment& PathFragment : PathFragments)
-		{
-			PathIds.Add(PathFragment.PathId);
-		}
-	});
-
-	return PathIds;
-}
-
-bool FindNavigationCommitSharedFragmentForCohort(
-	UWorld* World,
-	const FName CohortName,
-	FFlightNavigationCommitSharedFragment& OutCommitFragment)
-{
-	if (!World)
-	{
-		return false;
-	}
-
-	UMassEntitySubsystem* MassSubsystem = World->GetSubsystem<UMassEntitySubsystem>();
-	if (!MassSubsystem)
-	{
-		return false;
-	}
-
-	FMassEntityManager& EntityManager = MassSubsystem->GetMutableEntityManager();
-	FMassEntityQuery Query(EntityManager.AsShared());
-	Query.AddTagRequirement<FFlightSwarmMemberTag>(EMassFragmentPresence::All);
-	Query.AddConstSharedRequirement<FFlightBehaviorCohortFragment>(EMassFragmentPresence::Optional);
-	Query.AddConstSharedRequirement<FFlightNavigationCommitSharedFragment>(EMassFragmentPresence::Optional);
-
-	bool bFound = false;
-	FMassExecutionContext Context(EntityManager, 0.0f);
-	Query.ForEachEntityChunk(Context, [&OutCommitFragment, CohortName, &bFound](FMassExecutionContext& ChunkContext)
-	{
-		if (bFound)
-		{
-			return;
-		}
-
-		const FFlightBehaviorCohortFragment* CohortFragment = ChunkContext.GetConstSharedFragmentPtr<FFlightBehaviorCohortFragment>();
-		const FName ChunkCohortName = CohortFragment ? CohortFragment->CohortName : NAME_None;
-		if (ChunkCohortName != CohortName)
-		{
-			return;
-		}
-
-		const FFlightNavigationCommitSharedFragment* CommitFragment =
-			ChunkContext.GetConstSharedFragmentPtr<FFlightNavigationCommitSharedFragment>();
-		if (!CommitFragment)
-		{
-			return;
-		}
-
-		OutCommitFragment = *CommitFragment;
-		bFound = true;
-	});
-
-	return bFound;
-}
-
-void DestroySwarmEntitiesDirect(UWorld* World)
-{
-	if (!World)
-	{
-		return;
-	}
-
-	UMassEntitySubsystem* MassSubsystem = World->GetSubsystem<UMassEntitySubsystem>();
-	if (!MassSubsystem)
-	{
-		return;
-	}
-
-	FMassEntityManager& EntityManager = MassSubsystem->GetMutableEntityManager();
-	FMassEntityQuery Query(EntityManager.AsShared());
-	Query.AddTagRequirement<FFlightSwarmMemberTag>(EMassFragmentPresence::All);
-
-	TArray<FMassEntityHandle> EntitiesToDestroy = Query.GetMatchingEntityHandles();
-	for (const FMassEntityHandle& Entity : EntitiesToDestroy)
-	{
-		EntityManager.DestroyEntity(Entity);
-	}
-}
-
-void RemoveVisibleBehaviorRecords(UFlightOrchestrationSubsystem& Orchestration)
-{
-	for (const Flight::Orchestration::FFlightBehaviorRecord& Behavior : Orchestration.GetReport().Behaviors)
-	{
-		Orchestration.UnregisterBehavior(Behavior.BehaviorID);
-	}
-}
-
-UFlightVerseSubsystem::FVerseBehavior MakeExecutableBehavior(const uint32 FrameInterval)
-{
-	UFlightVerseSubsystem::FVerseBehavior Behavior;
-	Behavior.FrameInterval = FrameInterval;
-	Behavior.bHasExecutableProcedure = true;
-	Behavior.bUsesNativeFallback = true;
-	return Behavior;
-}
-
-} // namespace
 
 /*
  * This suite stays intentionally light for the first startup-sequencing slice.
@@ -622,6 +506,8 @@ bool FFlightSpawnUsesExecutionPlanNavigationCommitTest::RunTest(const FString& P
 
 	FallbackPath->SetNavigationRoutingMetadata(TEXT("AutomationFallbackNetwork"), TEXT("FallbackLane"));
 	SelectedPath->SetNavigationRoutingMetadata(TEXT("AutomationSpawnCommitNetwork"), TEXT("SelectedLane"));
+	TestTrue(TEXT("Automation anchor should accept an explicit anchor id for navigation-commit isolation"),
+		SetObjectNameProperty(Anchor, TEXT("AnchorId"), TEXT("AutomationSpawnCommitAnchorId")));
 	TestTrue(TEXT("Automation anchor should accept explicit navigation-network metadata"),
 		SetObjectNameProperty(Anchor, TEXT("NavNetworkId"), TEXT("AutomationSpawnCommitNetwork")));
 	TestTrue(TEXT("Automation anchor should accept explicit navigation-subnetwork metadata"),
@@ -685,12 +571,15 @@ bool FFlightSpawnUsesExecutionPlanNavigationCommitTest::RunTest(const FString& P
 			FallbackPath);
 	TestTrue(TEXT("Execution-plan waypoint-path selection should resolve a valid commit product"), CommitProduct.IsValid());
 	TestEqual(TEXT("Waypoint-path selection should resolve a waypoint commit product"),
-		CommitProduct.Kind,
+		CommitProduct.GetKind(),
 		Flight::Navigation::EFlightNavigationCommitProductKind::WaypointPath);
-	TestFalse(TEXT("Waypoint-path commit product should not be synthetic"), CommitProduct.bSynthetic);
+	TestFalse(TEXT("Waypoint-path commit product should not be synthetic"), CommitProduct.Report.bSynthetic);
 	TestEqual(TEXT("Waypoint-path commit product should preserve the selected candidate id"),
-		CommitProduct.SourceCandidateId,
+		CommitProduct.Identity.SourceCandidateId,
 		SelectedPathId);
+	TestEqual(TEXT("Waypoint-path commit report should preserve the selected candidate name"),
+		CommitProduct.Report.SourceCandidateName,
+		Step->NavigationCandidateName);
 
 	TestTrue(TEXT("Spawner should expose SpawnInitialSwarm for automation invocation"),
 		InvokeSubsystemNoArg(World, TEXT("/Script/SwarmEncounter.FlightSwarmSpawnerSubsystem"), TEXT("SpawnInitialSwarm")));
@@ -706,18 +595,16 @@ bool FFlightSpawnUsesExecutionPlanNavigationCommitTest::RunTest(const FString& P
 
 	FFlightNavigationCommitSharedFragment CommitFragment;
 	TestTrue(TEXT("Waypoint-path commit should materialize a shared navigation commit fragment"),
-		FindNavigationCommitSharedFragmentForCohort(World, CohortName, CommitFragment));
+		FindNavigationCommitSharedFragmentForCohort(World, CohortName, SelectedPathId, CommitFragment));
 	TestEqual(TEXT("Waypoint-path shared commit fragment should preserve the selected candidate id"),
-		CommitFragment.SourceCandidateId,
+		CommitFragment.Identity.SourceCandidateId,
 		SelectedPathId);
 	TestEqual(TEXT("Waypoint-path shared commit fragment should preserve the runtime path id"),
-		CommitFragment.RuntimePathId,
+		CommitFragment.Identity.RuntimePathId,
 		SelectedPathId);
 	TestEqual(TEXT("Waypoint-path shared commit fragment should classify as waypoint-path commit"),
-		static_cast<int32>(CommitFragment.CommitKind),
+		static_cast<int32>(CommitFragment.Identity.CommitKind),
 		static_cast<int32>(Flight::Navigation::EFlightNavigationCommitProductKind::WaypointPath));
-	TestFalse(TEXT("Waypoint-path shared commit fragment should not report synthetic lowering"),
-		CommitFragment.bSynthetic);
 
 	return !CohortPathIds.IsEmpty();
 }
@@ -787,6 +674,8 @@ bool FFlightSpawnUsesSelectedCandidateCommitTest::RunTest(const FString& Paramet
 	FallbackPath->EnsureDefaultLoop();
 	const FGuid FallbackPathId = FallbackPath->EnsureRegisteredPath();
 
+	TestTrue(TEXT("Automation anchor should accept an explicit anchor id for selected-candidate isolation"),
+		SetObjectNameProperty(Anchor, TEXT("AnchorId"), TEXT("AutomationCandidateCommitAnchorId")));
 	TestTrue(TEXT("Automation anchor should accept explicit navigation-network metadata for selected-candidate commit"),
 		SetObjectNameProperty(Anchor, TEXT("NavNetworkId"), TEXT("SyntheticCommitNetwork")));
 	TestTrue(TEXT("Automation anchor should accept explicit navigation-subnetwork metadata for selected-candidate commit"),
@@ -849,12 +738,15 @@ bool FFlightSpawnUsesSelectedCandidateCommitTest::RunTest(const FString& Paramet
 			FallbackPath);
 	TestTrue(TEXT("Selected nav-graph node should resolve a valid commit product"), CommitProduct.IsValid());
 	TestEqual(TEXT("Selected nav-graph node should resolve a synthetic node-orbit commit product"),
-		CommitProduct.Kind,
+		CommitProduct.GetKind(),
 		Flight::Navigation::EFlightNavigationCommitProductKind::SyntheticNodeOrbit);
-	TestTrue(TEXT("Synthetic node-orbit commit product should report synthetic lowering"), CommitProduct.bSynthetic);
+	TestTrue(TEXT("Synthetic node-orbit commit product should report synthetic lowering"), CommitProduct.Report.bSynthetic);
 	TestEqual(TEXT("Synthetic node-orbit commit product should preserve the selected candidate id"),
-		CommitProduct.SourceCandidateId,
+		CommitProduct.Identity.SourceCandidateId,
 		NodeId);
+	TestEqual(TEXT("Synthetic node-orbit commit report should preserve the selected candidate name"),
+		CommitProduct.Report.SourceCandidateName,
+		Node.DisplayName);
 	TestTrue(TEXT("Spawner should expose SpawnInitialSwarm for selected-candidate commit automation"),
 		InvokeSubsystemNoArg(World, TEXT("/Script/SwarmEncounter.FlightSwarmSpawnerSubsystem"), TEXT("SpawnInitialSwarm")));
 
@@ -879,18 +771,16 @@ bool FFlightSpawnUsesSelectedCandidateCommitTest::RunTest(const FString& Paramet
 
 	FFlightNavigationCommitSharedFragment CommitFragment;
 	TestTrue(TEXT("Synthetic selected-candidate commit should materialize a shared navigation commit fragment"),
-		FindNavigationCommitSharedFragmentForCohort(World, CohortName, CommitFragment));
+		FindNavigationCommitSharedFragmentForCohort(World, CohortName, NodeId, CommitFragment));
 	TestEqual(TEXT("Synthetic shared commit fragment should preserve the selected nav-graph candidate id"),
-		CommitFragment.SourceCandidateId,
+		CommitFragment.Identity.SourceCandidateId,
 		NodeId);
 	TestEqual(TEXT("Synthetic shared commit fragment should preserve the runtime synthetic path id"),
-		CommitFragment.RuntimePathId,
+		CommitFragment.Identity.RuntimePathId,
 		NodeId);
 	TestEqual(TEXT("Synthetic shared commit fragment should classify as synthetic node-orbit commit"),
-		static_cast<int32>(CommitFragment.CommitKind),
+		static_cast<int32>(CommitFragment.Identity.CommitKind),
 		static_cast<int32>(Flight::Navigation::EFlightNavigationCommitProductKind::SyntheticNodeOrbit));
-	TestTrue(TEXT("Synthetic shared commit fragment should report synthetic lowering"),
-		CommitFragment.bSynthetic);
 
 	return !CohortPathIds.IsEmpty();
 }
@@ -954,12 +844,18 @@ bool FFlightOrchestrationBindingPlanTest::RunTest(const FString& Parameters)
 	Flight::Orchestration::FFlightBehaviorBinding Binding;
 	TestTrue(TEXT("Execution plan should publish a binding for the registered cohort"),
 		Orchestration->TryGetBindingForCohort(Cohort.Name, Binding));
-	TestEqual(TEXT("Binding should resolve the executable behavior"), Binding.BehaviorID, ExecutableBehavior.BehaviorID);
+	TestEqual(TEXT("Binding should resolve the executable behavior"), Binding.Identity.BehaviorID, ExecutableBehavior.BehaviorID);
 	TestEqual(TEXT("Binding should preserve the resolved execution domain"),
-		Binding.ExecutionDomain, ExecutableBehavior.ResolvedDomain);
+		Binding.Report.ExecutionDomain, ExecutableBehavior.ResolvedDomain);
 	TestEqual(TEXT("Binding should preserve the frame interval"),
-		static_cast<int32>(Binding.FrameInterval), static_cast<int32>(ExecutableBehavior.FrameInterval));
-	TestTrue(TEXT("Binding should preserve async execution metadata"), Binding.bAsync);
+		static_cast<int32>(Binding.Report.FrameInterval), static_cast<int32>(ExecutableBehavior.FrameInterval));
+	TestTrue(TEXT("Binding should preserve async execution metadata"), Binding.Report.bAsync);
+	TestEqual(TEXT("Binding report should mark automatic selection"),
+		Binding.Report.Selection.Source,
+		Flight::Orchestration::EFlightBehaviorBindingSelectionSource::AutomaticSelection);
+	TestEqual(TEXT("Binding report should describe why this behavior was chosen"),
+		Binding.Report.Selection.Rule,
+		Flight::Orchestration::EFlightBehaviorBindingSelectionRule::LowestExecutableBehaviorId);
 
 	const Flight::Orchestration::FFlightExecutionPlan& Plan = Orchestration->GetExecutionPlan();
 	const Flight::Orchestration::FFlightExecutionPlanStep* Step = Plan.Steps.FindByPredicate([&Cohort](const Flight::Orchestration::FFlightExecutionPlanStep& Candidate)
@@ -1025,10 +921,8 @@ bool FFlightOrchestrationBindingResolverTest::RunTest(const FString& Parameters)
 	Orchestration->RegisterBehavior(BoundRecord.BehaviorID, BoundRecord);
 
 	Flight::Orchestration::FFlightBehaviorBinding BoundBinding;
-	BoundBinding.CohortName = Cohort.Name;
-	BoundBinding.BehaviorID = BoundRecord.BehaviorID;
-	BoundBinding.ExecutionDomain = BoundRecord.ResolvedDomain;
-	BoundBinding.FrameInterval = BoundRecord.FrameInterval;
+	BoundBinding.Identity.CohortName = Cohort.Name;
+	BoundBinding.Identity.BehaviorID = BoundRecord.BehaviorID;
 	TestTrue(TEXT("Manual orchestration binding should register"), Orchestration->BindBehaviorToCohort(BoundBinding));
 
 	UFlightVerseSubsystem* TestVerseSubsystem = NewObject<UFlightVerseSubsystem>();
@@ -1041,7 +935,83 @@ bool FFlightOrchestrationBindingResolverTest::RunTest(const FString& Parameters)
 		UFlightVexBehaviorProcessor::ResolveBehaviorSelection(World, *TestVerseSubsystem, ResolvedBehaviorID, &ResolvedBinding));
 	TestEqual(TEXT("Processor resolver should prefer orchestration-issued binding over fallback ordering"),
 		ResolvedBehaviorID, BoundRecord.BehaviorID);
-	TestEqual(TEXT("Resolved binding should come from the default swarm cohort"), ResolvedBinding.CohortName, Cohort.Name);
+	TestEqual(TEXT("Resolved binding should come from the default swarm cohort"), ResolvedBinding.Identity.CohortName, Cohort.Name);
+	TestEqual(TEXT("Resolved manual binding should report manual selection"),
+		ResolvedBinding.Report.Selection.Source,
+		Flight::Orchestration::EFlightBehaviorBindingSelectionSource::ManualBinding);
+	TestEqual(TEXT("Resolved manual binding should retain explicit registration reason"),
+		ResolvedBinding.Report.Selection.Rule,
+		Flight::Orchestration::EFlightBehaviorBindingSelectionRule::ExplicitRegistration);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightOrchestrationDefaultBindingFallbackProvenanceTest,
+	"FlightProject.Orchestration.Bindings.DefaultCohortFallbackProvenance",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FFlightOrchestrationDefaultBindingFallbackProvenanceTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = FindAutomationWorld();
+	if (!World)
+	{
+		AddError(TEXT("No automation world available for default binding fallback provenance test"));
+		return false;
+	}
+
+	UFlightOrchestrationSubsystem* Orchestration = World->GetSubsystem<UFlightOrchestrationSubsystem>();
+	UFlightNavGraphDataHubSubsystem* NavGraphHub = World->GetSubsystem<UFlightNavGraphDataHubSubsystem>();
+	if (!Orchestration || !NavGraphHub)
+	{
+		AddError(TEXT("Required subsystems not found for default binding fallback provenance test"));
+		return false;
+	}
+
+	NavGraphHub->ResetGraph();
+
+	Orchestration->RebuildVisibility();
+	ON_SCOPE_EXIT
+	{
+		Orchestration->Rebuild();
+	};
+
+	RemoveVisibleBehaviorRecords(*Orchestration);
+	const FName DefaultSwarmCohortName(TEXT("Swarm.Default"));
+	Orchestration->ClearBindingsForCohort(DefaultSwarmCohortName);
+
+	Flight::Orchestration::FFlightBehaviorRecord BoundRecord;
+	BoundRecord.BehaviorID = 7103;
+	BoundRecord.bExecutable = true;
+	BoundRecord.ResolvedDomain = Flight::Orchestration::EFlightExecutionDomain::NativeCpu;
+	Orchestration->RegisterBehavior(BoundRecord.BehaviorID, BoundRecord);
+
+	Flight::Orchestration::FFlightBehaviorBinding BoundBinding;
+	BoundBinding.Identity.CohortName = DefaultSwarmCohortName;
+	BoundBinding.Identity.BehaviorID = BoundRecord.BehaviorID;
+	TestTrue(TEXT("Default swarm binding should register"), Orchestration->BindBehaviorToCohort(BoundBinding));
+
+	const FName RequestedCohortName(TEXT("SwarmAnchor.AutomationFallback"));
+	Flight::Orchestration::FFlightBehaviorBinding ResolvedBinding;
+	TestTrue(TEXT("Resolver should fall back to the default cohort binding for an unbound cohort"),
+		Orchestration->TryGetBindingForCohort(RequestedCohortName, ResolvedBinding));
+	TestEqual(TEXT("Fallback should preserve the actual selected cohort identity"),
+		ResolvedBinding.Identity.CohortName,
+		DefaultSwarmCohortName);
+	TestEqual(TEXT("Fallback should preserve the original selection source"),
+		ResolvedBinding.Report.Selection.Source,
+		Flight::Orchestration::EFlightBehaviorBindingSelectionSource::ManualBinding);
+	TestEqual(TEXT("Fallback should preserve the original selection rule"),
+		ResolvedBinding.Report.Selection.Rule,
+		Flight::Orchestration::EFlightBehaviorBindingSelectionRule::ExplicitRegistration);
+	TestTrue(TEXT("Fallback should record default-cohort fallback usage"),
+		ResolvedBinding.Report.Selection.bUsedDefaultCohortFallback);
+	TestEqual(TEXT("Fallback should record the originally requested cohort"),
+		ResolvedBinding.Report.Selection.RequestedCohortName,
+		RequestedCohortName);
+	TestEqual(TEXT("Fallback should record the fallback cohort"),
+		ResolvedBinding.Report.Selection.FallbackCohortName,
+		DefaultSwarmCohortName);
 
 	return true;
 }
@@ -1104,7 +1074,10 @@ bool FFlightOrchestrationAnchorPreferencePlanTest::RunTest(const FString& Parame
 	Flight::Orchestration::FFlightBehaviorBinding Binding;
 	TestTrue(TEXT("Execution plan should publish a binding for the preferred anchor cohort"),
 		Orchestration->TryGetBindingForCohort(Cohort.Name, Binding));
-	TestEqual(TEXT("Preferred behavior should override lower executable IDs"), Binding.BehaviorID, PreferredBehavior.BehaviorID);
+	TestEqual(TEXT("Preferred behavior should override lower executable IDs"), Binding.Identity.BehaviorID, PreferredBehavior.BehaviorID);
+	TestEqual(TEXT("Preferred binding should report preferred-behavior selection"),
+		Binding.Report.Selection.Rule,
+		Flight::Orchestration::EFlightBehaviorBindingSelectionRule::PreferredBehaviorId);
 	return true;
 }
 
@@ -1167,7 +1140,7 @@ bool FFlightOrchestrationAnchorContractPlanTest::RunTest(const FString& Paramete
 	TestTrue(TEXT("Execution plan should publish a binding for the contract-constrained anchor cohort"),
 		Orchestration->TryGetBindingForCohort(Cohort.Name, Binding));
 	TestEqual(TEXT("Contract-constrained cohort should choose a behavior that advertises the required contract"),
-		Binding.BehaviorID, ContractBehavior.BehaviorID);
+		Binding.Identity.BehaviorID, ContractBehavior.BehaviorID);
 	return true;
 }
 
@@ -1218,9 +1191,16 @@ bool FFlightOrchestrationBindingFallbackTest::RunTest(const FString& Parameters)
 	TestVerseSubsystem->Behaviors.Add(8101, MakeExecutableBehavior(1));
 
 	uint32 ResolvedBehaviorID = 0;
+	Flight::Orchestration::FFlightBehaviorBinding ResolvedBinding;
 	TestTrue(TEXT("Processor resolver should fall back when no orchestration world is available"),
-		UFlightVexBehaviorProcessor::ResolveBehaviorSelection(nullptr, *TestVerseSubsystem, ResolvedBehaviorID));
+		UFlightVexBehaviorProcessor::ResolveBehaviorSelection(nullptr, *TestVerseSubsystem, ResolvedBehaviorID, &ResolvedBinding));
 	TestEqual(TEXT("Fallback should choose the lowest executable behavior ID"), ResolvedBehaviorID, static_cast<uint32>(8101));
+	TestEqual(TEXT("Fallback binding should report verse fallback selection"),
+		ResolvedBinding.Report.Selection.Source,
+		Flight::Orchestration::EFlightBehaviorBindingSelectionSource::VerseFallback);
+	TestEqual(TEXT("Fallback binding should explain the fallback rule"),
+		ResolvedBinding.Report.Selection.Rule,
+		Flight::Orchestration::EFlightBehaviorBindingSelectionRule::LowestExecutableBehaviorId);
 
 	return true;
 }

@@ -3,6 +3,8 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Navigation/FlightNavigationCommitIdentity.h"
+#include "Navigation/FlightNavigationCommitReport.h"
 
 class AFlightWaypointPath;
 struct FFlightNavigationCommitSharedFragment;
@@ -20,15 +22,6 @@ namespace Flight::Orchestration
 namespace Flight::Navigation
 {
 
-enum class EFlightNavigationCommitProductKind : uint8
-{
-	None,
-	WaypointPath,
-	FallbackWaypointPath,
-	SyntheticNodeOrbit,
-	SyntheticEdgePolyline
-};
-
 struct FLIGHTPROJECT_API FFlightNavigationCommitResolverContext
 {
 	TMap<FGuid, AFlightWaypointPath*> PathsById;
@@ -39,21 +32,25 @@ struct FLIGHTPROJECT_API FFlightNavigationCommitResolverContext
 
 struct FLIGHTPROJECT_API FFlightNavigationCommitProduct
 {
-	EFlightNavigationCommitProductKind Kind = EFlightNavigationCommitProductKind::None;
-	Flight::Orchestration::EFlightParticipantKind SourceKind;
-	FName CohortName = NAME_None;
-	FName SourceCandidateName = NAME_None;
-	FGuid SourceCandidateId;
+	FFlightNavigationCommitIdentity Identity;
+	FFlightNavigationCommitReport Report;
 	AFlightWaypointPath* Path = nullptr;
-	FGuid PathId;
 	float PathLength = 0.0f;
 	FVector InitialLocation = FVector::ZeroVector;
-	bool bSynthetic = false;
-	bool bResolvedFromExecutionPlan = false;
 
 	bool IsValid() const
 	{
-		return PathId.IsValid();
+		return Identity.IsValid();
+	}
+
+	EFlightNavigationCommitProductKind GetKind() const
+	{
+		return Identity.GetCommitKind();
+	}
+
+	Flight::Orchestration::EFlightParticipantKind GetSourceKind() const
+	{
+		return Identity.GetSourceKind();
 	}
 
 	void WriteSharedFragment(FFlightNavigationCommitSharedFragment& OutFragment) const;

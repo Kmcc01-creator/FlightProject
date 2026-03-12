@@ -458,6 +458,12 @@ FString BuildCompileArtifactReportJson(const FFlightCompileArtifactReport& Repor
 	Root->SetStringField(TEXT("backendPath"), Report.BackendPath);
 	Root->SetStringField(TEXT("selectedBackend"), Report.SelectedBackend);
 	Root->SetStringField(TEXT("committedBackend"), Report.CommittedBackend);
+	Root->SetStringField(TEXT("commitDetail"), Report.CommitDetail);
+	Root->SetStringField(TEXT("selectedPolicyRow"), Report.SelectedPolicyRow);
+	Root->SetStringField(TEXT("policyPreferredDomain"), Report.PolicyPreferredDomain);
+	Root->SetBoolField(TEXT("policyAllowsNativeFallback"), Report.bPolicyAllowsNativeFallback);
+	Root->SetBoolField(TEXT("policyAllowsGeneratedOnly"), Report.bPolicyAllowsGeneratedOnly);
+	Root->SetBoolField(TEXT("policyPrefersAsync"), Report.bPolicyPrefersAsync);
 	Root->SetStringField(TEXT("tier"), VexTierToString(Report.Tier));
 	Root->SetBoolField(TEXT("async"), Report.bAsync);
 	Root->SetBoolField(TEXT("hasIr"), Report.bHasIr);
@@ -473,6 +479,8 @@ FString BuildCompileArtifactReportJson(const FFlightCompileArtifactReport& Repor
 	AddStringArrayToJson(Report.ImportedSymbols, TEXT("importedSymbols"), Root);
 	AddStringArrayToJson(Report.ExportedSymbols, TEXT("exportedSymbols"), Root);
 	AddStringArrayToJson(Report.ReferencedStorageKinds, TEXT("referencedStorageKinds"), Root);
+	AddStringArrayToJson(Report.PolicyRequiredContracts, TEXT("policyRequiredContracts"), Root);
+	AddStringArrayToJson(Report.PolicyRequiredSymbols, TEXT("policyRequiredSymbols"), Root);
 	Root->SetNumberField(TEXT("boundaryOperatorCount"), static_cast<double>(Report.BoundaryOperatorCount));
 	Root->SetBoolField(TEXT("hasBoundaryOperators"), Report.bHasBoundaryOperators);
 	Root->SetBoolField(TEXT("hasAwaitableBoundary"), Report.bHasAwaitableBoundary);

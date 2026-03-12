@@ -21,6 +21,9 @@ export FP_TEST_LOG_PROFILE="${FP_TEST_LOG_PROFILE:-full}"
 export FP_TEST_OUTPUT_MODE="${FP_TEST_OUTPUT_MODE:-all}"
 export FP_TEST_EXTRA_LOG_CMDS="${FP_TEST_EXTRA_LOG_CMDS:-}"
 export FP_TEST_PRESET="${FP_TEST_PRESET:-}"
+export FP_TEST_BUILD_BEFORE_RUN="${FP_TEST_BUILD_BEFORE_RUN:-1}"
+export FP_TEST_BUILD_CONFIGURATION="${FP_TEST_BUILD_CONFIGURATION:-Development}"
+export FP_TEST_BUILD_EXTRA_ARGS="${FP_TEST_BUILD_EXTRA_ARGS:-}"
 export FP_VIDEO_BACKEND="${FP_VIDEO_BACKEND:-auto}"
 export FP_SESSION_WRAPPER="${FP_SESSION_WRAPPER:-auto}"
 export FP_USE_GAMESCOPE="${FP_USE_GAMESCOPE:-0}"
@@ -447,6 +450,43 @@ configure_video_backend() {
     esac
 }
 
+run_pretest_build_if_enabled() {
+    local caller="${1:-test runner}"
+    local build_before_run="${TEST_BUILD_BEFORE_RUN:-$FP_TEST_BUILD_BEFORE_RUN}"
+    local build_configuration="${TEST_BUILD_CONFIGURATION:-$FP_TEST_BUILD_CONFIGURATION}"
+    local build_extra_args_raw="${TEST_BUILD_EXTRA_ARGS:-$FP_TEST_BUILD_EXTRA_ARGS}"
+    local build_script="${FP_BUILD_TARGETS_SCRIPT:-$PROJECT_ROOT/Scripts/build_targets.sh}"
+    local -a build_extra_args=()
+
+    if ! is_truthy "$build_before_run"; then
+        log_debug "Skipping pre-test build for ${caller} (TEST_BUILD_BEFORE_RUN=${build_before_run})"
+        return 0
+    fi
+
+    if is_truthy "${FP_TEST_BUILD_IN_PROGRESS:-0}"; then
+        log_debug "Skipping nested pre-test build for ${caller} (build already in progress)"
+        return 0
+    fi
+
+    ensure_project_file
+    ensure_executable "$build_script" "build_targets.sh"
+
+    if [[ -n "$build_extra_args_raw" ]]; then
+        # shellcheck disable=SC2206 # Intentional shell-style splitting for env/CLI parity.
+        build_extra_args=($build_extra_args_raw)
+    fi
+
+    print_banner "FlightProject Pre-Test Build"
+    log_info "Caller:        ${c_cyan}${caller}${c_reset}"
+    log_info "Configuration: ${c_cyan}${build_configuration}${c_reset}"
+    if [[ -n "$build_extra_args_raw" ]]; then
+        log_info "Extra Args:    ${c_cyan}${build_extra_args_raw}${c_reset}"
+    fi
+    print_rule
+
+    FP_TEST_BUILD_IN_PROGRESS=1 TEST_BUILD_BEFORE_RUN=0 "$build_script" "$build_configuration" "${build_extra_args[@]}"
+}
+
 export -f ue-kill-zombies
 export -f is_truthy
 export -f should_use_color
@@ -462,3 +502,4 @@ export -f is_wayland_session
 export -f load_gamescope_args
 export -f build_launch_prefix
 export -f build_vulkan_validation_args
+export -f run_pretest_build_if_enabled

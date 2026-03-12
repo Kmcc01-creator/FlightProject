@@ -24,23 +24,27 @@ FFlightNavigationCommitProduct MakeResolvedWaypointPathProduct(
 	const Flight::Orchestration::FFlightExecutionPlanStep& Step)
 {
 	FFlightNavigationCommitProduct Product;
-	Product.Kind = bFallbackPath
+	Product.Identity.SetCommitKind(bFallbackPath
 		? EFlightNavigationCommitProductKind::FallbackWaypointPath
-		: EFlightNavigationCommitProductKind::WaypointPath;
-	Product.SourceKind = Flight::Orchestration::EFlightParticipantKind::WaypointPath;
-	Product.CohortName = Step.CohortName;
-	Product.SourceCandidateId = Step.NavigationCandidateId;
-	Product.SourceCandidateName = Step.NavigationCandidateName;
+		: EFlightNavigationCommitProductKind::WaypointPath);
+	Product.Identity.SetSourceKind(Flight::Orchestration::EFlightParticipantKind::WaypointPath);
+	Product.Identity.CohortName = Step.CohortName;
+	Product.Identity.SourceCandidateId = Step.NavigationCandidateId;
+	Product.Report.Identity = Product.Identity;
+	Product.Report.SourceCandidateName = Step.NavigationCandidateName;
 	Product.Path = Path;
-	Product.bResolvedFromExecutionPlan = bResolvedFromExecutionPlan;
-	Product.bSynthetic = false;
+	Product.Report.bResolvedFromExecutionPlan = bResolvedFromExecutionPlan;
+	Product.Report.bSynthetic = false;
 
 	if (Path)
 	{
-		Product.PathId = Path->EnsureRegisteredPath();
+		Product.Identity.RuntimePathId = Path->EnsureRegisteredPath();
 		Product.PathLength = Path->GetPathLength();
 		Product.InitialLocation = Path->GetActorLocation();
 	}
+	Product.Report.Identity = Product.Identity;
+	Product.Report.PathLength = Product.PathLength;
+	Product.Report.InitialLocation = Product.InitialLocation;
 
 	return Product;
 }
@@ -91,12 +95,13 @@ FFlightNavigationCommitProduct MakeSyntheticCommitProduct(
 	const Flight::Orchestration::FFlightExecutionPlanStep& Step)
 {
 	FFlightNavigationCommitProduct Product;
-	Product.SourceKind = Candidate.SourceKind;
-	Product.CohortName = Step.CohortName;
-	Product.SourceCandidateId = Candidate.SourceId;
-	Product.SourceCandidateName = Candidate.Name;
-	Product.bSynthetic = true;
-	Product.bResolvedFromExecutionPlan = true;
+	Product.Identity.SetSourceKind(Candidate.SourceKind);
+	Product.Identity.CohortName = Step.CohortName;
+	Product.Identity.SourceCandidateId = Candidate.SourceId;
+	Product.Report.Identity = Product.Identity;
+	Product.Report.SourceCandidateName = Candidate.Name;
+	Product.Report.bSynthetic = true;
+	Product.Report.bResolvedFromExecutionPlan = true;
 
 	TArray<FVector> ControlPoints;
 	EFlightNavigationCommitProductKind Kind = EFlightNavigationCommitProductKind::None;
@@ -105,19 +110,22 @@ FFlightNavigationCommitProduct MakeSyntheticCommitProduct(
 		return Product;
 	}
 
-	Product.Kind = Kind;
+	Product.Identity.SetCommitKind(Kind);
 	Product.InitialLocation = ControlPoints[0];
-	Product.PathId = PathRegistry.RegisterSyntheticPath(
+	Product.Identity.RuntimePathId = PathRegistry.RegisterSyntheticPath(
 		ControlPoints,
 		Kind == EFlightNavigationCommitProductKind::SyntheticNodeOrbit,
 		100.0f,
 		Candidate.SourceId);
 	Product.PathLength = Candidate.EstimatedCost;
 
-	if (const FFlightPathData* PathData = PathRegistry.FindPath(Product.PathId))
+	if (const FFlightPathData* PathData = PathRegistry.FindPath(Product.Identity.RuntimePathId))
 	{
 		Product.PathLength = PathData->TotalLength;
 	}
+	Product.Report.Identity = Product.Identity;
+	Product.Report.PathLength = Product.PathLength;
+	Product.Report.InitialLocation = Product.InitialLocation;
 
 	return Product;
 }
@@ -148,16 +156,7 @@ void FFlightNavigationCommitResolverContext::BuildFromWorld(UWorld& World)
 
 void FFlightNavigationCommitProduct::WriteSharedFragment(FFlightNavigationCommitSharedFragment& OutFragment) const
 {
-	OutFragment.SourceCandidateId = SourceCandidateId;
-	OutFragment.SourceCandidateName = SourceCandidateName;
-	OutFragment.CohortName = CohortName;
-	OutFragment.RuntimePathId = PathId;
-	OutFragment.InitialLocation = InitialLocation;
-	OutFragment.PathLength = PathLength;
-	OutFragment.CommitKind = static_cast<uint8>(Kind);
-	OutFragment.SourceKind = static_cast<uint8>(SourceKind);
-	OutFragment.bSynthetic = bSynthetic;
-	OutFragment.bResolvedFromExecutionPlan = bResolvedFromExecutionPlan;
+	OutFragment.Identity = Identity;
 }
 
 const Flight::Orchestration::FFlightNavigationCandidateRecord* FindNavigationCandidateRecord(

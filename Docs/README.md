@@ -44,6 +44,13 @@ Use these for what is active right now, with dates and execution priorities.
 - [Workflow/GameplaySystems.md](Workflow/GameplaySystems.md)
 - [Workflow/DocumentationConsolidationPlan.md](Workflow/DocumentationConsolidationPlan.md)
 
+### Todos / Shared Backlog
+
+Use these when you need explicit cross-session TODO tracking rather than dated status notes.
+
+- [Todos/TODOS.md](Todos/TODOS.md)
+- [Todos/README.md](Todos/README.md)
+
 ## Status Guide
 
 Treat documents using these categories:
@@ -165,12 +172,14 @@ Directory entrypoints:
 - [Extensions/README.md](Extensions/README.md)
 - [DevNotes/README.md](DevNotes/README.md)
 - [Reviews/README.md](Reviews/README.md)
+- [Todos/README.md](Todos/README.md)
 
 ## Documentation Maintenance Rules
 
 - Keep the repository `README.md` short and current; treat it as the outer orientation surface, not a historical pitch deck.
 - Keep dated build/test evidence in `Workflow/CurrentBuild.md`.
 - Keep active milestones, risks, and next steps in `Workflow/CurrentFocus.md`.
+- Keep explicit shared TODO tracking in `Todos/TODOS.md` or split `Todos/TODO.<Area>.md` files.
 - Keep `Architecture/Overview.md` short and current; do not let it drift into a historical project pitch.
 - When an older concept doc is still worth keeping, label it as exploratory or historical instead of silently presenting it as current.
 - Prefer linking to one canonical document rather than copying the same architectural story into multiple files.

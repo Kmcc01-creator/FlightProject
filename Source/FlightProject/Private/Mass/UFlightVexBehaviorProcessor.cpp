@@ -47,6 +47,23 @@ bool ResolveFallbackBehaviorSelection(const UFlightVerseSubsystem& VerseSubsyste
 	return true;
 }
 
+Flight::Orchestration::EFlightExecutionDomain ResolveFallbackExecutionDomain(const UFlightVerseSubsystem::FVerseBehavior& Behavior)
+{
+	if (Behavior.SimdPlan.IsValid())
+	{
+		return Flight::Orchestration::EFlightExecutionDomain::Simd;
+	}
+
+	if (Behavior.bUsesNativeFallback)
+	{
+		return Behavior.bIsAsync
+			? Flight::Orchestration::EFlightExecutionDomain::TaskGraph
+			: Flight::Orchestration::EFlightExecutionDomain::NativeCpu;
+	}
+
+	return Flight::Orchestration::EFlightExecutionDomain::Unknown;
+}
+
 } // namespace
 
 UFlightVexBehaviorProcessor::UFlightVexBehaviorProcessor()
@@ -76,10 +93,10 @@ bool UFlightVexBehaviorProcessor::ResolveBehaviorSelection(
 			Flight::Orchestration::FFlightBehaviorBinding Binding;
 			if (OrchestrationSubsystem->TryGetBindingForCohort(EffectiveCohortName, Binding))
 			{
-				if (const UFlightVerseSubsystem::FVerseBehavior* Behavior = VerseSubsystem.Behaviors.Find(Binding.BehaviorID);
+				if (const UFlightVerseSubsystem::FVerseBehavior* Behavior = VerseSubsystem.Behaviors.Find(Binding.Identity.BehaviorID);
 					Behavior && IsBehaviorExecutable(*Behavior))
 				{
-					OutBehaviorID = Binding.BehaviorID;
+					OutBehaviorID = Binding.Identity.BehaviorID;
 					if (OutBinding)
 					{
 						*OutBinding = Binding;
@@ -90,7 +107,28 @@ bool UFlightVexBehaviorProcessor::ResolveBehaviorSelection(
 		}
 	}
 
-	return ResolveFallbackBehaviorSelection(VerseSubsystem, OutBehaviorID);
+	if (!ResolveFallbackBehaviorSelection(VerseSubsystem, OutBehaviorID))
+	{
+		return false;
+	}
+
+	if (OutBinding)
+	{
+		*OutBinding = Flight::Orchestration::FFlightBehaviorBinding();
+		OutBinding->Identity.CohortName = CohortName.IsNone() ? DefaultSwarmCohortName : CohortName;
+		OutBinding->Identity.BehaviorID = OutBehaviorID;
+		OutBinding->SyncReportIdentity();
+		if (const UFlightVerseSubsystem::FVerseBehavior* Behavior = VerseSubsystem.Behaviors.Find(OutBehaviorID))
+		{
+			OutBinding->Report.ExecutionDomain = ResolveFallbackExecutionDomain(*Behavior);
+			OutBinding->Report.FrameInterval = Behavior->FrameInterval;
+			OutBinding->Report.bAsync = Behavior->bIsAsync;
+		}
+		OutBinding->Report.Selection.Source = Flight::Orchestration::EFlightBehaviorBindingSelectionSource::VerseFallback;
+		OutBinding->Report.Selection.Rule = Flight::Orchestration::EFlightBehaviorBindingSelectionRule::LowestExecutableBehaviorId;
+	}
+
+	return true;
 }
 
 void UFlightVexBehaviorProcessor::ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager)

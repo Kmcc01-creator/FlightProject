@@ -35,6 +35,8 @@ TEST_GPU_VALIDATION_PRESET="${TEST_GPU_VALIDATION_PRESET:-local-radv}" # local-r
 TEST_VK_DRIVER_FILES="${TEST_VK_DRIVER_FILES:-}"
 TEST_VK_ICD_FILENAMES="${TEST_VK_ICD_FILENAMES:-}"
 TEST_VK_LOADER_LAYERS_DISABLE="${TEST_VK_LOADER_LAYERS_DISABLE:-}"
+TEST_BUILD_BEFORE_RUN="${TEST_BUILD_BEFORE_RUN:-$FP_TEST_BUILD_BEFORE_RUN}"
+TEST_BUILD_CONFIGURATION="${TEST_BUILD_CONFIGURATION:-$FP_TEST_BUILD_CONFIGURATION}"
 DEFAULT_RADV_ICD="/usr/share/vulkan/icd.d/radeon_icd.x86_64.json"
 GPU_BENCHMARK_FILTER="FlightProject.Perf.GpuPerception"
 GPU_SMOKE_FILTER="FlightProject.Gpu.Spatial.Perception+FlightProject.Gpu.Spatial.Perception.CallbackResolves"
@@ -47,6 +49,23 @@ AUTOMATION_READY=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --build)
+            TEST_BUILD_BEFORE_RUN=1
+            shift
+            ;;
+        --no-build)
+            TEST_BUILD_BEFORE_RUN=0
+            shift
+            ;;
+        --build-config=*)
+            TEST_BUILD_CONFIGURATION="${1#*=}"
+            shift
+            ;;
+        --build-config)
+            if [[ $# -lt 2 ]]; then echo "Error: --build-config expects a value"; exit 1; fi
+            TEST_BUILD_CONFIGURATION="$2"
+            shift 2
+            ;;
         --preset=*)
             TEST_PRESET="${1#*=}"
             shift
@@ -131,6 +150,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 ensure_project_file
+run_pretest_build_if_enabled "run_tests_full.sh"
 load_gamescope_args TEST_GAMESCOPE_ARGS "$TEST_GAMESCOPE_ARGS_RAW"
 build_vulkan_validation_args VULKAN_VALIDATION_ARGS "$TEST_VK_VALIDATION" "$TEST_VK_GPU_VALIDATION" "$TEST_VK_DEBUG_SYNC" "$TEST_VK_BEST_PRACTICES" "$TEST_VK_DEBUG_UTILS"
 

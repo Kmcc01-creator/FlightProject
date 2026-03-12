@@ -11,6 +11,7 @@
 #include "FlightProject/Public/FlightDataTypes.h"
 #include "FlightProject/Public/FlightSpawnSwarmAnchor.h"
 #include "FlightProject/Public/FlightWaypointPath.h"
+#include "FlightProject/Public/Core/FlightReflectionDebug.h"
 #include "FlightProject/Public/Mass/FlightMassLoweringAdapter.h"
 #include "FlightProject/Public/Mass/FlightMassFragments.h"
 #include "FlightProject/Public/Mass/FlightWaypointPathRegistry.h"
@@ -43,10 +44,26 @@ struct FResolvedSpawnPath
 	bool bResolvedFromExecutionPlan = false;
 };
 
+const TCHAR* BoolText(const bool bValue)
+{
+	return bValue ? TEXT("true") : TEXT("false");
+}
+
 FName MakeAnchorCohortName(const AFlightSpawnSwarmAnchor& Anchor)
 {
 	const FName AnchorName = Anchor.GetAnchorId().IsNone() ? Anchor.GetFName() : Anchor.GetAnchorId();
 	return FName(*FString::Printf(TEXT("SwarmAnchor.%s"), *AnchorName.ToString()));
+}
+
+void RemoveConstSharedFragmentFromEntities(
+	FMassEntityManager& EntityManager,
+	const TArray<FMassEntityHandle>& Entities,
+	const UScriptStruct& FragmentType)
+{
+	for (const FMassEntityHandle& Entity : Entities)
+	{
+		EntityManager.RemoveConstSharedFragmentFromEntity(Entity, FragmentType);
+	}
 }
 
 void ApplyBehaviorCohortFragment(FMassEntityManager& EntityManager, const TArray<FMassEntityHandle>& Entities, const FName CohortName)
@@ -55,6 +72,8 @@ void ApplyBehaviorCohortFragment(FMassEntityManager& EntityManager, const TArray
 	{
 		return;
 	}
+
+	RemoveConstSharedFragmentFromEntities(EntityManager, Entities, *FFlightBehaviorCohortFragment::StaticStruct());
 
 	FFlightBehaviorCohortFragment CohortFragment;
 	CohortFragment.CohortName = CohortName;
@@ -88,6 +107,8 @@ void ApplyNavigationCommitSharedFragment(
 	{
 		return;
 	}
+
+	RemoveConstSharedFragmentFromEntities(EntityManager, Entities, *FFlightNavigationCommitSharedFragment::StaticStruct());
 
 	FFlightNavigationCommitSharedFragment CommitFragment;
 	CommitProduct.WriteSharedFragment(CommitFragment);
@@ -201,10 +222,10 @@ FResolvedSpawnPath MakeResolvedSpawnPath(const Flight::Navigation::FFlightNaviga
 {
 	FResolvedSpawnPath Result;
 	Result.Path = Product.Path;
-	Result.PathId = Product.PathId;
+	Result.PathId = Product.Identity.RuntimePathId;
 	Result.PathLength = Product.PathLength;
 	Result.InitialLocation = Product.InitialLocation;
-	Result.bResolvedFromExecutionPlan = Product.bResolvedFromExecutionPlan;
+	Result.bResolvedFromExecutionPlan = Product.Report.bResolvedFromExecutionPlan;
 	return Result;
 }
 
@@ -384,12 +405,37 @@ void UFlightSwarmSpawnerSubsystem::SpawnMassEntities(const FFlightAutopilotConfi
         }
 
         bHasAnchors = true;
-        TArray<FMassEntityHandle> SpawnedEntities;
-        MassSpawner->SpawnEntities(TemplateID, Count, FConstStructView(), nullptr, SpawnedEntities);
+		TArray<FMassEntityHandle> SpawnedEntities;
+		MassSpawner->SpawnEntities(TemplateID, Count, FConstStructView(), nullptr, SpawnedEntities);
 
         FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
         ApplySharedFragmentPlan(EntityManager, SpawnedEntities, BatchPlan.SharedFragments);
         ApplyNavigationCommitSharedFragment(EntityManager, SpawnedEntities, CommitProduct);
+
+		const FFlightBehaviorCohortFragment* AppliedCohortFragment = SpawnedEntities.IsEmpty()
+			? nullptr
+			: EntityManager.GetConstSharedFragmentDataPtr<FFlightBehaviorCohortFragment>(SpawnedEntities[0]);
+		const FFlightNavigationCommitSharedFragment* AppliedCommitFragment = SpawnedEntities.IsEmpty()
+			? nullptr
+			: EntityManager.GetConstSharedFragmentDataPtr<FFlightNavigationCommitSharedFragment>(SpawnedEntities[0]);
+		UE_LOG(
+			LogFlightSwarmSpawner,
+			Verbose,
+			TEXT("Spawn cohort '%s': commitProduct={valid=%s report=%s} applied={cohort=%s commitPresent=%s identity=%s} spawnPath={path=%s fromExecutionPlan=%s}."),
+			*BatchPlan.CohortName.ToString(),
+			BoolText(CommitProduct.IsValid()),
+			*Flight::Reflection::Debug::DumpNativeStructFieldsToString(
+				*FFlightNavigationCommitReport::StaticStruct(),
+				&CommitProduct.Report),
+			AppliedCohortFragment ? *AppliedCohortFragment->CohortName.ToString() : TEXT("<missing>"),
+			BoolText(AppliedCommitFragment != nullptr),
+			AppliedCommitFragment
+				? *Flight::Reflection::Debug::DumpNativeStructFieldsToString(
+					*FFlightNavigationCommitIdentity::StaticStruct(),
+					&AppliedCommitFragment->Identity)
+				: TEXT("<missing>"),
+			*SpawnPath.PathId.ToString(EGuidFormats::DigitsWithHyphensLower),
+			BoolText(SpawnPath.bResolvedFromExecutionPlan));
 
         const float EffectiveSpeed = (BatchPlan.DesiredSpeed > 0.0f) ? BatchPlan.DesiredSpeed : GlobalSpeed;
 

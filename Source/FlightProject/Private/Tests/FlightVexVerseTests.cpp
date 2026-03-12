@@ -4,6 +4,7 @@
 #include "Misc/AutomationTest.h"
 #include "Orchestration/FlightOrchestrationSubsystem.h"
 #include "Verse/FlightGpuScriptBridge.h"
+#include "Vex/FlightVexBackendCapabilities.h"
 #include "Vex/FlightVexParser.h"
 #include "Vex/FlightVexSymbolRegistry.h"
 #include "Verse/UFlightVerseSubsystem.h"
@@ -259,8 +260,11 @@ bool FFlightVerseCompileContractTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightCompileArtifactReportTest, "FlightProject.Functional.Vex.CompileArtifactReport", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightCompileArtifactReportTest, "FlightProject.Functional.Vex.CompileArtifactReport.Core", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightBoundaryCompileArtifactReportTest, "FlightProject.Functional.Vex.CompileArtifactReport.Boundary", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVerseBackendCommitTruthTest, "FlightProject.Functional.Verse.BackendCommitTruth", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVerseRuntimeDispatchGatingTest, "FlightProject.Functional.Verse.RuntimeDispatchGating", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVerseCompilePolicyIntegrationTest, "FlightProject.Functional.Verse.CompilePolicyIntegration", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightGpuScriptBridgeDeferredCompletionTest, "FlightProject.Gpu.ScriptBridge.DeferredCompletion", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FFlightCompileArtifactReportTest::RunTest(const FString& Parameters)
@@ -301,6 +305,10 @@ bool FFlightCompileArtifactReportTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Compile artifact JSON should contain selectedBackend"), RootObject->TryGetStringField(TEXT("selectedBackend"), SelectedBackend));
 	TestTrue(TEXT("Compile artifact report should record a non-empty selected backend"), !SelectedBackend.IsEmpty());
 
+	FString CommittedBackend;
+	TestTrue(TEXT("Compile artifact JSON should contain committedBackend"), RootObject->TryGetStringField(TEXT("committedBackend"), CommittedBackend));
+	TestTrue(TEXT("Compile artifact report should record a non-empty committed backend"), !CommittedBackend.IsEmpty());
+
 	FString TargetFingerprint;
 	TestTrue(TEXT("Compile artifact JSON should contain targetFingerprint"), RootObject->TryGetStringField(TEXT("targetFingerprint"), TargetFingerprint));
 	TestTrue(TEXT("Compile artifact report should record a non-empty target fingerprint"), !TargetFingerprint.IsEmpty());
@@ -329,6 +337,243 @@ bool FFlightCompileArtifactReportTest::RunTest(const FString& Parameters)
 		double TotalCompileTimeMs = -1.0;
 		TestTrue(TEXT("Warmup metrics should include totalCompileTimeMs"), (*WarmupObject)->TryGetNumberField(TEXT("totalCompileTimeMs"), TotalCompileTimeMs));
 		TestTrue(TEXT("Warmup metrics should report a non-negative total compile time"), TotalCompileTimeMs >= 0.0);
+	}
+
+	return true;
+}
+
+bool FFlightVerseBackendCommitTruthTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+
+	UWorld* World = FindAutomationWorld();
+	if (!World)
+	{
+		AddError(TEXT("No valid world context available for backend commit truth test"));
+		return false;
+	}
+
+	UFlightVerseSubsystem* VerseSubsystem = World->GetSubsystem<UFlightVerseSubsystem>();
+	if (!VerseSubsystem)
+	{
+		AddError(TEXT("FlightVerseSubsystem not found"));
+		return false;
+	}
+
+	Flight::Vex::TTypeVexRegistry<Flight::Swarm::FDroidState>::Register();
+	const void* TypeKey = Flight::Vex::TTypeVexRegistry<Flight::Swarm::FDroidState>::GetTypeKey();
+
+	{
+		const FString LiteralSource = TEXT("@cpu { @velocity = @position; }");
+		FString CompileDiagnostics;
+		const bool bCompiled = VerseSubsystem->CompileVex(9201, LiteralSource, CompileDiagnostics, TypeKey);
+		TestTrue(TEXT("Schema-bound literal behavior should compile"), bCompiled);
+
+		const UFlightVerseSubsystem::FVerseBehavior* Behavior = VerseSubsystem->Behaviors.Find(9201);
+		TestNotNull(TEXT("Literal behavior metadata should be registered"), Behavior);
+		if (Behavior)
+		{
+			const FString DirectBackend = VerseSubsystem->DescribeCommittedExecutionBackend(9201, TypeKey);
+			TestTrue(TEXT("Selected backend should be recorded for schema-bound literal behavior"), !Behavior->SelectedBackend.IsEmpty());
+			TestTrue(TEXT("Committed backend should be recorded for schema-bound literal behavior"), !Behavior->CommittedBackend.IsEmpty());
+			TestEqual(TEXT("Committed backend should match direct execution backend"), Behavior->CommittedBackend, DirectBackend);
+			TestEqual(TEXT("Compile artifact report should preserve committed backend truth"), Behavior->CompileArtifactReport.CommittedBackend, DirectBackend);
+			TestEqual(TEXT("Literal direct execution should commit to native scalar backend"), DirectBackend, FString(TEXT("NativeScalar")));
+			TestTrue(TEXT("Literal behavior should retain native fallback availability"), Behavior->bUsesNativeFallback);
+		}
+
+		Flight::Swarm::FDroidState DroidState;
+		DroidState.Position = FVector3f(3.0f, 6.0f, 9.0f);
+		DroidState.Velocity = FVector3f::ZeroVector;
+		VerseSubsystem->ExecuteBehaviorOnStruct(9201, &DroidState, TypeKey);
+		TestEqual(TEXT("Committed native scalar path should execute against the schema-bound state"), DroidState.Velocity, DroidState.Position);
+	}
+
+#if WITH_VERSE_VM || defined(__INTELLISENSE__)
+	{
+		const FString AsyncSource = TEXT("@cpu @async { @velocity = @position; }");
+		FString CompileDiagnostics;
+		const bool bCompiled = VerseSubsystem->CompileVex(9202, AsyncSource, CompileDiagnostics, TypeKey);
+		TestTrue(TEXT("Async schema-bound behavior should compile when Verse VM is available"), bCompiled);
+
+		const UFlightVerseSubsystem::FVerseBehavior* Behavior = VerseSubsystem->Behaviors.Find(9202);
+		TestNotNull(TEXT("Async behavior metadata should be registered"), Behavior);
+		if (Behavior)
+		{
+			const FString DirectBackend = VerseSubsystem->DescribeCommittedExecutionBackend(9202, TypeKey);
+			TestEqual(TEXT("Async committed backend should match direct execution backend"), Behavior->CommittedBackend, DirectBackend);
+			TestEqual(TEXT("Async compile artifact report should preserve committed backend truth"), Behavior->CompileArtifactReport.CommittedBackend, DirectBackend);
+			TestEqual(TEXT("Async direct execution should commit to Verse VM backend"), DirectBackend, FString(TEXT("VerseVm")));
+			TestTrue(TEXT("Async behavior should expose a VM entrypoint"), Behavior->bUsesVmEntryPoint);
+			TestFalse(TEXT("Async behavior should not claim native fallback availability"), Behavior->bUsesNativeFallback);
+		}
+	}
+#else
+	AddInfo(TEXT("Skipping async backend commit truth assertions because Verse VM is unavailable in this build."));
+#endif
+
+	return true;
+}
+
+bool FFlightVerseRuntimeDispatchGatingTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+
+	UWorld* World = FindAutomationWorld();
+	if (!World)
+	{
+		AddError(TEXT("No valid world context available for runtime dispatch gating test"));
+		return false;
+	}
+
+	UFlightVerseSubsystem* VerseSubsystem = World->GetSubsystem<UFlightVerseSubsystem>();
+	if (!VerseSubsystem)
+	{
+		AddError(TEXT("FlightVerseSubsystem not found"));
+		return false;
+	}
+
+	Flight::Vex::TTypeVexRegistry<Flight::Swarm::FDroidState>::Register();
+	const void* TypeKey = Flight::Vex::TTypeVexRegistry<Flight::Swarm::FDroidState>::GetTypeKey();
+
+	FString CompileDiagnostics;
+	const bool bCompiled = VerseSubsystem->CompileVex(9203, TEXT("@cpu { @velocity = @position; }"), CompileDiagnostics, TypeKey);
+	TestTrue(TEXT("Literal schema-bound behavior should compile for runtime dispatch gating"), bCompiled);
+
+	UFlightVerseSubsystem::FVerseBehavior* Behavior = VerseSubsystem->Behaviors.Find(9203);
+	TestNotNull(TEXT("Runtime dispatch gating test should have a compiled behavior"), Behavior);
+	if (!Behavior)
+	{
+		return false;
+	}
+
+	const FString OriginalSelectedBackend = Behavior->SelectedBackend;
+
+	Behavior->SelectedBackend = Flight::Vex::VexBackendKindToString(Flight::Vex::EVexBackendKind::NativeScalar);
+	TestEqual(
+		TEXT("Bulk execution should honor an explicit native-scalar selection"),
+		VerseSubsystem->DescribeBulkExecutionBackend(9203),
+		FString(TEXT("NativeScalar")));
+
+	if (Behavior->SimdPlan.IsValid())
+	{
+		Behavior->SelectedBackend = Flight::Vex::VexBackendKindToString(Flight::Vex::EVexBackendKind::NativeSimd);
+		TestEqual(
+			TEXT("Bulk execution should honor an explicit SIMD selection when a SIMD plan exists"),
+			VerseSubsystem->DescribeBulkExecutionBackend(9203),
+			FString(TEXT("NativeSimd")));
+	}
+	else
+	{
+		AddInfo(TEXT("Skipping NativeSimd bulk dispatch assertion because no SIMD plan was produced for the literal test behavior."));
+	}
+
+#if WITH_VERSE_VM || defined(__INTELLISENSE__)
+	if (Behavior->bUsesVmEntryPoint && Behavior->Procedure.Get())
+	{
+		Behavior->SelectedBackend = Flight::Vex::VexBackendKindToString(Flight::Vex::EVexBackendKind::VerseVm);
+		TestEqual(
+			TEXT("Direct struct execution should honor an explicit Verse VM selection when a VM entrypoint exists"),
+			VerseSubsystem->DescribeCommittedExecutionBackend(9203, TypeKey),
+			FString(TEXT("VerseVm")));
+
+		Flight::Swarm::FDroidState DroidState;
+		DroidState.Position = FVector3f(4.0f, 8.0f, 12.0f);
+		DroidState.Velocity = FVector3f::ZeroVector;
+		VerseSubsystem->ExecuteBehaviorOnStruct(9203, &DroidState, TypeKey);
+		TestEqual(TEXT("Verse VM-selected struct execution should still apply the behavior"), DroidState.Velocity, DroidState.Position);
+	}
+	else
+	{
+		AddInfo(TEXT("Skipping Verse VM direct dispatch assertion because the compiled behavior does not expose a VM entrypoint in this build."));
+	}
+#else
+	AddInfo(TEXT("Skipping Verse VM direct dispatch assertion because Verse VM is unavailable in this build."));
+#endif
+
+	Behavior->SelectedBackend = OriginalSelectedBackend;
+	return true;
+}
+
+bool FFlightVerseCompilePolicyIntegrationTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+
+	UWorld* World = FindAutomationWorld();
+	if (!World)
+	{
+		AddError(TEXT("No valid world context available for compile policy integration test"));
+		return false;
+	}
+
+	UFlightVerseSubsystem* VerseSubsystem = World->GetSubsystem<UFlightVerseSubsystem>();
+	if (!VerseSubsystem)
+	{
+		AddError(TEXT("FlightVerseSubsystem not found"));
+		return false;
+	}
+
+	Flight::Vex::TTypeVexRegistry<Flight::Swarm::FDroidState>::Register();
+	const void* TypeKey = Flight::Vex::TTypeVexRegistry<Flight::Swarm::FDroidState>::GetTypeKey();
+
+	FFlightBehaviorCompilePolicyRow PolicyRow;
+	PolicyRow.RowName = TEXT("Policy.NativeCpu");
+	PolicyRow.PreferredDomain = EFlightBehaviorCompileDomainPreference::NativeCpu;
+	PolicyRow.RequiredContracts = { TEXT("Nav.Route") };
+	PolicyRow.RequiredSymbols = { TEXT("@position") };
+
+	UFlightVerseSubsystem::FCompilePolicyContext CompilePolicyContext;
+	CompilePolicyContext.ExplicitPolicy = &PolicyRow;
+
+	FString CompileDiagnostics;
+	const bool bCompiled = VerseSubsystem->CompileVex(
+		9204,
+		TEXT("@cpu { @velocity = @position; }"),
+		CompileDiagnostics,
+		TypeKey,
+		CompilePolicyContext);
+	TestTrue(TEXT("Compile should succeed with an explicit native CPU policy"), bCompiled);
+
+	const UFlightVerseSubsystem::FVerseBehavior* Behavior = VerseSubsystem->Behaviors.Find(9204);
+	TestNotNull(TEXT("Compile policy integration test should persist behavior metadata"), Behavior);
+	if (!Behavior)
+	{
+		return false;
+	}
+
+	TestEqual(TEXT("Behavior should record the selected policy row"), Behavior->SelectedPolicyRowName, PolicyRow.RowName);
+	TestEqual(TEXT("Behavior should record the preferred domain from policy"), Behavior->PolicyPreferredDomain, EFlightBehaviorCompileDomainPreference::NativeCpu);
+	TestEqual(TEXT("Policy should steer selected backend to NativeScalar"), Behavior->SelectedBackend, FString(TEXT("NativeScalar")));
+	TestTrue(TEXT("Behavior should carry policy-required contracts"), Behavior->RequiredContracts.Contains(TEXT("Nav.Route")));
+	TestTrue(TEXT("Behavior should carry policy-required symbols"), Behavior->PolicyRequiredSymbols.Contains(TEXT("@position")));
+	TestTrue(TEXT("Compile artifact report should retain a non-empty commit detail"), !Behavior->CommitDetail.IsEmpty());
+
+	const Flight::Vex::FFlightCompileArtifactReport* Report = VerseSubsystem->GetBehaviorCompileArtifactReport(9204);
+	TestNotNull(TEXT("Compile policy integration should produce an artifact report"), Report);
+	if (Report)
+	{
+		TestEqual(TEXT("Artifact report should serialize the selected policy row"), Report->SelectedPolicyRow, PolicyRow.RowName.ToString());
+		TestEqual(TEXT("Artifact report should serialize the preferred policy domain"), Report->PolicyPreferredDomain, FString(TEXT("NativeCpu")));
+		TestTrue(TEXT("Artifact report should retain policy-required contracts"), Report->PolicyRequiredContracts.Contains(TEXT("Nav.Route")));
+		TestTrue(TEXT("Artifact report should retain policy-required symbols"), Report->PolicyRequiredSymbols.Contains(TEXT("@position")));
+	}
+
+	UFlightOrchestrationSubsystem* Orchestration = World->GetSubsystem<UFlightOrchestrationSubsystem>();
+	TestNotNull(TEXT("Compile policy integration test should have access to orchestration"), Orchestration);
+	if (Orchestration)
+	{
+		const Flight::Orchestration::FFlightBehaviorRecord* BehaviorRecord = Orchestration->GetReport().Behaviors.FindByPredicate(
+			[](const Flight::Orchestration::FFlightBehaviorRecord& Candidate)
+			{
+				return Candidate.BehaviorID == 9204;
+			});
+		TestNotNull(TEXT("Orchestration report should surface the policy-selected behavior"), BehaviorRecord);
+		if (BehaviorRecord)
+		{
+			TestEqual(TEXT("Orchestration report should preserve the selected policy row"), BehaviorRecord->SelectedPolicyRow, PolicyRow.RowName.ToString());
+			TestEqual(TEXT("Orchestration report should preserve the policy-preferred domain"), BehaviorRecord->PolicyPreferredDomain, FString(TEXT("NativeCpu")));
+			TestTrue(TEXT("Orchestration report should preserve required contracts"), BehaviorRecord->RequiredContracts.Contains(TEXT("Nav.Route")));
+		}
 	}
 
 	return true;

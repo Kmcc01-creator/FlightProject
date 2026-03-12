@@ -206,6 +206,38 @@ FString ExecutionDomainToString(const EFlightExecutionDomain Domain)
 	}
 }
 
+FString BindingSelectionSourceToString(const EFlightBehaviorBindingSelectionSource Source)
+{
+	switch (Source)
+	{
+	case EFlightBehaviorBindingSelectionSource::ManualBinding:
+		return TEXT("ManualBinding");
+	case EFlightBehaviorBindingSelectionSource::AutomaticSelection:
+		return TEXT("AutomaticSelection");
+	case EFlightBehaviorBindingSelectionSource::GeneratedFallback:
+		return TEXT("GeneratedFallback");
+	case EFlightBehaviorBindingSelectionSource::VerseFallback:
+		return TEXT("VerseFallback");
+	default:
+		return TEXT("None");
+	}
+}
+
+FString BindingSelectionRuleToString(const EFlightBehaviorBindingSelectionRule Rule)
+{
+	switch (Rule)
+	{
+	case EFlightBehaviorBindingSelectionRule::ExplicitRegistration:
+		return TEXT("ExplicitRegistration");
+	case EFlightBehaviorBindingSelectionRule::LowestExecutableBehaviorId:
+		return TEXT("LowestExecutableBehaviorId");
+	case EFlightBehaviorBindingSelectionRule::PreferredBehaviorId:
+		return TEXT("PreferredBehaviorId");
+	default:
+		return TEXT("None");
+	}
+}
+
 FString SpatialFieldTypeToString(const Flight::Spatial::ESpatialFieldType FieldType)
 {
 	switch (FieldType)
@@ -1006,12 +1038,27 @@ bool UFlightOrchestrationSubsystem::ReconcileBatchLoweringPlans(
 
 bool UFlightOrchestrationSubsystem::BindBehaviorToCohort(const Flight::Orchestration::FFlightBehaviorBinding& Binding)
 {
-	if (Binding.CohortName.IsNone() || Binding.BehaviorID == 0)
+	if (!Binding.IsValid())
 	{
 		return false;
 	}
 
-	Bindings.Add(Binding);
+	Flight::Orchestration::FFlightBehaviorBinding StoredBinding = Binding;
+	StoredBinding.SyncReportIdentity();
+	if (const Flight::Orchestration::FFlightBehaviorRecord* Behavior = BehaviorsById.Find(StoredBinding.Identity.BehaviorID))
+	{
+		if (!StoredBinding.Report.Selection.HasSelectionSource())
+		{
+			StoredBinding.Report.ExecutionDomain = Behavior->ResolvedDomain;
+			StoredBinding.Report.FrameInterval = Behavior->FrameInterval;
+			StoredBinding.Report.bAsync = Behavior->bAsync;
+			StoredBinding.Report.RequiredContracts = Behavior->RequiredContracts;
+			StoredBinding.Report.Selection.Source = Flight::Orchestration::EFlightBehaviorBindingSelectionSource::ManualBinding;
+			StoredBinding.Report.Selection.Rule = Flight::Orchestration::EFlightBehaviorBindingSelectionRule::ExplicitRegistration;
+		}
+	}
+
+	Bindings.Add(StoredBinding);
 	return true;
 }
 
@@ -1019,7 +1066,7 @@ void UFlightOrchestrationSubsystem::ClearBindingsForCohort(const FName CohortNam
 {
 	Bindings.RemoveAll([CohortName](const Flight::Orchestration::FFlightBehaviorBinding& Binding)
 	{
-		return Binding.CohortName == CohortName;
+		return Binding.Identity.CohortName == CohortName;
 	});
 }
 
@@ -1048,6 +1095,21 @@ bool UFlightOrchestrationSubsystem::IsServiceAvailable(const FName ServiceName) 
 
 namespace
 {
+
+void PopulateBindingReportFromBehavior(
+	Flight::Orchestration::FFlightBehaviorBinding& Binding,
+	const Flight::Orchestration::FFlightBehaviorRecord& Behavior,
+	const Flight::Orchestration::EFlightBehaviorBindingSelectionSource SelectionSource,
+	const Flight::Orchestration::EFlightBehaviorBindingSelectionRule SelectionRule)
+{
+	Binding.SyncReportIdentity();
+	Binding.Report.ExecutionDomain = Behavior.ResolvedDomain;
+	Binding.Report.FrameInterval = Behavior.FrameInterval;
+	Binding.Report.bAsync = Behavior.bAsync;
+	Binding.Report.RequiredContracts = Behavior.RequiredContracts;
+	Binding.Report.Selection.Source = SelectionSource;
+	Binding.Report.Selection.Rule = SelectionRule;
+}
 
 bool HasParticipantAdvertisingContract(
 	const TMap<uint64, Flight::Orchestration::FFlightParticipantRecord>& ParticipantsByHandle,
@@ -1088,15 +1150,15 @@ bool UFlightOrchestrationSubsystem::TryGetBindingForCohort(
 
 		for (const Flight::Orchestration::FFlightBehaviorBinding& Binding : Bindings)
 		{
-			if (Binding.CohortName != TargetCohortName)
+			if (Binding.Identity.CohortName != TargetCohortName)
 			{
 				continue;
 			}
 
-			const bool bBindingBehaviorIsExecutable = BehaviorsById.FindRef(Binding.BehaviorID).bExecutable;
+			const bool bBindingBehaviorIsExecutable = BehaviorsById.FindRef(Binding.Identity.BehaviorID).bExecutable;
 			if (!SelectedBinding
 				|| (bBindingBehaviorIsExecutable && !bSelectedBehaviorIsExecutable)
-				|| (bBindingBehaviorIsExecutable == bSelectedBehaviorIsExecutable && Binding.BehaviorID < SelectedBinding->BehaviorID))
+				|| (bBindingBehaviorIsExecutable == bSelectedBehaviorIsExecutable && Binding.Identity.BehaviorID < SelectedBinding->Identity.BehaviorID))
 			{
 				SelectedBinding = &Binding;
 				bSelectedBehaviorIsExecutable = bBindingBehaviorIsExecutable;
@@ -1111,6 +1173,7 @@ bool UFlightOrchestrationSubsystem::TryGetBindingForCohort(
 		if (const Flight::Orchestration::FFlightBehaviorBinding* ExactBinding = FindBinding(CohortName))
 		{
 			OutBinding = *ExactBinding;
+			OutBinding.SyncReportIdentity();
 			return true;
 		}
 	}
@@ -1120,6 +1183,10 @@ bool UFlightOrchestrationSubsystem::TryGetBindingForCohort(
 		if (const Flight::Orchestration::FFlightBehaviorBinding* DefaultBinding = FindBinding(Flight::Orchestration::DefaultSwarmCohortName))
 		{
 			OutBinding = *DefaultBinding;
+			OutBinding.SyncReportIdentity();
+			OutBinding.Report.Selection.ApplyDefaultCohortFallback(
+				CohortName,
+				Flight::Orchestration::DefaultSwarmCohortName);
 			return true;
 		}
 	}
@@ -1132,7 +1199,7 @@ TArray<Flight::Orchestration::FFlightBehaviorBinding> UFlightOrchestrationSubsys
 	TArray<Flight::Orchestration::FFlightBehaviorBinding> MatchingBindings;
 	for (const Flight::Orchestration::FFlightBehaviorBinding& Binding : Bindings)
 	{
-		if (Binding.CohortName == CohortName)
+		if (Binding.Identity.CohortName == CohortName)
 		{
 			MatchingBindings.Add(Binding);
 		}
@@ -1157,12 +1224,13 @@ bool UFlightOrchestrationSubsystem::ResolveFallbackBinding(Flight::Orchestration
 	}
 
 	OutBinding = Flight::Orchestration::FFlightBehaviorBinding();
-	OutBinding.CohortName = Flight::Orchestration::DefaultSwarmCohortName;
-	OutBinding.BehaviorID = SelectedBehavior->BehaviorID;
-	OutBinding.ExecutionDomain = SelectedBehavior->ResolvedDomain;
-	OutBinding.FrameInterval = SelectedBehavior->FrameInterval;
-	OutBinding.bAsync = SelectedBehavior->bAsync;
-	OutBinding.RequiredContracts = SelectedBehavior->RequiredContracts;
+	OutBinding.Identity.CohortName = Flight::Orchestration::DefaultSwarmCohortName;
+	OutBinding.Identity.BehaviorID = SelectedBehavior->BehaviorID;
+	PopulateBindingReportFromBehavior(
+		OutBinding,
+		*SelectedBehavior,
+		Flight::Orchestration::EFlightBehaviorBindingSelectionSource::GeneratedFallback,
+		Flight::Orchestration::EFlightBehaviorBindingSelectionRule::LowestExecutableBehaviorId);
 	return true;
 }
 
@@ -1174,7 +1242,11 @@ void UFlightOrchestrationSubsystem::Rebuild()
 
 void UFlightOrchestrationSubsystem::RebuildVisibility()
 {
+	const uint32 PreviousPlanGeneration = ExecutionPlan.Generation;
+	const FDateTime PreviousPlanBuiltAtUtc = ExecutionPlan.BuiltAtUtc;
 	ResetVisibilityState();
+	ExecutionPlan.Generation = PreviousPlanGeneration;
+	ExecutionPlan.BuiltAtUtc = PreviousPlanBuiltAtUtc;
 	RefreshServiceStatuses();
 	IngestRenderAdapters();
 	IngestWaypointPaths();
@@ -1227,12 +1299,17 @@ void UFlightOrchestrationSubsystem::RebuildExecutionPlan()
 		}
 
 		Flight::Orchestration::FFlightBehaviorBinding Binding;
-		Binding.CohortName = Pair.Key;
-		Binding.BehaviorID = SelectedBehavior->BehaviorID;
-		Binding.ExecutionDomain = SelectedBehavior->ResolvedDomain;
-		Binding.FrameInterval = SelectedBehavior->FrameInterval;
-		Binding.bAsync = SelectedBehavior->bAsync;
-		Binding.RequiredContracts = SelectedBehavior->RequiredContracts;
+		Binding.Identity.CohortName = Pair.Key;
+		Binding.Identity.BehaviorID = SelectedBehavior->BehaviorID;
+		const Flight::Orchestration::EFlightBehaviorBindingSelectionRule BindingReason =
+			Pair.Value.PreferredBehaviorId >= 0 && static_cast<uint32>(Pair.Value.PreferredBehaviorId) == SelectedBehavior->BehaviorID
+				? Flight::Orchestration::EFlightBehaviorBindingSelectionRule::PreferredBehaviorId
+				: Flight::Orchestration::EFlightBehaviorBindingSelectionRule::LowestExecutableBehaviorId;
+		PopulateBindingReportFromBehavior(
+			Binding,
+			*SelectedBehavior,
+			Flight::Orchestration::EFlightBehaviorBindingSelectionSource::AutomaticSelection,
+			BindingReason);
 		Bindings.Add(Binding);
 
 		Flight::Orchestration::FFlightExecutionPlanStep Step;
@@ -1396,6 +1473,9 @@ FString UFlightOrchestrationSubsystem::BuildReportJson() const
 		Flight::Orchestration::AddNameArrayToJson(Behavior.RequiredContracts, TEXT("requiredContracts"), BehaviorObject);
 		BehaviorObject->SetStringField(TEXT("selectedBackend"), Behavior.SelectedBackend);
 		BehaviorObject->SetStringField(TEXT("committedBackend"), Behavior.CommittedBackend);
+		BehaviorObject->SetStringField(TEXT("commitDetail"), Behavior.CommitDetail);
+		BehaviorObject->SetStringField(TEXT("selectedPolicyRow"), Behavior.SelectedPolicyRow);
+		BehaviorObject->SetStringField(TEXT("policyPreferredDomain"), Behavior.PolicyPreferredDomain);
 		Flight::Orchestration::AddStringArrayToJson(Behavior.ImportedSymbols, TEXT("importedSymbols"), BehaviorObject);
 		Flight::Orchestration::AddStringArrayToJson(Behavior.ExportedSymbols, TEXT("exportedSymbols"), BehaviorObject);
 		BehaviorObject->SetNumberField(TEXT("boundaryOperatorCount"), Behavior.BoundaryOperatorCount);
@@ -1413,12 +1493,22 @@ FString UFlightOrchestrationSubsystem::BuildReportJson() const
 	for (const Flight::Orchestration::FFlightBehaviorBinding& Binding : CachedReport.Bindings)
 	{
 		TSharedRef<FJsonObject> BindingObject = MakeShared<FJsonObject>();
-		BindingObject->SetStringField(TEXT("cohortName"), Binding.CohortName.ToString());
-		BindingObject->SetNumberField(TEXT("behaviorId"), Binding.BehaviorID);
-		BindingObject->SetStringField(TEXT("executionDomain"), Flight::Orchestration::ExecutionDomainToString(Binding.ExecutionDomain));
-		BindingObject->SetNumberField(TEXT("frameInterval"), Binding.FrameInterval);
-		BindingObject->SetBoolField(TEXT("async"), Binding.bAsync);
-		Flight::Orchestration::AddNameArrayToJson(Binding.RequiredContracts, TEXT("requiredContracts"), BindingObject);
+		BindingObject->SetStringField(TEXT("cohortName"), Binding.Identity.CohortName.ToString());
+		BindingObject->SetNumberField(TEXT("behaviorId"), Binding.Identity.BehaviorID);
+		BindingObject->SetStringField(TEXT("executionDomain"), Flight::Orchestration::ExecutionDomainToString(Binding.Report.ExecutionDomain));
+		BindingObject->SetNumberField(TEXT("frameInterval"), Binding.Report.FrameInterval);
+		BindingObject->SetBoolField(TEXT("async"), Binding.Report.bAsync);
+		Flight::Orchestration::AddNameArrayToJson(Binding.Report.RequiredContracts, TEXT("requiredContracts"), BindingObject);
+		BindingObject->SetStringField(TEXT("selectionSource"), Flight::Orchestration::BindingSelectionSourceToString(Binding.Report.Selection.Source));
+		BindingObject->SetStringField(TEXT("selectionRule"), Flight::Orchestration::BindingSelectionRuleToString(Binding.Report.Selection.Rule));
+		BindingObject->SetStringField(TEXT("selectionReason"), Flight::Orchestration::BindingSelectionRuleToString(Binding.Report.Selection.Rule));
+		TSharedRef<FJsonObject> SelectionObject = MakeShared<FJsonObject>();
+		SelectionObject->SetStringField(TEXT("source"), Flight::Orchestration::BindingSelectionSourceToString(Binding.Report.Selection.Source));
+		SelectionObject->SetStringField(TEXT("rule"), Flight::Orchestration::BindingSelectionRuleToString(Binding.Report.Selection.Rule));
+		SelectionObject->SetBoolField(TEXT("usedDefaultCohortFallback"), Binding.Report.Selection.bUsedDefaultCohortFallback);
+		SelectionObject->SetStringField(TEXT("requestedCohortName"), Binding.Report.Selection.RequestedCohortName.ToString());
+		SelectionObject->SetStringField(TEXT("fallbackCohortName"), Binding.Report.Selection.FallbackCohortName.ToString());
+		BindingObject->SetObjectField(TEXT("selection"), SelectionObject);
 		BindingValues.Add(MakeShared<FJsonValueObject>(BindingObject));
 	}
 	Root->SetArrayField(TEXT("bindings"), BindingValues);
@@ -1707,8 +1797,14 @@ void UFlightOrchestrationSubsystem::IngestBehaviors()
 		Record.FrameInterval = Pair.Value.FrameInterval;
 		Record.bAsync = Pair.Value.bIsAsync;
 		Record.ResolvedDomain = Flight::Orchestration::ResolveExecutionDomain(Pair.Value);
+		Record.RequiredContracts = Pair.Value.RequiredContracts;
 		Record.SelectedBackend = Pair.Value.SelectedBackend;
 		Record.CommittedBackend = Pair.Value.CommittedBackend;
+		Record.CommitDetail = Pair.Value.CommitDetail;
+		Record.SelectedPolicyRow = Pair.Value.SelectedPolicyRowName.IsNone()
+			? FString()
+			: Pair.Value.SelectedPolicyRowName.ToString();
+		Record.PolicyPreferredDomain = FlightBehaviorCompileDomainPreferenceToString(Pair.Value.PolicyPreferredDomain);
 		Record.ImportedSymbols = Pair.Value.ImportedSymbols;
 		Record.ExportedSymbols = Pair.Value.ExportedSymbols;
 		Record.BoundaryOperatorCount = Pair.Value.BoundaryOperatorCount;
@@ -1717,7 +1813,10 @@ void UFlightOrchestrationSubsystem::IngestBehaviors()
 		Record.bHasAwaitableBoundary = Pair.Value.bHasAwaitableBoundary;
 		Record.bHasMirrorRequest = Pair.Value.bHasMirrorRequest;
 		Record.BoundaryExecutionDetail = Pair.Value.BoundaryExecutionDetail;
-		Record.bExecutable = (Pair.Value.bHasExecutableProcedure || Pair.Value.bUsesNativeFallback || Pair.Value.SimdPlan.IsValid() || (Record.ResolvedDomain == Flight::Orchestration::EFlightExecutionDomain::Gpu))
+		Record.bExecutable = (Pair.Value.bHasExecutableProcedure
+			|| Pair.Value.bUsesNativeFallback
+			|| Pair.Value.SimdPlan.IsValid()
+			|| Pair.Value.CommittedBackend == TEXT("GpuKernel"))
 			&& (!Record.bHasBoundarySemantics || Record.bBoundarySemanticsExecutable);
 		Record.Diagnostics = Pair.Value.LastCompileDiagnostics;
 		RegisterBehavior(Pair.Key, Record);
@@ -1964,12 +2063,12 @@ void UFlightOrchestrationSubsystem::RebuildCachedReport()
 
 	CachedReport.Bindings.Sort([](const Flight::Orchestration::FFlightBehaviorBinding& Left, const Flight::Orchestration::FFlightBehaviorBinding& Right)
 	{
-		if (Left.CohortName == Right.CohortName)
+		if (Left.Identity.CohortName == Right.Identity.CohortName)
 		{
-			return Left.BehaviorID < Right.BehaviorID;
+			return Left.Identity.BehaviorID < Right.Identity.BehaviorID;
 		}
 
-		return Left.CohortName.LexicalLess(Right.CohortName);
+		return Left.Identity.CohortName.LexicalLess(Right.Identity.CohortName);
 	});
 }
 

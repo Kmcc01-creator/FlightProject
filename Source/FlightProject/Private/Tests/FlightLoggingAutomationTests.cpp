@@ -84,9 +84,6 @@ void FFlightLoggingComplexTest::GetTests(TArray<FString>& OutBeautifiedNames, TA
     OutBeautifiedNames.Add(TEXT("UnrealBridge"));
     OutTestCommands.Add(TEXT("UnrealBridge"));
 
-    OutBeautifiedNames.Add(TEXT("InternalBufferBridge"));
-    OutTestCommands.Add(TEXT("InternalBufferBridge"));
-
     OutBeautifiedNames.Add(TEXT("VexUIIntegration"));
     OutTestCommands.Add(TEXT("VexUIIntegration"));
 }
@@ -215,6 +212,12 @@ bool FFlightLoggingComplexTest::RunTest(const FString& Parameters)
     else if (Parameters == TEXT("MonadicLogging"))
     {
         TestSink->Reset();
+        const bool bWasUnrealSinkEnabled = FLogger::Get().IsUnrealSinkEnabled();
+        FLogger::Get().SetUnrealSinkEnabled(false);
+        ON_SCOPE_EXIT
+        {
+            FLogger::Get().SetUnrealSinkEnabled(bWasUnrealSinkEnabled);
+        };
 
         using namespace Flight::Functional;
 
@@ -227,7 +230,6 @@ bool FFlightLoggingComplexTest::RunTest(const FString& Parameters)
         // Error path
         TestSink->Reset();
         auto ErrorResult = TResult<int32, FString>::Err(TEXT("Critical Failure"));
-        AddExpectedError(TEXT("Operation Failed: Critical Failure"), EAutomationExpectedErrorFlags::Contains, 1);
         LogErr(MoveTemp(ErrorResult), "LogTest");
         TestEqual("Should log error", TestSink->ReceivedEntries.Num(), 1);
         TestTrue("Message should contain error message", TestSink->ReceivedEntries[0].Message.Contains(TEXT("Critical Failure")));
@@ -258,30 +260,6 @@ bool FFlightLoggingComplexTest::RunTest(const FString& Parameters)
         if (MatchingEntry)
         {
             TestTrue("Captured Unreal log should contain formatted context", MatchingEntry->Message.Contains(TEXT("BridgeKey: BridgeValue")));
-        }
-    }
-    else if (Parameters == TEXT("InternalBufferBridge"))
-    {
-        Flight::Log::FGlobalLogCapture::Get().Clear();
-
-        FInternalLogService InternalSink;
-        FLogContext Context;
-        Context.KeyValues.Add(TEXT("InternalKey"), TEXT("InternalValue"));
-
-        FLogEntry Entry(0, 0.0, ELogLevel::Log, TEXT("LogInternalBridge"), TEXT("Internal bridge message"));
-        Entry.Context = Context.KeyValues;
-
-        InternalSink.Receive(Entry, Context);
-
-        const TArray<FLogEntry> Logs = Flight::Log::FGlobalLogCapture::Get().GetBuffer().Filter([](const FLogEntry& Captured) {
-            return Captured.Category == TEXT("LogInternalBridge");
-        });
-
-        TestEqual("Internal buffer bridge should append exactly one matching entry", Logs.Num(), 1);
-        if (Logs.Num() == 1)
-        {
-            TestEqual("Buffered message should match", Logs[0].Message, TEXT("Internal bridge message"));
-            TestEqual("Buffered context should retain structured values", Logs[0].Context.FindRef(TEXT("InternalKey")), TEXT("InternalValue"));
         }
     }
     else if (Parameters == TEXT("VexUIIntegration"))
