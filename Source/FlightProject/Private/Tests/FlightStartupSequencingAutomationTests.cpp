@@ -4,6 +4,8 @@
 #include "Misc/AutomationTest.h"
 
 #include "Engine/Engine.h"
+#include "EngineUtils.h"
+#include "FlightGameMode.h"
 #include "FlightNavGraphDataHubSubsystem.h"
 #include "FlightSpawnSwarmAnchor.h"
 #include "FlightWaypointPath.h"
@@ -40,10 +42,12 @@ using Flight::Test::DestroySwarmEntitiesDirect;
 using Flight::Test::FindAutomationWorld;
 using Flight::Test::FindNavigationCommitSharedFragmentForCohort;
 using Flight::Test::FindOptionalWorldSubsystem;
+using Flight::Test::FScopedAutomationGameInstance;
 using Flight::Test::GatherPathIdsForCohort;
 using Flight::Test::InvokeSubsystemNoArg;
 using Flight::Test::MakeExecutableBehavior;
 using Flight::Test::RemoveVisibleBehaviorRecords;
+using Flight::Test::SetObjectEnumProperty;
 using Flight::Test::SetObjectNameProperty;
 using Flight::Test::SetObjectReferenceProperty;
 
@@ -145,10 +149,9 @@ bool FFlightNavigationCommitConstSharedFragmentIdentityTest::RunTest(const FStri
 }
 
 /*
- * This suite stays intentionally light for the first startup-sequencing slice.
- * It validates the callable bootstrap/orchestration surfaces and their observable
- * artifacts without requiring a dedicated map fixture or direct StartPlay harness.
- * Future work can deepen this into full startup-profile and post-spawn coverage.
+ * This suite now spans both lightweight startup-sequencing contract checks and
+ * a deeper DefaultSandbox world fixture that drives the real startup profile
+ * path through AFlightGameMode with a GameInstance-backed automation world.
  */
 IMPLEMENT_COMPLEX_AUTOMATION_TEST(
 	FFlightStartupSequencingComplexTest,
@@ -165,6 +168,9 @@ void FFlightStartupSequencingComplexTest::GetTests(TArray<FString>& OutBeautifie
 
 	OutBeautifiedNames.Add(TEXT("StartupReportJsonSurface"));
 	OutTestCommands.Add(TEXT("StartupReportJsonSurface"));
+
+	OutBeautifiedNames.Add(TEXT("DefaultSandboxStartupSequenceWorldFixture"));
+	OutTestCommands.Add(TEXT("DefaultSandboxStartupSequenceWorldFixture"));
 }
 
 bool FFlightStartupSequencingComplexTest::RunTest(const FString& Parameters)
@@ -245,8 +251,173 @@ bool FFlightStartupSequencingComplexTest::RunTest(const FString& Parameters)
 
 		TestEqual(TEXT("Startup report should reference the active world"), RootObject->GetStringField(TEXT("worldName")), World->GetName());
 		TestTrue(TEXT("Startup report should include a built timestamp"), RootObject->HasTypedField<EJson::String>(TEXT("builtAtUtc")));
+		TestTrue(TEXT("Startup report should include startup metadata"), RootObject->HasTypedField<EJson::Object>(TEXT("startup")));
 		TestTrue(TEXT("Startup report should include services"), RootObject->HasTypedField<EJson::Array>(TEXT("services")));
 		TestTrue(TEXT("Startup report should include an execution plan"), RootObject->HasTypedField<EJson::Object>(TEXT("executionPlan")));
+		const TSharedPtr<FJsonObject>* StartupObject = nullptr;
+		TestTrue(TEXT("Startup report should expose a startup object"), RootObject->TryGetObjectField(TEXT("startup"), StartupObject));
+		if (StartupObject && StartupObject->IsValid())
+		{
+			TestTrue(TEXT("Startup report startup object should expose a GameMode-presence flag"),
+				(*StartupObject)->HasTypedField<EJson::Boolean>(TEXT("gameModePresent")));
+			TestTrue(TEXT("Startup report startup object should expose a resolution source"),
+				(*StartupObject)->HasTypedField<EJson::String>(TEXT("resolutionSource")));
+			TestTrue(TEXT("Startup report startup object should expose startup-run completion status"),
+				(*StartupObject)->HasTypedField<EJson::Boolean>(TEXT("startupRunCompleted")));
+			TestTrue(TEXT("Startup report startup object should expose startup stages"),
+				(*StartupObject)->HasTypedField<EJson::Array>(TEXT("stages")));
+		}
+		return true;
+	}
+
+	if (Parameters == TEXT("DefaultSandboxStartupSequenceWorldFixture"))
+	{
+		FScopedAutomationGameInstance ScopedGameInstance(World);
+		TestTrue(TEXT("Startup world-fixture test should provide a GameInstance-backed automation world"),
+			ScopedGameInstance.IsValid());
+
+		UFlightScriptingLibrary::ReloadDataConfigs(World);
+		TestTrue(TEXT("Startup world-fixture test should have fully loaded data configs"),
+			UFlightScriptingLibrary::IsDataFullyLoaded(World));
+
+		DestroySwarmEntitiesDirect(World);
+		Orchestration->Rebuild();
+
+		TestEqual(TEXT("StartPlay world-fixture test should begin from an empty swarm state"),
+			UFlightScriptingLibrary::GetSwarmEntityCount(World),
+			0);
+
+		TSet<const AFlightWaypointPath*> ExistingWaypointPaths;
+		for (TActorIterator<AFlightWaypointPath> It(World); It; ++It)
+		{
+			if (const AFlightWaypointPath* ExistingPath = *It)
+			{
+				ExistingWaypointPaths.Add(ExistingPath);
+			}
+		}
+
+		bool bBootstrapCompleted = false;
+		const FDelegateHandle DelegateHandle = Bootstrap->OnBootstrapCompleted().AddLambda([&bBootstrapCompleted]()
+		{
+			bBootstrapCompleted = true;
+		});
+
+		FActorSpawnParameters SpawnParameters;
+		SpawnParameters.Name = TEXT("Automation.StartPlay.DefaultSandboxGameMode");
+		SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		AFlightGameMode* GameMode = World->SpawnActor<AFlightGameMode>(
+			AFlightGameMode::StaticClass(),
+			FTransform::Identity,
+			SpawnParameters);
+
+		ON_SCOPE_EXIT
+		{
+			Bootstrap->OnBootstrapCompleted().Remove(DelegateHandle);
+			DestroySwarmEntitiesDirect(World);
+			if (GameMode)
+			{
+				GameMode->Destroy();
+			}
+			TArray<AFlightWaypointPath*> WaypointPathsToDestroy;
+			for (TActorIterator<AFlightWaypointPath> It(World); It; ++It)
+			{
+				if (AFlightWaypointPath* WaypointPath = *It;
+					WaypointPath && !ExistingWaypointPaths.Contains(WaypointPath))
+				{
+					WaypointPathsToDestroy.Add(WaypointPath);
+				}
+			}
+			for (AFlightWaypointPath* WaypointPath : WaypointPathsToDestroy)
+			{
+				WaypointPath->Destroy();
+			}
+			Orchestration->Rebuild();
+		};
+
+		TestNotNull(TEXT("Startup world-fixture test should spawn a real FlightGameMode instance"), GameMode);
+		if (!GameMode)
+		{
+			return false;
+		}
+
+		UWorldSubsystem* SwarmSpawnerSubsystem =
+			FindOptionalWorldSubsystem(World, TEXT("/Script/SwarmEncounter.FlightSwarmSpawnerSubsystem"));
+		TestNotNull(TEXT("Startup world-fixture test should have access to the swarm spawner subsystem"), SwarmSpawnerSubsystem);
+		if (!SwarmSpawnerSubsystem)
+		{
+			return false;
+		}
+
+		UObject* SwarmEntityConfig = LoadObject<UObject>(nullptr, TEXT("/SwarmEncounter/DA_SwarmDroneConfig.DA_SwarmDroneConfig"));
+		TestNotNull(TEXT("Startup world-fixture test should load the swarm entity config asset"), SwarmEntityConfig);
+		TestTrue(TEXT("Startup world-fixture test should seed the spawner config explicitly"),
+			SetObjectReferenceProperty(SwarmSpawnerSubsystem, TEXT("SwarmEntityConfig"), SwarmEntityConfig));
+
+		TestTrue(TEXT("Startup world-fixture test should force the DefaultSandbox startup profile"),
+			SetObjectEnumProperty(GameMode, TEXT("StartupProfile"), static_cast<int64>(EFlightStartupProfile::DefaultSandbox)));
+
+		GameMode->RunStartupSequence();
+
+		const int32 SwarmEntityCount = UFlightScriptingLibrary::GetSwarmEntityCount(World);
+		TestTrue(TEXT("DefaultSandbox StartPlay should spawn swarm entities"), SwarmEntityCount > 0);
+		TestTrue(TEXT("DefaultSandbox StartPlay should broadcast bootstrap completion"), bBootstrapCompleted);
+
+		const Flight::Orchestration::FFlightExecutionPlan& Plan = Orchestration->GetExecutionPlan();
+		TestTrue(TEXT("DefaultSandbox StartPlay should leave behind a built orchestration plan"), Plan.Generation > 0);
+		TestTrue(TEXT("DefaultSandbox StartPlay should record a plan build timestamp"), Plan.BuiltAtUtc.GetTicks() > 0);
+
+		const Flight::Orchestration::FFlightCohortRecord* DefaultCohort = Orchestration->FindCohort(TEXT("Swarm.Default"));
+		TestNotNull(TEXT("DefaultSandbox StartPlay should register the default swarm cohort"), DefaultCohort);
+		if (DefaultCohort)
+		{
+			TestTrue(TEXT("Default swarm cohort should have participants after StartPlay"), !DefaultCohort->Participants.IsEmpty());
+			TestTrue(TEXT("Default swarm cohort should retain the Swarm tag"), DefaultCohort->Tags.Contains(TEXT("Swarm")));
+			TestTrue(TEXT("Default swarm cohort should retain the Default tag"), DefaultCohort->Tags.Contains(TEXT("Default")));
+		}
+
+		const FString ReportJson = UFlightScriptingLibrary::GetOrchestrationReportJson(World, false);
+		TestFalse(TEXT("DefaultSandbox StartPlay should leave a non-empty orchestration report"), ReportJson.IsEmpty());
+		TestTrue(TEXT("DefaultSandbox StartPlay report should surface the default swarm cohort"), ReportJson.Contains(TEXT("Swarm.Default")));
+		TSharedPtr<FJsonObject> RootObject;
+		TestTrue(TEXT("DefaultSandbox StartPlay report should parse"), ParseJsonObject(ReportJson, RootObject));
+		if (!RootObject.IsValid())
+		{
+			return false;
+		}
+
+		const TSharedPtr<FJsonObject>* StartupObject = nullptr;
+		TestTrue(TEXT("DefaultSandbox StartPlay report should include startup metadata"),
+			RootObject->TryGetObjectField(TEXT("startup"), StartupObject));
+		if (StartupObject && StartupObject->IsValid())
+		{
+			TestTrue(TEXT("DefaultSandbox StartPlay report should detect a FlightGameMode surface"),
+				(*StartupObject)->GetBoolField(TEXT("gameModePresent")));
+			TestEqual(TEXT("DefaultSandbox StartPlay report should surface the active startup profile"),
+				(*StartupObject)->GetStringField(TEXT("activeProfile")),
+				FString(TEXT("DefaultSandbox")));
+			TestEqual(TEXT("DefaultSandbox StartPlay report should prefer the configured startup profile asset"),
+				(*StartupObject)->GetStringField(TEXT("resolutionSource")),
+				FString(TEXT("StartupProfileAsset")));
+			TestTrue(TEXT("DefaultSandbox StartPlay report should record that a startup profile asset is configured"),
+				(*StartupObject)->GetBoolField(TEXT("profileAssetConfigured")));
+			TestTrue(TEXT("DefaultSandbox StartPlay report should record a completed startup run"),
+				(*StartupObject)->GetBoolField(TEXT("startupRunCompleted")));
+			TestTrue(TEXT("DefaultSandbox StartPlay report should record a successful startup run"),
+				(*StartupObject)->GetBoolField(TEXT("startupRunSucceeded")));
+			TestEqual(TEXT("DefaultSandbox StartPlay report should preserve the spawned swarm entity count"),
+				static_cast<int32>((*StartupObject)->GetNumberField(TEXT("spawnedSwarmEntities"))),
+				SwarmEntityCount);
+
+			const TArray<TSharedPtr<FJsonValue>>* StageValues = nullptr;
+			TestTrue(TEXT("DefaultSandbox StartPlay report should include startup stages"),
+				(*StartupObject)->TryGetArrayField(TEXT("stages"), StageValues));
+			if (StageValues)
+			{
+				TestEqual(TEXT("DefaultSandbox StartPlay report should record all coordinator stages"),
+					StageValues->Num(),
+					5);
+			}
+		}
 		return true;
 	}
 

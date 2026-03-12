@@ -6,6 +6,7 @@
 #include "Orchestration/FlightBehaviorBinding.h"
 #include "Orchestration/FlightExecutionPlan.h"
 #include "Orchestration/FlightParticipantTypes.h"
+#include "Orchestration/FlightStartupCoordinatorSubsystem.h"
 
 namespace Flight::Orchestration
 {
@@ -57,10 +58,33 @@ struct FLIGHTPROJECT_API FFlightNavigationCandidateRecord
 	TArray<FName> ContractKeys;
 };
 
+struct FLIGHTPROJECT_API FFlightStartupProfileReport
+{
+	bool bGameModePresent = false;
+	FString GameModeClass;
+	FString ActiveProfile;
+	FString ResolutionSource;
+	FString ProfileAssetPath;
+	bool bProfileAssetConfigured = false;
+	bool bProfileAssetLoaded = false;
+	bool bResolvedFromLegacyAuto = false;
+	int32 GauntletGpuSwarmEntityCount = 0;
+	FString Detail;
+	bool bStartupRunCompleted = false;
+	bool bStartupRunSucceeded = false;
+	FDateTime StartupStartedAtUtc;
+	FDateTime StartupCompletedAtUtc;
+	FString FailureStage;
+	int32 SpawnedSwarmEntities = 0;
+	FString Summary;
+	TArray<Flight::Startup::FFlightStartupStageReport> Stages;
+};
+
 struct FLIGHTPROJECT_API FFlightOrchestrationReport
 {
 	FString WorldName;
 	FDateTime BuiltAtUtc;
+	FFlightStartupProfileReport Startup;
 	TArray<FFlightServiceStatus> Services;
 	TArray<FFlightParticipantRecord> Participants;
 	TArray<FFlightNavigationCandidateRecord> NavigationCandidates;

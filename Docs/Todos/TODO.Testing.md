@@ -14,17 +14,7 @@ Update the phased/headless validation filters so the recommended execution path 
 
 Relevant surfaces: [TestingValidationPlan.md](../Workflow/TestingValidationPlan.md), [run_tests_phased.sh](/home/kelly/Unreal/Projects/FlightProject/Scripts/run_tests_phased.sh), [FlightVexVerseTests.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Tests/FlightVexVerseTests.cpp), [FlightReactiveTests.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Tests/FlightReactiveTests.cpp), [FlightVerseAssemblerTests.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Tests/FlightVerseAssemblerTests.cpp), [FlightVexSimdTests.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Tests/FlightVexSimdTests.cpp).
 
-### 2. Startup Integration Depth
-
-Priority: High  
-Status: Active  
-Owner/Surface: startup automation coverage
-
-Add dedicated startup-profile/world fixtures that exercise real `StartPlay()` sequencing and assert post-spawn orchestration/cohort deltas, not only lightweight callable/report surfaces.
-
-Relevant surfaces: [CurrentFocus.md](../Workflow/CurrentFocus.md), [TODO.Startup.md](TODO.Startup.md), [FlightStartupSequencingAutomationTests.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Tests/FlightStartupSequencingAutomationTests.cpp).
-
-### 3. VEX Schema Fixture Deduplication
+### 2. VEX Schema Fixture Deduplication
 
 Priority: Medium  
 Status: Planned  
@@ -34,7 +24,7 @@ Replace hand-built fragment-backed schema providers in tests with a shared sourc
 
 Relevant surfaces: [FlightVexGeneralTests.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Tests/FlightVexGeneralTests.cpp), [FlightVexSchemaIrTests.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Tests/FlightVexSchemaIrTests.cpp), [FlightNavigationContracts.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Navigation/FlightNavigationContracts.cpp), [FlightVexSymbolRegistry.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Vex/FlightVexSymbolRegistry.cpp).
 
-### 4. Complex vs Generated Suite Taxonomy
+### 3. Complex vs Generated Suite Taxonomy
 
 Priority: Medium  
 Status: Active  
@@ -44,7 +34,7 @@ Clarify the difference between truly generated suites and fixed multi-case dispa
 
 Relevant surfaces: [TestingValidationPlan.md](../Workflow/TestingValidationPlan.md), [FlightGenerativeManifestTests.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Tests/FlightGenerativeManifestTests.cpp), [FlightSchemaDrivenTests.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Tests/FlightSchemaDrivenTests.cpp), [FlightVexVerticalSliceTests.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Tests/FlightVexVerticalSliceTests.cpp), [FlightReflectionComplexAutomationTests.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Tests/FlightReflectionComplexAutomationTests.cpp).
 
-### 5. GPU-Required Coverage Usefulness
+### 4. GPU-Required Coverage Usefulness
 
 Priority: Medium  
 Status: Monitoring  
@@ -54,7 +44,7 @@ Keep moving GPU lanes beyond initialization/discovery evidence toward meaningful
 
 Relevant surfaces: [CurrentBuild.md](../Workflow/CurrentBuild.md), [TestingValidationPlan.md](../Workflow/TestingValidationPlan.md), [FlightGpuPerceptionTests.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Tests/FlightGpuPerceptionTests.cpp).
 
-### 6. Phased Validation Maintenance
+### 5. Phased Validation Maintenance
 
 Priority: Medium  
 Status: Active  
@@ -64,7 +54,7 @@ Keep the complex/generated-first validation structure current as new automation 
 
 Relevant surfaces: [TestingValidationPlan.md](../Workflow/TestingValidationPlan.md), [CurrentBuild.md](../Workflow/CurrentBuild.md), [run_tests_phased.sh](/home/kelly/Unreal/Projects/FlightProject/Scripts/run_tests_phased.sh).
 
-### 7. Review-to-Test Follow-Through
+### 6. Review-to-Test Follow-Through
 
 Priority: Medium  
 Status: Active  
@@ -82,6 +72,8 @@ Relevant surfaces: [Docs/Reviews/README.md](../Reviews/README.md), [TODOS.md](TO
 
 ## Completed / Archived
 
+- Completed (2026-03-12): startup sequencing coverage now includes a dedicated `DefaultSandboxStartupSequenceWorldFixture` in [FlightStartupSequencingAutomationTests.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Tests/FlightStartupSequencingAutomationTests.cpp) that provides a GameInstance-backed automation world, drives the real `AFlightGameMode` startup path, and asserts post-spawn swarm/orchestration/cohort state.
+- Completed (2026-03-12): scripting policy-context adoption and GPU terminal-commit regression coverage now exist in [FlightVexVerseTests.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Tests/FlightVexVerseTests.cpp), including `FlightProject.Functional.Verse.CompilePolicyIntegration` through the scripting compile surface and `FlightProject.Functional.Verse.GpuTerminalCommit` for submit-vs-terminal GPU commit truth. Verified with targeted headless coverage plus Phase 3 and Phase 4 reruns.
 - Completed (2026-03-12): compile-policy and GPU-commitment regression coverage now exists in [FlightVexVerseTests.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Tests/FlightVexVerseTests.cpp) and [FlightVexGeneralTests.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Tests/FlightVexGeneralTests.cpp), including explicit policy-driven backend selection and GPU-policy generated-only commitment truth.
 - Completed (2026-03-12): runtime dispatch gating now resolves struct, bulk, and direct execution lanes through shared backend-selection helpers in [UFlightVerseSubsystem.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Verse/UFlightVerseSubsystem.cpp), with focused regression coverage in [FlightVexVerseTests.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Tests/FlightVexVerseTests.cpp) and [FlightVexGeneralTests.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Tests/FlightVexGeneralTests.cpp). Verified with targeted headless Verse/VEX coverage plus Phase 3 and Phase 4 reruns.
 - Completed (2026-03-12): current phased failure triage cleared the previously failing `FlightProject.Integration.Startup.Sequencing.OrchestrationRebuildAdvancesPlan`, `FlightProject.Unit.Vex.ControlFlow`, and `FlightProject.Unit.Vex.Parsing` surfaces after source fixes in [FlightOrchestrationSubsystem.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Orchestration/FlightOrchestrationSubsystem.cpp), [FlightVexIr.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Vex/FlightVexIr.cpp), and [VexParser.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Vex/Frontend/VexParser.cpp). Verified with a targeted headless run through [run_tests_headless.sh](/home/kelly/Unreal/Projects/FlightProject/Scripts/run_tests_headless.sh).

@@ -23,13 +23,50 @@
     - orchestration rebuild after spawn.
   - The Gauntlet GPU swarm path remains explicit and isolated from reusable bootstrap/orchestration work.
   - `UFlightOrchestrationSubsystem` now exposes a single `Rebuild()` entrypoint used by scripting and debug surfaces.
-- **Light Startup Sequencing Coverage Landed**:
+- **Startup Sequencing Coverage Expanded (2026-03-12)**:
   - Added `FlightProject.Integration.Startup.Sequencing` as a complex automation suite.
-  - Current coverage is intentionally lightweight:
+  - Current coverage now includes:
     - bootstrap completion signaling,
     - orchestration rebuild validity,
-    - startup report JSON surface.
-  - This is the seed for heavier startup-profile and post-spawn coverage, not the final fixture strategy.
+    - startup report JSON surface,
+    - a `DefaultSandbox` world fixture that drives the real `AFlightGameMode` startup path.
+  - the deeper fixture now:
+    - provisions a GameInstance-backed automation world,
+    - runs `RunStartupSequence()` on a real `AFlightGameMode`,
+    - asserts post-spawn swarm entity count,
+    - asserts rebuilt orchestration plan/cohort state after startup.
+- **Startup Coordinator Extraction Landed (2026-03-12)**:
+  - `AFlightGameMode` now delegates the cross-system transaction to `UFlightStartupCoordinatorSubsystem` instead of directly owning `bootstrap -> rebuild -> spawn -> rebuild`;
+  - `UFlightStartupCoordinatorSubsystem` now owns the staged startup transaction for:
+    - `DefaultSandbox`,
+    - `GauntletGpuSwarm`;
+  - current coordinator stages for `DefaultSandbox` are:
+    - `DataReadiness`,
+    - `WorldBootstrap`,
+    - `PreSpawnOrchestrationRebuild`,
+    - `InitialSwarmSpawn`,
+    - `PostSpawnOrchestrationRebuild`;
+  - startup report JSON now surfaces those stage outcomes so startup execution is observable as a transaction rather than only as a sequence of `GameMode` log lines.
+- **Startup Policy/Report Ownership Thinned Further (2026-03-12)**:
+  - `UFlightStartupCoordinatorSubsystem` now also owns startup request construction and startup report assembly;
+  - `AFlightGameMode` now exposes startup config inputs and acts as the gameplay-framework trigger instead of owning request resolution or report shaping;
+  - `UFlightOrchestrationSubsystem` now rebuilds the cached `startup` report surface through the coordinator directly, so startup selection and startup execution facts come from one reusable source.
+- **Startup Report Integration Landed (2026-03-12)**:
+  - orchestration report JSON now includes a dedicated `startup` object instead of leaving startup policy visible only in `GameMode` logs;
+  - current startup report fields include:
+    - `activeProfile`,
+    - `resolutionSource`,
+    - `profileAssetPath`,
+    - `profileAssetConfigured`,
+    - `profileAssetLoaded`,
+    - `resolvedFromLegacyAuto`,
+    - `gameModePresent`,
+    - `startupRunCompleted`,
+    - `startupRunSucceeded`,
+    - `failureStage`,
+    - `spawnedSwarmEntities`,
+    - `stages`;
+  - the coordinator-owned reporting path prefers the real auth `GameMode` when available and falls back to the first `AFlightGameMode` actor so the deeper automation world fixture can observe the same startup metadata surface.
 - **Milestone 2 Deeper Slice Landed**:
   - `UFlightVexBehaviorProcessor` now resolves behavior selection per chunk/cohort through `UFlightOrchestrationSubsystem` before falling back.
   - spawned Mass swarm batches carry a shared cohort identity (`Swarm.Default` or `SwarmAnchor.*`) so the processor consumes orchestration-visible cohorts instead of a hardcoded global behavior ID.
@@ -63,10 +100,11 @@
     - generated-only acceptance,
     - required-symbol validation,
     - required-contract propagation into orchestration legality surfaces.
+  - policy-aware scripting compile entrypoints now exist in `UFlightScriptingLibrary`, including cohort/profile-aware selection and explicit/manual policy helpers for reflected-struct or type-key-bound compilation.
   - GPU-preferred policy is now explicit about current truth:
-    - selected backend may remain `GpuKernel`,
-    - committed backend stays unproven/`Unknown` until a real GPU commit path exists,
-    - orchestration no longer treats `resolvedDomain == Gpu` as executable by itself.
+    - selected backend may remain `GpuKernel` before dispatch,
+    - committed backend stays `Unknown` until the GPU bridge reaches a terminal completed state,
+    - orchestration now upgrades GPU execution truth only after that terminal callback instead of treating selection or submission as proof.
 - **Editor & GC Stability Landed**:
   - Silenced fatal `LogGarbage` warnings by properly implementing `Super::AddReferencedObjects` in `UFlightVerseSubsystem`.
   - Resolved `NumEvents` bound parameter ensures on startup for `FFlightSwarmForceCS` and `FFlightSwarmPredictiveCS`.
@@ -87,19 +125,14 @@
   - schema binding now feeds explicit backend capability evaluation for `NativeScalar`, `NativeSimd`, `VerseVm`, and future `GpuKernel` paths.
   - compile artifact reports now include `selectedBackend` plus per-backend decision/reason entries.
   - `CompileVex(...)` now records backend legality and per-symbol backend diagnostics after schema binding.
-  - this slice is intentionally reporting-first; the runtime dispatch path has not been fully re-gated yet.
-- **Backend Dispatch / Policy Next TODO**:
-  - adopt compile-policy context at real startup/orchestration call-sites so cohort/profile selectors influence compile truth outside explicit/manual compile calls.
-  - keep tightening GPU runtime commitment so selected `GpuKernel` can move from reporting/pending into a real terminal-state commit contract.
+  - runtime dispatch is now re-gated across struct, bulk, direct, and terminal GPU commit paths; remaining work is broader GPU/resource generalization rather than selected-vs-committed truth.
 
 ## Risks / Watch Items
-- **GPU Commit Gap**: selected `GpuKernel` can now be reported explicitly, but runtime still lacks a terminal-state GPU commit path that upgrades committed backend from `Unknown` to a proven GPU execution result.
 - **Binding Policy Next Gap**: anchor-aware legality now exists, but startup-profile-aware legality and richer "why this binding was chosen" reporting are still TODO.
 - **Binding Provenance Depth Gap**: binding `Report` is now structured enough for source/rule/fallback, but it still lacks full ranking evidence, startup-profile policy inputs, and backend-availability justification.
-- **Compile Policy Call-Site Gap**: `CompileVex(...)` now consumes policy and reports it, but most production compile callers still use default behavior-id-only context instead of passing richer cohort/profile selectors.
 - **GPU Resource Generalization Gap**: the new runtime GPU contract seam is still buffer-first and `FDroidState`-first; images, transient attachments, and additional reflected resource types are still TODO.
 - **Navigation Architecture Gap**: the current nav/probe/mesh direction still needs an explicit design pass to decide whether it should remain incremental or be reimplemented around clearer orchestration/spatial contracts.
-- **Startup Test Depth**: The new startup sequencing automation proves the light callable/report surfaces, but it does not yet assert full `StartPlay()` behavior against a dedicated world/profile fixture.
+- **Startup Test Depth**: `DefaultSandbox` startup now has a dedicated world/profile fixture, but additional startup profiles and broader map-backed startup environments are still TODO.
 - **Reflection Performance**: Ensuring generalized symbol lookups via C++ trait reflection do not incur unacceptable overhead compared to the hardcoded `FDroidState` accessors.
 - **Reflection Role Drift**: Preventing `Identity`, `Contract`, `Product`, and `Report` concerns from collapsing back into one type as dual-reflected systems spread.
 - **VVM Bytecode Fidelity**: Ensuring our IR Jumps map correctly to VVM's stack-based branching.

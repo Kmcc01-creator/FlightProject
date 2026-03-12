@@ -278,6 +278,55 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Flight|Scripting|Vex", meta = (WorldContext = "WorldContextObject"))
     static bool CompileVex(const UObject* WorldContextObject, int32 BehaviorID, const FString& VexSource, FString& OutErrors);
 
+    /**
+     * Compiles VEX source code using authored compile-policy selection scoped by cohort/profile context.
+     * Uses the same policy resolution path as runtime callers that consult the data subsystem.
+     */
+    UFUNCTION(BlueprintCallable, Category = "Flight|Scripting|Vex", meta = (WorldContext = "WorldContextObject"))
+    static bool CompileVexWithPolicyContext(
+        const UObject* WorldContextObject,
+        int32 BehaviorID,
+        const FString& VexSource,
+        FName CohortName,
+        FName ProfileName,
+        FString& OutErrors);
+
+    /** C++ helper for policy-aware scripting compilation against a reflected struct/schema target. */
+    static bool CompileVexWithPolicyContext(
+        const UObject* WorldContextObject,
+        int32 BehaviorID,
+        const FString& VexSource,
+        UScriptStruct* TargetStruct,
+        FName CohortName,
+        FName ProfileName,
+        FString& OutErrors);
+
+    /** C++ helper for explicit/manual policy injection through the scripting compile surface. */
+    static bool CompileVexWithExplicitPolicy(
+        const UObject* WorldContextObject,
+        int32 BehaviorID,
+        const FString& VexSource,
+        const FFlightBehaviorCompilePolicyRow& PolicyRow,
+        FString& OutErrors);
+
+    /** C++ helper for explicit/manual policy injection against a reflected struct/schema target. */
+    static bool CompileVexWithExplicitPolicy(
+        const UObject* WorldContextObject,
+        int32 BehaviorID,
+        const FString& VexSource,
+        UScriptStruct* TargetStruct,
+        const FFlightBehaviorCompilePolicyRow& PolicyRow,
+        FString& OutErrors);
+
+    /** C++ helper for explicit/manual policy injection against an arbitrary schema type key. */
+    static bool CompileVexWithExplicitPolicy(
+        const UObject* WorldContextObject,
+        int32 BehaviorID,
+        const FString& VexSource,
+        const void* TypeKey,
+        const FFlightBehaviorCompilePolicyRow& PolicyRow,
+        FString& OutErrors);
+
     /** Returns all registered behavior IDs. */
     UFUNCTION(BlueprintPure, Category = "Flight|Scripting|Vex", meta = (WorldContext = "WorldContextObject"))
     static TArray<int32> GetRegisteredBehaviorIDs(const UObject* WorldContextObject);

@@ -3,16 +3,15 @@
 #include "FlightGameState.h"
 #include "FlightHUD.h"
 #include "FlightPlayerController.h"
-#include "FlightStartupProfile.h"
 #include "FlightVehiclePawn.h"
 #include "FlightWorldBootstrapSubsystem.h"
 #include "FlightScriptingLibrary.h"
+#include "Orchestration/FlightStartupCoordinatorSubsystem.h"
 #include "Modeling/FlightMeshIRLibrary.h"
 #include "Modeling/FlightMeshIR.h"
 
 #include "Engine/Engine.h"
 #include "Engine/World.h"
-#include "GameFramework/WorldSettings.h"
 #include "UDynamicMesh.h"
 #include "Components/DynamicMeshComponent.h"
 #include "GameFramework/PlayerController.h"
@@ -21,96 +20,8 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogFlightGameMode, Log, All);
 
-namespace
-{
-
-bool ShouldUseLegacyGauntletPath(const UWorld* World)
-{
-    if (!World)
-    {
-        return false;
-    }
-
-    const FString MapName = World->GetMapName();
-    if (MapName.Contains(TEXT("PersistentFlightTest")))
-    {
-        return true;
-    }
-
-    if (const AWorldSettings* WorldSettings = World->GetWorldSettings())
-    {
-        return WorldSettings->Tags.Contains(TEXT("GauntletTest"));
-    }
-
-    return false;
-}
-
-} // namespace
-
 AFlightGameMode::AFlightGameMode()
 {
-}
-
-int32 AFlightGameMode::ResolveGauntletGpuSwarmEntityCount() const
-{
-    if (!StartupProfileAsset.IsNull())
-    {
-        if (const UFlightStartupProfile* StartupProfileObject = StartupProfileAsset.LoadSynchronous())
-        {
-            return FMath::Max(1, StartupProfileObject->GauntletGpuSwarmEntityCount);
-        }
-    }
-
-    return FMath::Max(1, GauntletGpuSwarmEntityCount);
-}
-
-const TCHAR* AFlightGameMode::StartupProfileToString(const EFlightStartupProfile Profile)
-{
-    switch (Profile)
-    {
-    case EFlightStartupProfile::DefaultSandbox:
-        return TEXT("DefaultSandbox");
-    case EFlightStartupProfile::GauntletGpuSwarm:
-        return TEXT("GauntletGpuSwarm");
-    case EFlightStartupProfile::LegacyAuto:
-        return TEXT("LegacyAuto");
-    default:
-        return TEXT("Unknown");
-    }
-}
-
-EFlightStartupProfile AFlightGameMode::ResolveStartupProfile(const UWorld* World) const
-{
-    if (!StartupProfileAsset.IsNull())
-    {
-        if (const UFlightStartupProfile* StartupProfileObject = StartupProfileAsset.LoadSynchronous())
-        {
-            return StartupProfileObject->StartupProfile;
-        }
-
-        UE_LOG(
-            LogFlightGameMode,
-            Warning,
-            TEXT("FlightGameMode: Failed to load StartupProfileAsset '%s'; falling back to config."),
-            *StartupProfileAsset.ToSoftObjectPath().ToString());
-    }
-
-    if (StartupProfile != EFlightStartupProfile::LegacyAuto)
-    {
-        return StartupProfile;
-    }
-
-    const EFlightStartupProfile ResolvedProfile = ShouldUseLegacyGauntletPath(World)
-        ? EFlightStartupProfile::GauntletGpuSwarm
-        : EFlightStartupProfile::DefaultSandbox;
-
-    UE_LOG(
-        LogFlightGameMode,
-        Warning,
-        TEXT("FlightGameMode: StartupProfile is LegacyAuto; resolved '%s' from legacy map/tag inference. Prefer setting StartupProfile explicitly."),
-        StartupProfileToString(ResolvedProfile));
-
-    return ResolvedProfile;
 }
 
 void AFlightGameMode::StartPlay()
@@ -118,63 +29,72 @@ void AFlightGameMode::StartPlay()
     Super::StartPlay();
     UE_LOG(LogFlightGameMode, Log, TEXT("=== FlightGameMode::StartPlay ==="));
 
+    RunStartupSequence();
+
+    // Summary
+    UE_LOG(LogFlightGameMode, Log, TEXT("=== FlightGameMode initialization complete ==="));
+}
+
+void AFlightGameMode::RunStartupSequence()
+{
+    UE_LOG(LogFlightGameMode, Log, TEXT("=== FlightGameMode::RunStartupSequence ==="));
+
     UWorld* World = GetWorld();
     if (!World)
     {
-        UE_LOG(LogFlightGameMode, Error, TEXT("StartPlay: No world available"));
+        UE_LOG(LogFlightGameMode, Error, TEXT("RunStartupSequence: No world available"));
         return;
     }
 
-    const EFlightStartupProfile ActiveStartupProfile = ResolveStartupProfile(World);
-    const int32 ActiveGauntletGpuSwarmEntityCount = ResolveGauntletGpuSwarmEntityCount();
+    UFlightStartupCoordinatorSubsystem* StartupCoordinator = World->GetSubsystem<UFlightStartupCoordinatorSubsystem>();
+    if (!StartupCoordinator)
+    {
+        UE_LOG(LogFlightGameMode, Error, TEXT("RunStartupSequence: FlightStartupCoordinatorSubsystem not available"));
+        return;
+    }
+
+    Flight::Startup::FFlightStartupRequest StartupRequest;
+    StartupCoordinator->BuildStartupRequest(*this, StartupRequest);
+
     UE_LOG(
         LogFlightGameMode,
         Log,
-        TEXT("FlightGameMode: StartupProfile=%s for map '%s' (Asset=%s)"),
-        StartupProfileToString(ActiveStartupProfile),
+        TEXT("FlightGameMode: StartupProfile=%s for map '%s' (Asset=%s, Source=%s)"),
+        *StartupRequest.ActiveProfileName,
         *World->GetMapName(),
-        StartupProfileAsset.IsNull() ? TEXT("None") : *StartupProfileAsset.ToSoftObjectPath().ToString());
+        StartupRequest.bProfileAssetConfigured ? *StartupRequest.ProfileAssetPath : TEXT("None"),
+        *StartupRequest.ResolutionSource);
 
-    if (ActiveStartupProfile == EFlightStartupProfile::GauntletGpuSwarm)
+    if (StartupRequest.ActiveProfile == EFlightStartupProfile::GauntletGpuSwarm)
     {
         UE_LOG(
             LogFlightGameMode,
             Log,
-            TEXT("FlightGameMode: Initializing Gauntlet GPU swarm path with %d entities."),
-            ActiveGauntletGpuSwarmEntityCount);
-        
-        // Disable default pawn and HUD spawning for a clean slate
+            TEXT("FlightGameMode: Delegating Gauntlet GPU swarm path with %d entities to startup coordinator."),
+            StartupRequest.GauntletGpuSwarmEntityCount);
+
         DefaultPawnClass = nullptr;
         HUDClass = nullptr;
-
-        // Initialize via scripting library for unified execution path
-        UFlightScriptingLibrary::InitializeGpuSwarm(this, ActiveGauntletGpuSwarmEntityCount);
     }
-    else
+
+    const bool bStartupSucceeded = StartupCoordinator->RunStartup(StartupRequest);
+    const Flight::Startup::FFlightStartupResult& StartupResult = StartupCoordinator->GetLastResult();
+    UE_LOG(
+        LogFlightGameMode,
+        Log,
+        TEXT("FlightGameMode: Startup coordinator completed=%s succeeded=%s summary=%s"),
+        StartupResult.bCompleted ? TEXT("true") : TEXT("false"),
+        bStartupSucceeded ? TEXT("true") : TEXT("false"),
+        *StartupResult.Summary);
+
+    if (GEngine && bStartupSucceeded && StartupRequest.ActiveProfile == EFlightStartupProfile::DefaultSandbox)
     {
-        UE_LOG(LogFlightGameMode, Log, TEXT("Running world bootstrap..."));
-        UFlightScriptingLibrary::RunBootstrap(this);
-        UE_LOG(LogFlightGameMode, Log, TEXT("World bootstrap complete"));
-
-        UE_LOG(LogFlightGameMode, Log, TEXT("Rebuilding orchestration before initial swarm spawn..."));
-        UFlightScriptingLibrary::RebuildOrchestration(this);
-
-        UE_LOG(LogFlightGameMode, Log, TEXT("Spawning initial swarm..."));
-        int32 SpawnedCount = UFlightScriptingLibrary::SpawnInitialSwarm(this);
-        UE_LOG(LogFlightGameMode, Log, TEXT("Spawned %d swarm entities"), SpawnedCount);
-
-        UE_LOG(LogFlightGameMode, Log, TEXT("Refreshing orchestration after initial swarm spawn..."));
-        UFlightScriptingLibrary::RebuildOrchestration(this);
-
-        if (GEngine)
-        {
-            GEngine->AddOnScreenDebugMessage(-1, 5.f, FColor::Green,
-                FString::Printf(TEXT("Flight initialized: %d swarm entities"), SpawnedCount));
-        }
+        GEngine->AddOnScreenDebugMessage(
+            -1,
+            5.f,
+            FColor::Green,
+            FString::Printf(TEXT("Flight initialized: %d swarm entities"), StartupResult.SpawnedSwarmEntities));
     }
-
-    // Summary
-    UE_LOG(LogFlightGameMode, Log, TEXT("=== FlightGameMode initialization complete ==="));
 }
 
 void AFlightGameMode::ResetSwarm()

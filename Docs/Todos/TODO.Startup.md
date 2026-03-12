@@ -14,27 +14,7 @@ Move remaining debug/demo helpers out of `AFlightGameMode` so the class stays fo
 
 Relevant surfaces: [GameModeBootstrapBoundary.md](../Architecture/GameModeBootstrapBoundary.md), [FlightGameMode.h](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Public/FlightGameMode.h), [FlightGameMode.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/FlightGameMode.cpp).
 
-### 2. Startup Coverage Depth
-
-Priority: High  
-Status: Active  
-Owner/Surface: startup sequencing automation
-
-Add dedicated startup-profile/world fixtures that exercise real `StartPlay()` sequencing and assert post-spawn orchestration/cohort outcomes, not only lightweight callable/report surfaces.
-
-Relevant surfaces: [CurrentFocus.md](../Workflow/CurrentFocus.md), [FlightStartupSequencingAutomationTests.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Tests/FlightStartupSequencingAutomationTests.cpp).
-
-### 3. Startup Profile/Report Integration
-
-Priority: Medium  
-Status: Planned  
-Owner/Surface: startup observability and orchestration-adjacent reporting
-
-Expose the active startup profile more directly in orchestration or adjacent startup-facing reports so profile-driven behavior is observable without reading `GameMode` logs alone.
-
-Relevant surfaces: [FlightGameMode.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/FlightGameMode.cpp), [FlightOrchestrationSubsystem.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Orchestration/FlightOrchestrationSubsystem.cpp), [CurrentBuild.md](../Workflow/CurrentBuild.md).
-
-### 4. Bootstrap/Orchestration Contract Hardening
+### 2. Bootstrap/Orchestration Contract Hardening
 
 Priority: High  
 Status: Active  
@@ -48,8 +28,12 @@ Relevant surfaces: [WorldExecutionModel.md](../Architecture/WorldExecutionModel.
 
 - `GameMode` remains a thin policy surface
 - startup-profile-driven behavior is observable and testable
-- startup sequencing has dedicated integration coverage beyond the current lightweight callable/report slice
+- startup sequencing has dedicated integration coverage beyond the lightweight callable/report slice
 
 ## Completed / Archived
 
+- Completed (2026-03-12): startup policy resolution and startup report assembly now live in [FlightStartupCoordinatorSubsystem.h](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Public/Orchestration/FlightStartupCoordinatorSubsystem.h) and [FlightStartupCoordinatorSubsystem.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Orchestration/FlightStartupCoordinatorSubsystem.cpp), leaving [FlightGameMode.h](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Public/FlightGameMode.h) and [FlightGameMode.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/FlightGameMode.cpp) as a thinner gameplay-framework config/trigger surface instead of the owner of startup request building or startup report shaping.
+- Completed (2026-03-12): the `DefaultSandbox` and `GauntletGpuSwarm` startup transactions now run through [FlightStartupCoordinatorSubsystem.h](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Public/Orchestration/FlightStartupCoordinatorSubsystem.h) and [FlightStartupCoordinatorSubsystem.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Orchestration/FlightStartupCoordinatorSubsystem.cpp), so `AFlightGameMode` now delegates the cross-system execution sequence instead of owning `bootstrap -> orchestration -> spawn -> reconcile` directly.
+- Completed (2026-03-12): startup profile selection is now surfaced directly in orchestration reports through [FlightStartupCoordinatorSubsystem.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Orchestration/FlightStartupCoordinatorSubsystem.cpp), [FlightOrchestrationReport.h](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Public/Orchestration/FlightOrchestrationReport.h), and [FlightOrchestrationSubsystem.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Orchestration/FlightOrchestrationSubsystem.cpp), including active profile, resolution source, asset path/configuration, and GameMode presence in the orchestration JSON surface.
+- Completed (2026-03-12): startup sequencing automation now includes a dedicated `DefaultSandboxStartupSequenceWorldFixture` in [FlightStartupSequencingAutomationTests.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Tests/FlightStartupSequencingAutomationTests.cpp) that drives the real `AFlightGameMode` startup sequence against a GameInstance-backed automation world and asserts post-spawn swarm/orchestration/cohort outcomes.
 - Completed (2026-03-12): orchestration rebuild sequencing regression no longer reproduces after preserving execution-plan generation/timestamp through visibility reset in [FlightOrchestrationSubsystem.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Orchestration/FlightOrchestrationSubsystem.cpp). Verified by `FlightProject.Integration.Startup.Sequencing.OrchestrationRebuildAdvancesPlan` in [FlightStartupSequencingAutomationTests.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Tests/FlightStartupSequencingAutomationTests.cpp).

@@ -40,19 +40,59 @@ This section captures the most recent observed build/test outcomes and commands 
   - native fallback and generated-only acceptance now respect policy,
   - policy-required symbols are validated during compile,
   - policy-required contracts now flow into orchestration legality surfaces.
-- GPU-preferred policy is now explicit about commitment truth:
+- the scripting compile surface now exposes policy-aware entrypoints too:
+  - cohort/profile-aware selection through `UFlightScriptingLibrary::CompileVexWithPolicyContext(...)`,
+  - explicit/manual policy injection through `CompileVexWithExplicitPolicy(...)`,
+  - schema-bound C++ helpers for reflected-struct and raw type-key callers.
+- GPU-preferred policy is now explicit about terminal commitment truth:
   - selected backend can remain `GpuKernel` when policy prefers that path,
-  - committed backend stays `Unknown` until a real committed GPU runtime path exists,
-  - orchestration no longer treats `resolvedDomain == Gpu` as executable by itself.
+  - committed backend stays `Unknown` until direct GPU dispatch reaches a terminal bridge completion,
+  - successful terminal completion now upgrades behavior, compile-artifact, and orchestration committed-backend truth to `GpuKernel`,
+  - orchestration no longer treats `resolvedDomain == Gpu` or submission acceptance alone as executable proof.
 - Verified on March 12, 2026 with:
-  - `./Scripts/run_tests_headless.sh --no-build --filter="FlightProject.Functional.Verse.CompilePolicyIntegration+FlightProject.Vex.Generalization.GpuPolicyCommitment+FlightProject.Functional.Verse.BackendCommitTruth+FlightProject.Functional.Verse.RuntimeDispatchGating+FlightProject.Vex.Generalization.ClassifyGpuHost+FlightProject.Integration.Verse.CompileContract" --profile=focused --summary`
+  - `./Scripts/run_tests_headless.sh --filter="FlightProject.Functional.Verse.CompilePolicyIntegration+FlightProject.Functional.Verse.GpuTerminalCommit+FlightProject.Functional.Verse.RuntimeDispatchGating+FlightProject.Vex.Generalization.GpuPolicyCommitment+FlightProject.Gpu.ScriptBridge.DeferredCompletion" --profile=focused --summary`
   - `./Scripts/run_tests_phased.sh --no-build --phase3-only`
   - `./Scripts/run_tests_phased.sh --no-build --phase4-only`
 - Current result:
-  - explicit policy-selection coverage passes,
-  - GPU-policy generated-only commitment truth passes,
+  - scripting-level policy-selection coverage passes,
+  - GPU-policy generated-only compile truth still passes,
+  - terminal GPU commit coverage passes,
   - Phase 3 passes,
   - Phase 4 passes.
+
+### Latest Startup Integration Snapshot (2026-03-12)
+- `FlightProject.Integration.Startup.Sequencing` now includes a real `DefaultSandbox` world fixture instead of only lightweight callable/report checks.
+- Landed test/runtime changes:
+  - [FlightStartupSequencingAutomationTests.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Tests/FlightStartupSequencingAutomationTests.cpp) now provisions a GameInstance-backed automation world and drives `AFlightGameMode::RunStartupSequence()` through a real `DefaultSandbox` fixture.
+  - [FlightTestUtils.h](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Tests/FlightTestUtils.h) now provides the shared scoped automation-GameInstance helper used by that fixture.
+  - [FlightScriptingLibrary.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/FlightScriptingLibrary.cpp) now constructs the swarm-count query with an initialized `FMassEntityQuery`, fixing the Mass assertion that the deeper startup fixture exposed.
+- Verified on March 12, 2026 with:
+  - `./Scripts/run_tests_headless.sh --filter="FlightProject.Integration.Startup.Sequencing.DefaultSandboxStartupSequenceWorldFixture" --profile=focused --summary`
+  - `./Scripts/run_tests_headless.sh --no-build --filter="FlightProject.Integration.Startup.Sequencing" --profile=focused --summary`
+- Current result:
+  - the dedicated `DefaultSandbox` startup world fixture passes,
+  - the full startup sequencing suite passes 4/4,
+  - startup coverage now asserts post-spawn swarm/orchestration/cohort state instead of only callable/report surfaces.
+
+### Latest Startup Report Snapshot (2026-03-12)
+- startup profile observability is now part of the orchestration report surface instead of living only in `AFlightGameMode` log output.
+- Landed report changes:
+  - [FlightOrchestrationReport.h](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Public/Orchestration/FlightOrchestrationReport.h) now carries structured startup metadata in `FFlightStartupProfileReport`;
+  - [FlightStartupCoordinatorSubsystem.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Orchestration/FlightStartupCoordinatorSubsystem.cpp) now owns both startup request construction and staged startup execution results;
+  - [FlightGameMode.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/FlightGameMode.cpp) now supplies startup config input and delegates to the coordinator instead of shaping startup report state directly;
+  - [FlightOrchestrationSubsystem.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Orchestration/FlightOrchestrationSubsystem.cpp) now injects both startup selection and staged execution metadata into the cached orchestration report and exported JSON under `startup` through the coordinator-owned report path.
+- Automation coverage:
+  - [FlightStartupSequencingAutomationTests.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Tests/FlightStartupSequencingAutomationTests.cpp) now verifies the `startup` object exists in the general startup-report surface and that the `DefaultSandbox` fixture reports the expected active profile, resolution behavior, staged startup status, and committed swarm count.
+- Verified on March 12, 2026 with:
+  - `./Scripts/run_tests_headless.sh --filter="FlightProject.Integration.Startup.Sequencing" --profile=focused --summary`
+  - `./Scripts/run_tests_phased.sh --phase3-only`
+- Current result:
+  - startup report JSON now exposes startup policy directly,
+  - startup execution now runs through a dedicated world-scoped coordinator instead of a hardcoded `GameMode` sequence,
+  - startup request/report ownership is now centralized in that coordinator instead of split between `GameMode` and orchestration report assembly,
+  - runtime worlds prefer the auth `GameMode` for this metadata,
+  - automation worlds can still surface the same startup data through the first available `AFlightGameMode` actor,
+  - the Phase 3 integration lane stays green after the coordinator extraction.
 
 ### Latest Headless Automation Snapshot (2026-03-12)
 - The Phase 2 order issue is now resolved and the headless phased lane is green again.

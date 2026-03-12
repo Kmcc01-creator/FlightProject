@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Engine/Engine.h"
+#include "Engine/GameInstance.h"
 #include "MassExecutionContext.h"
 #include "MassEntityQuery.h"
 #include "MassEntitySubsystem.h"
@@ -18,6 +19,54 @@
 
 namespace Flight::Test
 {
+	class FScopedAutomationGameInstance
+	{
+	public:
+		explicit FScopedAutomationGameInstance(UWorld* InWorld)
+			: World(InWorld)
+		{
+			if (!World || World->GetGameInstance() || !GEngine)
+			{
+				return;
+			}
+
+			CreatedGameInstance = NewObject<UGameInstance>(GEngine, UGameInstance::StaticClass(), NAME_None, RF_Transient);
+			if (!CreatedGameInstance)
+			{
+				return;
+			}
+
+			CreatedGameInstance->AddToRoot();
+			CreatedGameInstance->Init();
+			World->SetGameInstance(CreatedGameInstance);
+		}
+
+		~FScopedAutomationGameInstance()
+		{
+			if (!World || !CreatedGameInstance)
+			{
+				return;
+			}
+
+			if (World->GetGameInstance() == CreatedGameInstance)
+			{
+				World->SetGameInstance(nullptr);
+			}
+
+			CreatedGameInstance->Shutdown();
+			CreatedGameInstance->RemoveFromRoot();
+		}
+
+		bool IsValid() const
+		{
+			return CreatedGameInstance != nullptr || (World && World->GetGameInstance() != nullptr);
+		}
+
+	private:
+		TObjectPtr<UWorld> World = nullptr;
+		TObjectPtr<UGameInstance> CreatedGameInstance = nullptr;
+	};
+
 	inline UWorld* FindAutomationWorld()
 	{
 		if (!GEngine)
@@ -82,6 +131,29 @@ namespace Flight::Test
 		if (FNameProperty* Property = FindFProperty<FNameProperty>(Object->GetClass(), PropertyName))
 		{
 			Property->SetPropertyValue_InContainer(Object, Value);
+			return true;
+		}
+
+		return false;
+	}
+
+	inline bool SetObjectEnumProperty(UObject* Object, const TCHAR* PropertyName, const int64 Value)
+	{
+		if (!Object)
+		{
+			return false;
+		}
+
+		if (FEnumProperty* Property = FindFProperty<FEnumProperty>(Object->GetClass(), PropertyName))
+		{
+			void* ValuePtr = Property->ContainerPtrToValuePtr<void>(Object);
+			Property->GetUnderlyingProperty()->SetIntPropertyValue(ValuePtr, Value);
+			return true;
+		}
+
+		if (FByteProperty* Property = FindFProperty<FByteProperty>(Object->GetClass(), PropertyName))
+		{
+			Property->SetPropertyValue_InContainer(Object, static_cast<uint8>(Value));
 			return true;
 		}
 

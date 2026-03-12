@@ -18,6 +18,7 @@
 #include "Orchestration/FlightParticipantAdapter.h"
 #include "Orchestration/FlightOrchestrationReport.h"
 #include "Orchestration/FlightParticipantTypes.h"
+#include "Orchestration/FlightStartupCoordinatorSubsystem.h"
 #include "Rendering/FlightSimpleSCSLShaderPipelineSubsystem.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
@@ -1354,6 +1355,37 @@ FString UFlightOrchestrationSubsystem::BuildReportJson() const
 	Root->SetStringField(TEXT("worldName"), CachedReport.WorldName);
 	Root->SetStringField(TEXT("builtAtUtc"), CachedReport.BuiltAtUtc.ToIso8601());
 
+	TSharedRef<FJsonObject> StartupObject = MakeShared<FJsonObject>();
+	StartupObject->SetBoolField(TEXT("gameModePresent"), CachedReport.Startup.bGameModePresent);
+	StartupObject->SetStringField(TEXT("gameModeClass"), CachedReport.Startup.GameModeClass);
+	StartupObject->SetStringField(TEXT("activeProfile"), CachedReport.Startup.ActiveProfile);
+	StartupObject->SetStringField(TEXT("resolutionSource"), CachedReport.Startup.ResolutionSource);
+	StartupObject->SetStringField(TEXT("profileAssetPath"), CachedReport.Startup.ProfileAssetPath);
+	StartupObject->SetBoolField(TEXT("profileAssetConfigured"), CachedReport.Startup.bProfileAssetConfigured);
+	StartupObject->SetBoolField(TEXT("profileAssetLoaded"), CachedReport.Startup.bProfileAssetLoaded);
+	StartupObject->SetBoolField(TEXT("resolvedFromLegacyAuto"), CachedReport.Startup.bResolvedFromLegacyAuto);
+	StartupObject->SetNumberField(TEXT("gauntletGpuSwarmEntityCount"), CachedReport.Startup.GauntletGpuSwarmEntityCount);
+	StartupObject->SetStringField(TEXT("detail"), CachedReport.Startup.Detail);
+	StartupObject->SetBoolField(TEXT("startupRunCompleted"), CachedReport.Startup.bStartupRunCompleted);
+	StartupObject->SetBoolField(TEXT("startupRunSucceeded"), CachedReport.Startup.bStartupRunSucceeded);
+	StartupObject->SetStringField(TEXT("startupStartedAtUtc"), CachedReport.Startup.StartupStartedAtUtc.ToIso8601());
+	StartupObject->SetStringField(TEXT("startupCompletedAtUtc"), CachedReport.Startup.StartupCompletedAtUtc.ToIso8601());
+	StartupObject->SetStringField(TEXT("failureStage"), CachedReport.Startup.FailureStage);
+	StartupObject->SetNumberField(TEXT("spawnedSwarmEntities"), CachedReport.Startup.SpawnedSwarmEntities);
+	StartupObject->SetStringField(TEXT("summary"), CachedReport.Startup.Summary);
+	TArray<TSharedPtr<FJsonValue>> StartupStageValues;
+	for (const Flight::Startup::FFlightStartupStageReport& Stage : CachedReport.Startup.Stages)
+	{
+		TSharedRef<FJsonObject> StageObject = MakeShared<FJsonObject>();
+		StageObject->SetStringField(TEXT("name"), Stage.StageName.ToString());
+		StageObject->SetBoolField(TEXT("succeeded"), Stage.bSucceeded);
+		StageObject->SetBoolField(TEXT("committed"), Stage.bCommitted);
+		StageObject->SetStringField(TEXT("detail"), Stage.Detail);
+		StartupStageValues.Add(MakeShared<FJsonValueObject>(StageObject));
+	}
+	StartupObject->SetArrayField(TEXT("stages"), StartupStageValues);
+	Root->SetObjectField(TEXT("startup"), StartupObject);
+
 	TArray<TSharedPtr<FJsonValue>> ServiceValues;
 	for (const Flight::Orchestration::FFlightServiceStatus& Service : CachedReport.Services)
 	{
@@ -1601,6 +1633,7 @@ void UFlightOrchestrationSubsystem::RefreshServiceStatuses()
 	}
 
 	AddServiceStatus(TEXT("UFlightWorldBootstrapSubsystem"), World->GetSubsystem<UFlightWorldBootstrapSubsystem>() != nullptr);
+	AddServiceStatus(TEXT("UFlightStartupCoordinatorSubsystem"), World->GetSubsystem<UFlightStartupCoordinatorSubsystem>() != nullptr);
 	AddServiceStatus(TEXT("UFlightSwarmSubsystem"), World->GetSubsystem<UFlightSwarmSubsystem>() != nullptr);
 	AddServiceStatus(TEXT("UFlightSpatialSubsystem"), World->GetSubsystem<UFlightSpatialSubsystem>() != nullptr);
 	AddServiceStatus(TEXT("UFlightVerseSubsystem"), World->GetSubsystem<UFlightVerseSubsystem>() != nullptr);
@@ -2034,6 +2067,15 @@ void UFlightOrchestrationSubsystem::RebuildCachedReport()
 	CachedReport = Flight::Orchestration::FFlightOrchestrationReport();
 	CachedReport.WorldName = GetWorld() ? GetWorld()->GetName() : FString();
 	CachedReport.BuiltAtUtc = FDateTime::UtcNow();
+	if (const UFlightStartupCoordinatorSubsystem* StartupCoordinator = GetWorld() ? GetWorld()->GetSubsystem<UFlightStartupCoordinatorSubsystem>() : nullptr)
+	{
+		StartupCoordinator->BuildStartupReport(CachedReport.Startup);
+	}
+	else
+	{
+		CachedReport.Startup.ResolutionSource = TEXT("Unavailable");
+		CachedReport.Startup.Detail = TEXT("FlightStartupCoordinatorSubsystem is not present in the current world.");
+	}
 	CachedReport.Services = Services;
 	CachedReport.MissingContracts = MissingContracts;
 	CachedReport.Diagnostics = Diagnostics;

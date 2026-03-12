@@ -1070,6 +1070,55 @@ bool UFlightVerseSubsystem::ExecuteOnGpuSchemaHost(const FVerseBehavior& Behavio
 
 	FString SubmissionDetail;
 	const FFlightGpuSubmissionHandle Handle = GpuBridge->Submit(Invocation, SubmissionDetail);
+	if (!Handle.IsValid())
+	{
+		UpdateBehaviorCommitState(
+			Behavior.CompileArtifactReport.BehaviorID,
+			TEXT("Unknown"),
+			FString::Printf(TEXT("GPU submission failed before a runtime commit could be proven: %s"), *SubmissionDetail));
+		return false;
+	}
+
+	FString AwaitReason;
+	const TWeakObjectPtr<UFlightVerseSubsystem> WeakSubsystem(this);
+	const bool bAwaitRegistered = GpuBridge->Await(
+		Handle,
+		[WeakSubsystem, BehaviorID = Behavior.CompileArtifactReport.BehaviorID, SubmissionHandle = Handle.Value](
+			const EFlightGpuSubmissionStatus Status,
+			const FString& Detail)
+		{
+			if (UFlightVerseSubsystem* ResolvedSubsystem = WeakSubsystem.Get())
+			{
+				ResolvedSubsystem->ResolveGpuExecutionCommit(
+					BehaviorID,
+					SubmissionHandle,
+					Status == EFlightGpuSubmissionStatus::Completed,
+					Detail);
+			}
+		},
+		AwaitReason);
+	if (!bAwaitRegistered)
+	{
+		UpdateBehaviorCommitState(
+			Behavior.CompileArtifactReport.BehaviorID,
+			TEXT("Unknown"),
+			FString::Printf(TEXT("GPU submission was accepted, but no terminal await could be registered: %s"), *AwaitReason));
+		return false;
+	}
+
+	if (FVerseBehavior* MutableBehavior = Behaviors.Find(Behavior.CompileArtifactReport.BehaviorID))
+	{
+		MutableBehavior->LastGpuSubmissionHandle = Handle.Value;
+		MutableBehavior->LastGpuSubmissionDetail = SubmissionDetail;
+		MutableBehavior->bGpuExecutionPending = true;
+	}
+	UpdateBehaviorCommitState(
+		Behavior.CompileArtifactReport.BehaviorID,
+		TEXT("Unknown"),
+		FString::Printf(
+			TEXT("GPU submission %llu accepted; waiting for a terminal bridge result before commit. %s"),
+			static_cast<unsigned long long>(Handle.Value),
+			*SubmissionDetail));
 	UE_LOG(
 		LogFlightVerseSubsystem,
 		Verbose,
@@ -1077,7 +1126,7 @@ bool UFlightVerseSubsystem::ExecuteOnGpuSchemaHost(const FVerseBehavior& Behavio
 		Behavior.CompileArtifactReport.BehaviorID,
 		static_cast<unsigned long long>(Handle.Value),
 		*SubmissionDetail);
-	return false;
+	return true;
 }
 
 bool UFlightVerseSubsystem::CompileVex(
@@ -1138,6 +1187,9 @@ bool UFlightVerseSubsystem::CompileVex(
 	Behavior.SelectedBackend.Reset();
 	Behavior.CommittedBackend.Reset();
 	Behavior.CommitDetail.Reset();
+	Behavior.LastGpuSubmissionHandle = 0;
+	Behavior.LastGpuSubmissionDetail.Reset();
+	Behavior.bGpuExecutionPending = false;
 	Behavior.SelectedPolicyRowName = NAME_None;
 	Behavior.PolicyPreferredDomain = EFlightBehaviorCompileDomainPreference::Unspecified;
 	Behavior.bPolicyAllowsNativeFallback = true;
@@ -2089,7 +2141,7 @@ void UFlightVerseSubsystem::ExecuteBehaviorDirect(
 	TArrayView<FFlightDroidStateFragment> DroidStates)
 {
 	const FVerseBehavior* Behavior = Behaviors.Find(BehaviorID);
-	if (!Behavior || !Behavior->bHasExecutableProcedure)
+	if (!Behavior)
 	{
 		return;
 	}
@@ -2178,6 +2230,12 @@ FString UFlightVerseSubsystem::DescribeDirectExecutionBackend(uint32 BehaviorID)
 	return Behavior ? DescribeRuntimeExecutionBackend(ResolveDirectExecutionBackendKind(*Behavior)) : FString(TEXT("Unknown"));
 }
 
+int64 UFlightVerseSubsystem::GetLastGpuSubmissionHandle(uint32 BehaviorID) const
+{
+	const FVerseBehavior* Behavior = Behaviors.Find(BehaviorID);
+	return Behavior ? Behavior->LastGpuSubmissionHandle : int64(0);
+}
+
 FString UFlightVerseSubsystem::DescribeResolvedStorageHost(uint32 BehaviorID, const void* TypeKey) const
 {
 	const FVerseBehavior* Behavior = Behaviors.Find(BehaviorID);
@@ -2201,6 +2259,64 @@ FString UFlightVerseSubsystem::DescribeResolvedStorageHost(uint32 BehaviorID, co
 	default:
 		return TEXT("None");
 	}
+}
+
+void UFlightVerseSubsystem::UpdateBehaviorCommitState(
+	const uint32 BehaviorID,
+	const FString& CommittedBackend,
+	const FString& CommitDetail)
+{
+	FVerseBehavior* Behavior = Behaviors.Find(BehaviorID);
+	if (!Behavior)
+	{
+		return;
+	}
+
+	Behavior->CommittedBackend = CommittedBackend;
+	Behavior->CommitDetail = CommitDetail;
+	if (Behavior->bHasCompileArtifactReport)
+	{
+		Behavior->CompileArtifactReport.CommittedBackend = CommittedBackend;
+		Behavior->CompileArtifactReport.CommitDetail = CommitDetail;
+	}
+
+	if (UWorld* World = GetWorld())
+	{
+		if (UFlightOrchestrationSubsystem* Orchestration = World->GetSubsystem<UFlightOrchestrationSubsystem>())
+		{
+			Orchestration->Rebuild();
+		}
+	}
+}
+
+void UFlightVerseSubsystem::ResolveGpuExecutionCommit(
+	const uint32 BehaviorID,
+	const int64 SubmissionHandle,
+	const bool bSuccess,
+	const FString& Detail)
+{
+	FVerseBehavior* Behavior = Behaviors.Find(BehaviorID);
+	if (!Behavior)
+	{
+		return;
+	}
+
+	Behavior->LastGpuSubmissionHandle = SubmissionHandle;
+	Behavior->LastGpuSubmissionDetail = Detail;
+	Behavior->bGpuExecutionPending = false;
+
+	UpdateBehaviorCommitState(
+		BehaviorID,
+		bSuccess ? TEXT("GpuKernel") : TEXT("Unknown"),
+		bSuccess
+			? FString::Printf(
+				TEXT("GPU submission %llu reached a terminal completed state and is now the committed runtime backend. %s"),
+				static_cast<unsigned long long>(SubmissionHandle),
+				*Detail)
+			: FString::Printf(
+				TEXT("GPU submission %llu failed before proving a committed runtime backend. %s"),
+				static_cast<unsigned long long>(SubmissionHandle),
+				*Detail));
 }
 
 bool UFlightVerseSubsystem::CanExecuteResolvedStorageHostDirect(const FResolvedStorageHost& Host) const
@@ -2462,17 +2578,23 @@ TOptional<Flight::Vex::EVexBackendKind> UFlightVerseSubsystem::ResolveDirectExec
 {
 	using namespace Flight::Vex;
 
+	const FResolvedStorageHost Host = ResolveStorageHost(Behavior, Behavior.BoundTypeKey);
+	const bool bCanUseGpu = Host.Kind == EStorageHostKind::GpuBuffer;
+	const TOptional<EVexBackendKind> SelectedBackend = ResolveSelectedBackendKind(Behavior);
 	if (!Behavior.bHasExecutableProcedure)
 	{
-		return {};
+		if (!(bCanUseGpu
+			&& SelectedBackend.IsSet()
+			&& SelectedBackend.GetValue() == EVexBackendKind::GpuKernel))
+		{
+			return {};
+		}
 	}
 
-	const FResolvedStorageHost Host = ResolveStorageHost(Behavior, Behavior.BoundTypeKey);
 	const bool bCanUseNativeScalar = Behavior.bUsesNativeFallback && Host.Kind == EStorageHostKind::MassFragments;
 	const bool bCanUseSimd = bCanUseNativeScalar && Behavior.Tier == EVexTier::Literal && Behavior.SimdPlan.IsValid();
-	const bool bCanUseGpu = Host.Kind == EStorageHostKind::GpuBuffer;
 
-	if (const TOptional<EVexBackendKind> SelectedBackend = ResolveSelectedBackendKind(Behavior))
+	if (SelectedBackend.IsSet())
 	{
 		switch (SelectedBackend.GetValue())
 		{

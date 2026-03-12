@@ -6,6 +6,7 @@
 #include "Verse/FlightGpuScriptBridge.h"
 #include "Vex/FlightVexBackendCapabilities.h"
 #include "Vex/FlightVexParser.h"
+#include "Vex/FlightVexSchemaOrchestrator.h"
 #include "Vex/FlightVexSymbolRegistry.h"
 #include "Verse/UFlightVerseSubsystem.h"
 #include "Schema/FlightRequirementRegistry.h"
@@ -35,6 +36,37 @@ namespace
 		}
 
 		return nullptr;
+	}
+
+	const void* GetVerseTestGpuTypeKey()
+	{
+		static uint8 TypeKeyMarker = 0;
+		return &TypeKeyMarker;
+	}
+
+	Flight::Vex::FVexTypeSchema BuildVerseTestGpuSchema()
+	{
+		using namespace Flight::Vex;
+
+		FVexTypeSchema Schema;
+		Schema.TypeId.RuntimeKey = GetVerseTestGpuTypeKey();
+		Schema.TypeId.StableName = TEXT("FVerseTestGpuCommitState");
+		Schema.TypeName = TEXT("FVerseTestGpuCommitState");
+		Schema.Size = sizeof(float);
+		Schema.Alignment = alignof(float);
+
+		FVexSymbolRecord Shield;
+		Shield.SymbolName = TEXT("@shield");
+		Shield.ValueType = EVexValueType::Float;
+		Shield.Residency = EFlightVexSymbolResidency::GpuOnly;
+		Shield.Storage.Kind = EVexStorageKind::GpuBufferElement;
+		Shield.Storage.BufferBinding = TEXT("ShieldBuffer");
+		Shield.Storage.ElementStride = sizeof(float);
+		Schema.SymbolRecords.Add(Shield.SymbolName, MoveTemp(Shield));
+
+		Schema.RebuildLegacyViews();
+		Schema.LayoutHash = Flight::Vex::FVexSchemaOrchestrator::ComputeSchemaLayoutHash(Schema);
+		return Schema;
 	}
 }
 
@@ -265,6 +297,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightBoundaryCompileArtifactReportTest, "Flig
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVerseBackendCommitTruthTest, "FlightProject.Functional.Verse.BackendCommitTruth", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVerseRuntimeDispatchGatingTest, "FlightProject.Functional.Verse.RuntimeDispatchGating", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVerseCompilePolicyIntegrationTest, "FlightProject.Functional.Verse.CompilePolicyIntegration", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVerseGpuTerminalCommitTest, "FlightProject.Functional.Verse.GpuTerminalCommit", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightGpuScriptBridgeDeferredCompletionTest, "FlightProject.Gpu.ScriptBridge.DeferredCompletion", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FFlightCompileArtifactReportTest::RunTest(const FString& Parameters)
@@ -514,7 +547,6 @@ bool FFlightVerseCompilePolicyIntegrationTest::RunTest(const FString& Parameters
 	}
 
 	Flight::Vex::TTypeVexRegistry<Flight::Swarm::FDroidState>::Register();
-	const void* TypeKey = Flight::Vex::TTypeVexRegistry<Flight::Swarm::FDroidState>::GetTypeKey();
 
 	FFlightBehaviorCompilePolicyRow PolicyRow;
 	PolicyRow.RowName = TEXT("Policy.NativeCpu");
@@ -522,16 +554,14 @@ bool FFlightVerseCompilePolicyIntegrationTest::RunTest(const FString& Parameters
 	PolicyRow.RequiredContracts = { TEXT("Nav.Route") };
 	PolicyRow.RequiredSymbols = { TEXT("@position") };
 
-	UFlightVerseSubsystem::FCompilePolicyContext CompilePolicyContext;
-	CompilePolicyContext.ExplicitPolicy = &PolicyRow;
-
 	FString CompileDiagnostics;
-	const bool bCompiled = VerseSubsystem->CompileVex(
+	const bool bCompiled = UFlightScriptingLibrary::CompileVexWithExplicitPolicy(
+		World,
 		9204,
 		TEXT("@cpu { @velocity = @position; }"),
-		CompileDiagnostics,
-		TypeKey,
-		CompilePolicyContext);
+		Flight::Vex::TTypeVexRegistry<Flight::Swarm::FDroidState>::GetTypeKey(),
+		PolicyRow,
+		CompileDiagnostics);
 	TestTrue(TEXT("Compile should succeed with an explicit native CPU policy"), bCompiled);
 
 	const UFlightVerseSubsystem::FVerseBehavior* Behavior = VerseSubsystem->Behaviors.Find(9204);
@@ -573,6 +603,127 @@ bool FFlightVerseCompilePolicyIntegrationTest::RunTest(const FString& Parameters
 			TestEqual(TEXT("Orchestration report should preserve the selected policy row"), BehaviorRecord->SelectedPolicyRow, PolicyRow.RowName.ToString());
 			TestEqual(TEXT("Orchestration report should preserve the policy-preferred domain"), BehaviorRecord->PolicyPreferredDomain, FString(TEXT("NativeCpu")));
 			TestTrue(TEXT("Orchestration report should preserve required contracts"), BehaviorRecord->RequiredContracts.Contains(TEXT("Nav.Route")));
+		}
+	}
+
+	return true;
+}
+
+bool FFlightVerseGpuTerminalCommitTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+
+	UWorld* World = FindAutomationWorld();
+	if (!World)
+	{
+		AddError(TEXT("No valid world context available for GPU terminal commit test"));
+		return false;
+	}
+
+	UFlightVerseSubsystem* VerseSubsystem = World->GetSubsystem<UFlightVerseSubsystem>();
+	if (!VerseSubsystem)
+	{
+		AddError(TEXT("FlightVerseSubsystem not found"));
+		return false;
+	}
+
+	UFlightGpuScriptBridgeSubsystem* ScriptBridge = World->GetSubsystem<UFlightGpuScriptBridgeSubsystem>();
+	if (!ScriptBridge)
+	{
+		AddError(TEXT("GPU script bridge subsystem not found"));
+		return false;
+	}
+
+	Flight::Vex::FVexSymbolRegistry::Get().RegisterSchema(BuildVerseTestGpuSchema());
+
+	FFlightBehaviorCompilePolicyRow PolicyRow;
+	PolicyRow.RowName = TEXT("Policy.GpuTerminalCommit");
+	PolicyRow.PreferredDomain = EFlightBehaviorCompileDomainPreference::Gpu;
+	PolicyRow.bAllowNativeFallback = 0;
+	PolicyRow.bAllowGeneratedOnly = 1;
+	PolicyRow.RequiredSymbols = { TEXT("@shield") };
+
+	FString CompileDiagnostics;
+	const uint32 BehaviorID = 9205;
+	UFlightVerseSubsystem::FCompilePolicyContext CompilePolicyContext;
+	CompilePolicyContext.ExplicitPolicy = &PolicyRow;
+	const bool bCompiled = VerseSubsystem->CompileVex(
+		BehaviorID,
+		TEXT("@gpu { @shield = @shield + 1.0; }"),
+		CompileDiagnostics,
+		GetVerseTestGpuTypeKey(),
+		CompilePolicyContext);
+	TestTrue(TEXT("GPU policy compile should succeed for terminal commit testing"), bCompiled);
+
+	UFlightVerseSubsystem::FVerseBehavior* Behavior = VerseSubsystem->Behaviors.Find(BehaviorID);
+	TestNotNull(TEXT("GPU terminal commit test should persist behavior metadata"), Behavior);
+	if (!Behavior)
+	{
+		return false;
+	}
+
+	TestEqual(TEXT("GPU terminal commit test should begin with GpuKernel selected"), Behavior->SelectedBackend, FString(TEXT("GpuKernel")));
+	TestEqual(TEXT("GPU terminal commit test should begin with unknown committed backend"), Behavior->CommittedBackend, FString(TEXT("Unknown")));
+	TestEqual(TEXT("GPU direct execution resolver should expose the pending GpuKernel lane"), VerseSubsystem->DescribeDirectExecutionBackend(BehaviorID), FString(TEXT("GpuKernel")));
+
+	TArray<FFlightTransformFragment> Transforms;
+	TArray<FFlightDroidStateFragment> DroidStates;
+	VerseSubsystem->ExecuteBehaviorDirect(BehaviorID, Transforms, DroidStates);
+
+	const int64 SubmissionHandleValue = VerseSubsystem->GetLastGpuSubmissionHandle(BehaviorID);
+	TestTrue(TEXT("GPU direct execution should register a submission handle"), SubmissionHandleValue > 0);
+
+	Behavior = VerseSubsystem->Behaviors.Find(BehaviorID);
+	TestNotNull(TEXT("Behavior metadata should remain available after GPU submission"), Behavior);
+	if (!Behavior)
+	{
+		return false;
+	}
+
+	TestTrue(TEXT("GPU direct execution should remain pending before terminal completion"), Behavior->bGpuExecutionPending);
+	TestEqual(TEXT("GPU direct execution should keep committed backend unknown before terminal completion"), Behavior->CommittedBackend, FString(TEXT("Unknown")));
+	TestTrue(TEXT("GPU direct execution should explain the pending terminal commit"), Behavior->CommitDetail.Contains(TEXT("waiting for a terminal bridge result")));
+
+	FFlightGpuSubmissionHandle SubmissionHandle;
+	SubmissionHandle.Value = SubmissionHandleValue;
+	TestTrue(
+		TEXT("GPU bridge should accept explicit terminal completion for the submitted behavior"),
+		ScriptBridge->CompleteExternalSubmission(SubmissionHandle, true, TEXT("Automation GPU completion")));
+
+	Behavior = VerseSubsystem->Behaviors.Find(BehaviorID);
+	TestNotNull(TEXT("Behavior metadata should still be available after GPU completion"), Behavior);
+	if (!Behavior)
+	{
+		return false;
+	}
+
+	TestFalse(TEXT("GPU direct execution should no longer be pending after terminal completion"), Behavior->bGpuExecutionPending);
+	TestEqual(TEXT("GPU terminal completion should upgrade committed backend"), Behavior->CommittedBackend, FString(TEXT("GpuKernel")));
+	TestTrue(TEXT("GPU terminal completion should explain the proven runtime backend"), Behavior->CommitDetail.Contains(TEXT("terminal completed state")));
+
+	const Flight::Vex::FFlightCompileArtifactReport* Report = VerseSubsystem->GetBehaviorCompileArtifactReport(BehaviorID);
+	TestNotNull(TEXT("GPU terminal completion should retain a compile artifact report"), Report);
+	if (Report)
+	{
+		TestEqual(TEXT("Compile artifact report should upgrade committed backend after terminal GPU completion"), Report->CommittedBackend, FString(TEXT("GpuKernel")));
+		TestTrue(TEXT("Compile artifact report should preserve the terminal commit detail"), Report->CommitDetail.Contains(TEXT("terminal completed state")));
+	}
+
+	UFlightOrchestrationSubsystem* Orchestration = World->GetSubsystem<UFlightOrchestrationSubsystem>();
+	TestNotNull(TEXT("GPU terminal commit test should have access to orchestration"), Orchestration);
+	if (Orchestration)
+	{
+		const Flight::Orchestration::FFlightBehaviorRecord* BehaviorRecord = Orchestration->GetReport().Behaviors.FindByPredicate(
+			[BehaviorID](const Flight::Orchestration::FFlightBehaviorRecord& Candidate)
+			{
+				return Candidate.BehaviorID == static_cast<int32>(BehaviorID);
+			});
+		TestNotNull(TEXT("Orchestration report should surface the GPU-committed behavior"), BehaviorRecord);
+		if (BehaviorRecord)
+		{
+			TestEqual(TEXT("Orchestration report should upgrade committed backend after terminal GPU completion"), BehaviorRecord->CommittedBackend, FString(TEXT("GpuKernel")));
+			TestTrue(TEXT("Orchestration report should retain the terminal commit detail"), BehaviorRecord->CommitDetail.Contains(TEXT("terminal completed state")));
+			TestTrue(TEXT("Orchestration report should now treat the GPU behavior as executable"), BehaviorRecord->bExecutable);
 		}
 	}
 

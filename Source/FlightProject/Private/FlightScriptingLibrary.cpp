@@ -47,6 +47,33 @@ using namespace Flight::Data;
 namespace
 {
 
+UFlightVerseSubsystem* ResolveVerseSubsystemForCompile(const UObject* WorldContextObject, FString& OutErrors)
+{
+	if (!WorldContextObject)
+	{
+		OutErrors = TEXT("Null world context");
+		return nullptr;
+	}
+
+	UWorld* World = GEngine
+		? GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull)
+		: nullptr;
+	if (!World)
+	{
+		OutErrors = TEXT("Could not get world from context");
+		return nullptr;
+	}
+
+	UFlightVerseSubsystem* VerseSubsystem = World->GetSubsystem<UFlightVerseSubsystem>();
+	if (!VerseSubsystem)
+	{
+		OutErrors = TEXT("FlightVerseSubsystem not found");
+		return nullptr;
+	}
+
+	return VerseSubsystem;
+}
+
 bool TryParseBool(const FString& InValue, bool& OutValue)
 {
 	FString Value = InValue.TrimStartAndEnd();
@@ -698,14 +725,10 @@ int32 UFlightScriptingLibrary::GetSwarmEntityCount(const UObject* WorldContextOb
         return 0;
     }
 
-    // Query entities with the swarm member tag
-    FMassEntityQuery Query;
+    FMassEntityManager& EntityManager = MassSubsystem->GetMutableEntityManager();
+    FMassEntityQuery Query(EntityManager.AsShared());
     Query.AddTagRequirement<FFlightSwarmMemberTag>(EMassFragmentPresence::All);
-
-    // UE 5.7: CacheArchetypes and GetNumMatchingEntities no longer need EntityManager param
-    Query.CacheArchetypes();
-
-    return Query.GetNumMatchingEntities();
+    return Query.GetMatchingEntityHandles().Num();
 }
 
 void UFlightScriptingLibrary::ClearAllSwarmEntities(const UObject* WorldContextObject)
@@ -1846,27 +1869,103 @@ FString UFlightScriptingLibrary::GetSimpleSCSLShaderPipelineStateJson(const UObj
 
 bool UFlightScriptingLibrary::CompileVex(const UObject* WorldContextObject, int32 BehaviorID, const FString& VexSource, FString& OutErrors)
 {
-    if (!WorldContextObject)
-    {
-        OutErrors = TEXT("Null world context");
-        return false;
-    }
+	UFlightVerseSubsystem* VerseSubsystem = ResolveVerseSubsystemForCompile(WorldContextObject, OutErrors);
+	return VerseSubsystem
+		? VerseSubsystem->CompileVex(static_cast<uint32>(BehaviorID), VexSource, OutErrors)
+		: false;
+}
 
-    UWorld* World = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull);
-    if (!World)
-    {
-        OutErrors = TEXT("Could not get world from context");
-        return false;
-    }
+bool UFlightScriptingLibrary::CompileVexWithPolicyContext(
+	const UObject* WorldContextObject,
+	const int32 BehaviorID,
+	const FString& VexSource,
+	const FName CohortName,
+	const FName ProfileName,
+	FString& OutErrors)
+{
+	return CompileVexWithPolicyContext(
+		WorldContextObject,
+		BehaviorID,
+		VexSource,
+		static_cast<UScriptStruct*>(nullptr),
+		CohortName,
+		ProfileName,
+		OutErrors);
+}
 
-    UFlightVerseSubsystem* VerseSubsystem = World->GetSubsystem<UFlightVerseSubsystem>();
-    if (!VerseSubsystem)
-    {
-        OutErrors = TEXT("FlightVerseSubsystem not found");
-        return false;
-    }
+bool UFlightScriptingLibrary::CompileVexWithPolicyContext(
+	const UObject* WorldContextObject,
+	const int32 BehaviorID,
+	const FString& VexSource,
+	UScriptStruct* TargetStruct,
+	const FName CohortName,
+	const FName ProfileName,
+	FString& OutErrors)
+{
+	UFlightVerseSubsystem* VerseSubsystem = ResolveVerseSubsystemForCompile(WorldContextObject, OutErrors);
+	if (!VerseSubsystem)
+	{
+		return false;
+	}
 
-    return VerseSubsystem->CompileVex(static_cast<uint32>(BehaviorID), VexSource, OutErrors);
+	UFlightVerseSubsystem::FCompilePolicyContext CompilePolicyContext;
+	CompilePolicyContext.CohortName = CohortName;
+	CompilePolicyContext.ProfileName = ProfileName;
+	return VerseSubsystem->CompileVex(static_cast<uint32>(BehaviorID), VexSource, OutErrors, TargetStruct, CompilePolicyContext);
+}
+
+bool UFlightScriptingLibrary::CompileVexWithExplicitPolicy(
+	const UObject* WorldContextObject,
+	const int32 BehaviorID,
+	const FString& VexSource,
+	const FFlightBehaviorCompilePolicyRow& PolicyRow,
+	FString& OutErrors)
+{
+	return CompileVexWithExplicitPolicy(
+		WorldContextObject,
+		BehaviorID,
+		VexSource,
+		static_cast<UScriptStruct*>(nullptr),
+		PolicyRow,
+		OutErrors);
+}
+
+bool UFlightScriptingLibrary::CompileVexWithExplicitPolicy(
+	const UObject* WorldContextObject,
+	const int32 BehaviorID,
+	const FString& VexSource,
+	UScriptStruct* TargetStruct,
+	const FFlightBehaviorCompilePolicyRow& PolicyRow,
+	FString& OutErrors)
+{
+	UFlightVerseSubsystem* VerseSubsystem = ResolveVerseSubsystemForCompile(WorldContextObject, OutErrors);
+	if (!VerseSubsystem)
+	{
+		return false;
+	}
+
+	UFlightVerseSubsystem::FCompilePolicyContext CompilePolicyContext;
+	CompilePolicyContext.ExplicitPolicy = &PolicyRow;
+	return VerseSubsystem->CompileVex(static_cast<uint32>(BehaviorID), VexSource, OutErrors, TargetStruct, CompilePolicyContext);
+}
+
+bool UFlightScriptingLibrary::CompileVexWithExplicitPolicy(
+	const UObject* WorldContextObject,
+	const int32 BehaviorID,
+	const FString& VexSource,
+	const void* TypeKey,
+	const FFlightBehaviorCompilePolicyRow& PolicyRow,
+	FString& OutErrors)
+{
+	UFlightVerseSubsystem* VerseSubsystem = ResolveVerseSubsystemForCompile(WorldContextObject, OutErrors);
+	if (!VerseSubsystem)
+	{
+		return false;
+	}
+
+	UFlightVerseSubsystem::FCompilePolicyContext CompilePolicyContext;
+	CompilePolicyContext.ExplicitPolicy = &PolicyRow;
+	return VerseSubsystem->CompileVex(static_cast<uint32>(BehaviorID), VexSource, OutErrors, TypeKey, CompilePolicyContext);
 }
 
 TArray<int32> UFlightScriptingLibrary::GetRegisteredBehaviorIDs(const UObject* WorldContextObject)

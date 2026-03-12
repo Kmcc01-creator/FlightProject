@@ -30,6 +30,13 @@ public:
      */
     virtual void StartPlay() override;
 
+    /** Shared startup-policy runner used by StartPlay and automation world-fixture coverage. */
+    void RunStartupSequence();
+
+    const TSoftObjectPtr<UFlightStartupProfile>& GetStartupProfileAsset() const { return StartupProfileAsset; }
+    EFlightStartupProfile GetConfiguredStartupProfile() const { return StartupProfile; }
+    int32 GetConfiguredGauntletGpuSwarmEntityCount() const { return GauntletGpuSwarmEntityCount; }
+
 protected:
     /** Optional asset-driven startup policy surface. Falls back to config values if unset or unloadable. */
     UPROPERTY(EditDefaultsOnly, Config, Category = "Flight|Startup")
@@ -72,8 +79,4 @@ protected:
     UFUNCTION(Exec)
     void SpawnMeshIRDemo(int32 DemoType = 0);
 
-private:
-    EFlightStartupProfile ResolveStartupProfile(const UWorld* World) const;
-    int32 ResolveGauntletGpuSwarmEntityCount() const;
-    static const TCHAR* StartupProfileToString(EFlightStartupProfile Profile);
 };

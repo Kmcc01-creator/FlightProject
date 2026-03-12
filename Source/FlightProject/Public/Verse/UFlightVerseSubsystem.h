@@ -140,6 +140,9 @@ public:
 	/** Returns the resolved direct Mass/GPU execution backend for this behavior. */
 	FString DescribeDirectExecutionBackend(uint32 BehaviorID) const;
 
+	/** Returns the last GPU submission handle recorded for a behavior, if any. */
+	int64 GetLastGpuSubmissionHandle(uint32 BehaviorID) const;
+
 	/** Returns the resolved storage host kind used for this behavior and type key. */
 	FString DescribeResolvedStorageHost(uint32 BehaviorID, const void* TypeKey = nullptr) const;
 
@@ -168,6 +171,9 @@ public:
 		FString SelectedBackend;
 		FString CommittedBackend;
 		FString CommitDetail;
+		int64 LastGpuSubmissionHandle = 0;
+		FString LastGpuSubmissionDetail;
+		bool bGpuExecutionPending = false;
 		FName SelectedPolicyRowName = NAME_None;
 		EFlightBehaviorCompileDomainPreference PolicyPreferredDomain = EFlightBehaviorCompileDomainPreference::Unspecified;
 		bool bPolicyAllowsNativeFallback = true;
@@ -310,6 +316,12 @@ private:
 
 	/** Explicit GPU host placeholder for GPU-buffer-backed execution. */
 	bool ExecuteOnGpuSchemaHost(const FVerseBehavior& Behavior);
+
+	/** Update behavior-level commit truth and mirror it into compile/orchestration reports. */
+	void UpdateBehaviorCommitState(uint32 BehaviorID, const FString& CommittedBackend, const FString& CommitDetail);
+
+	/** Resolve a terminal GPU submission result back into behavior commit truth. */
+	void ResolveGpuExecutionCommit(uint32 BehaviorID, int64 SubmissionHandle, bool bSuccess, const FString& Detail);
 
 #if WITH_VERSE_VM || defined(__INTELLISENSE__)
 	bool TryValidateVerseSource(const FString& VerseSource, FString& OutDiagnostics) const;
