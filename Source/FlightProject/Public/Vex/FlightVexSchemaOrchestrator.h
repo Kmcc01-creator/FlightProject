@@ -125,6 +125,14 @@ public:
 					Record.MathDeterminismProfile = DescType::template GetAttr<Attr::MathDeterminism>::Value;
 				}
 
+				Record.VectorPack = BuildDefaultVectorPackContract(
+					Record.Storage,
+					Record.ValueType,
+					Record.AlignmentRequirement,
+					Record.bSimdReadAllowed,
+					Record.bSimdWriteAllowed,
+					Record.bGpuTier1Allowed);
+
 				Schema.SymbolRecords.Add(Record.SymbolName, Record);
 			});
 		}

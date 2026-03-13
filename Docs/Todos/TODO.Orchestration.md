@@ -44,6 +44,16 @@ Continue moving from world-scan ingestion toward explicit registration where pra
 
 Relevant surfaces: [OrchestrationSubsystem.md](../Architecture/OrchestrationSubsystem.md), [FlightOrchestrationSubsystem.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Orchestration/FlightOrchestrationSubsystem.cpp), [FlightSwarmSpawnerSubsystem.cpp](/home/kelly/Unreal/Projects/FlightProject/Plugins/GameFeatures/SwarmEncounter/Source/SwarmEncounter/Private/FlightSwarmSpawnerSubsystem.cpp).
 
+### 5. Selector Evidence Aggregation Beyond Last Snapshot
+
+Priority: Medium  
+Status: Active  
+Owner/Surface: selector decision inspection and orchestration report truth
+
+The current selector reporting path exposes only the last observed execution truth for a behavior. Extend that surface into cohort-level or lane-level aggregated selector evidence so inspection does not collapse to one latest snapshot when multiple entities or cohorts are executing the same composite behavior.
+
+Relevant surfaces: [BehaviorCompositionCapabilityPlan.md](../Workflow/BehaviorCompositionCapabilityPlan.md), [FlightBehaviorBinding.h](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Public/Orchestration/FlightBehaviorBinding.h), [FlightOrchestrationSubsystem.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Orchestration/FlightOrchestrationSubsystem.cpp), [UFlightVerseSubsystem.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Verse/UFlightVerseSubsystem.cpp).
+
 ## Exit Condition
 
 - execution plans are grounded in real executable runtime commitments

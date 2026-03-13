@@ -26,6 +26,8 @@
 // Forward declarations in correct namespace
 namespace Flight::Vex { class FVexSimdExecutor; }
 namespace Flight::Swarm { struct FDroidState; }
+struct FMassFragmentHostBundle;
+struct FMassFragmentHostView;
 
 UENUM(BlueprintType)
 enum class EFlightVerseCompileState : uint8
@@ -33,6 +35,34 @@ enum class EFlightVerseCompileState : uint8
 	GeneratedOnly UMETA(DisplayName = "GeneratedOnly"),
 	VmCompiled UMETA(DisplayName = "VmCompiled"),
 	VmCompileFailed UMETA(DisplayName = "VmCompileFailed")
+};
+
+enum class EFlightVerseBehaviorKind : uint8
+{
+	Atomic,
+	Sequence,
+	Selector
+};
+
+enum class EFlightBehaviorExecutionShape : uint8
+{
+	Unknown,
+	ScalarOnly,
+	VectorCapable,
+	VectorPreferred,
+	ShapeAgnostic
+};
+
+enum class EFlightBehaviorGuardComparison : uint8
+{
+	Less,
+	LessEqual,
+	Greater,
+	GreaterEqual,
+	Equal,
+	NotEqual,
+	IsTrue,
+	IsFalse
 };
 
 /**
@@ -47,6 +77,32 @@ class FLIGHTPROJECT_API UFlightVerseSubsystem : public UWorldSubsystem
 	GENERATED_BODY()
 
 public:
+	struct FSelectorBranchGuard
+	{
+		FString SymbolName;
+		EFlightBehaviorGuardComparison Comparison = EFlightBehaviorGuardComparison::IsTrue;
+		float ScalarValue = 0.0f;
+	};
+
+	struct FCompositeSelectorBranchSpec
+	{
+		uint32 BehaviorID = 0;
+		bool bHasGuard = false;
+		FSelectorBranchGuard Guard;
+	};
+
+	struct FBehaviorCapabilityEnvelope
+	{
+		TArray<FString> LegalLanes;
+		FString PreferredLane;
+		FString CommittedLane;
+		EFlightBehaviorExecutionShape ExecutionShape = EFlightBehaviorExecutionShape::Unknown;
+		EFlightBehaviorExecutionShape CommittedExecutionShape = EFlightBehaviorExecutionShape::Unknown;
+		bool bAllowsMixedLaneExecution = false;
+		bool bRequiresSharedTypeKey = false;
+		TArray<FString> DisallowedLaneReasons;
+	};
+
 	struct FCompilePolicyContext
 	{
 		FName CohortName = NAME_None;
@@ -116,6 +172,14 @@ public:
 		TArrayView<struct FFlightTransformFragment> Transforms,
 		TArrayView<struct FFlightDroidStateFragment> DroidStates);
 
+	/**
+	 * Executes a behavior directly on processor-provided Mass fragment views.
+	 * This is the descriptor-based handoff path for chunk-query-owned fragment views.
+	 */
+	void ExecuteBehaviorDirect(
+		uint32 BehaviorID,
+		TConstArrayView<struct FMassFragmentHostView> FragmentViews);
+
 	/** Returns compile-state metadata for a behavior ID. */
 	EFlightVerseCompileState GetBehaviorCompileState(uint32 BehaviorID) const;
 
@@ -146,11 +210,41 @@ public:
 	/** Returns the resolved storage host kind used for this behavior and type key. */
 	FString DescribeResolvedStorageHost(uint32 BehaviorID, const void* TypeKey = nullptr) const;
 
+	/** Registers a runtime-owned composite sequence behavior over existing child behaviors. */
+	bool RegisterCompositeSequenceBehavior(
+		uint32 BehaviorID,
+		TConstArrayView<uint32> ChildBehaviorIds,
+		FString& OutErrors,
+		const void* TypeKey = nullptr);
+
+	/** Registers a runtime-owned composite selector behavior over existing child behaviors. */
+	bool RegisterCompositeSelectorBehavior(
+		uint32 BehaviorID,
+		TConstArrayView<uint32> ChildBehaviorIds,
+		FString& OutErrors,
+		const void* TypeKey = nullptr);
+
+	/** Registers a runtime-owned guarded selector behavior over existing child behaviors. */
+	bool RegisterGuardedCompositeSelectorBehavior(
+		uint32 BehaviorID,
+		TConstArrayView<FCompositeSelectorBranchSpec> BranchSpecs,
+		FString& OutErrors,
+		const void* TypeKey = nullptr);
+
+	/** Returns a stable text label for a selector guard comparison. */
+	static FString SelectorGuardComparisonToString(EFlightBehaviorGuardComparison Comparison);
+
+	/** Returns a report/debug summary of a selector branch guard. */
+	static FString DescribeSelectorGuard(const FSelectorBranchGuard& Guard);
+
 	struct FVerseBehavior
 	{
 #if WITH_VERSE_VM || defined(__INTELLISENSE__)
 		TWriteBarrier<Verse::VProcedure> Procedure;
 #endif
+		EFlightVerseBehaviorKind Kind = EFlightVerseBehaviorKind::Atomic;
+		TArray<uint32> ChildBehaviorIds;
+		TArray<FCompositeSelectorBranchSpec> SelectorBranches;
 		Flight::Vex::EVexTier Tier = Flight::Vex::EVexTier::Full;
 		TSharedPtr<Flight::Vex::FVexSimdExecutor> SimdPlan;
 		FString SimdCompileDiagnostics;
@@ -171,6 +265,13 @@ public:
 		FString SelectedBackend;
 		FString CommittedBackend;
 		FString CommitDetail;
+		bool bHasLastExecutionResult = false;
+		bool bLastExecutionSucceeded = false;
+		bool bLastExecutionCommitted = false;
+		uint32 LastSelectedChildBehaviorId = 0;
+		TArray<FString> LastBranchEvidence;
+		TArray<FString> LastGuardOutcomes;
+		FString LastExecutionDetail;
 		int64 LastGpuSubmissionHandle = 0;
 		FString LastGpuSubmissionDetail;
 		bool bGpuExecutionPending = false;
@@ -189,6 +290,7 @@ public:
 		bool bHasAwaitableBoundary = false;
 		bool bHasMirrorRequest = false;
 		FString BoundaryExecutionDetail;
+		FBehaviorCapabilityEnvelope CapabilityEnvelope;
 		Flight::Vex::FFlightCompileArtifactReport CompileArtifactReport;
 		bool bHasCompileArtifactReport = false;
 #if WITH_VERSE_VM || defined(__INTELLISENSE__)
@@ -200,6 +302,39 @@ public:
 	TMap<uint32, FVerseBehavior> Behaviors;
 
 private:
+	enum class EBehaviorExecutionFailureKind : uint8
+	{
+		None,
+		MissingBehavior,
+		NonExecutable,
+		IncompatibleTypeKey,
+		UnsupportedBackend,
+		UnsupportedStorageHost,
+		UnknownCompositeOperator,
+		ChildExecutionFailed,
+		GuardRejected,
+		GuardEvaluationFailed
+	};
+
+	struct FBehaviorExecutionResult
+	{
+		bool bSucceeded = false;
+		bool bCommitted = false;
+		bool bSemanticFailure = false;
+		EBehaviorExecutionFailureKind FailureKind = EBehaviorExecutionFailureKind::None;
+		FString SelectedLane;
+		TArray<FString> LegalLanes;
+		FString CommittedLane;
+		EFlightBehaviorExecutionShape ExecutionShape = EFlightBehaviorExecutionShape::Unknown;
+		EFlightBehaviorExecutionShape CommittedExecutionShape = EFlightBehaviorExecutionShape::Unknown;
+		FString Backend;
+		FString Detail;
+		uint32 SelectedChildBehaviorId = 0;
+		TArray<uint32> ExecutedChildBehaviorIds;
+		TArray<FString> BranchEvidence;
+		TArray<FString> GuardOutcomes;
+	};
+
 	enum class EStorageHostKind : uint8
 	{
 		None,
@@ -290,6 +425,67 @@ private:
 	/** Resolve the direct-execution backend currently committed for this behavior and type key. */
 	FString ResolveCommittedExecutionBackend(const FVerseBehavior& Behavior, const void* RequestedTypeKey) const;
 
+	/** Returns the effective bound type key used by a behavior when validating or composing it. */
+	const void* ResolveEffectiveBehaviorTypeKey(const FVerseBehavior& Behavior) const;
+
+	/** Returns true when a behavior should execute through the composite path instead of backend dispatch. */
+	static bool IsCompositeBehavior(const FVerseBehavior& Behavior);
+
+	/** Recompute capability envelopes from current compile/runtime truth. */
+	void RefreshCapabilityEnvelopes();
+
+	/** Build the capability envelope for one behavior, recursively for composites. */
+	FBehaviorCapabilityEnvelope BuildCapabilityEnvelope(uint32 BehaviorID, TSet<uint32>& ActiveBehaviorIds) const;
+
+	/** Build the capability envelope for an atomic behavior. */
+	FBehaviorCapabilityEnvelope BuildAtomicCapabilityEnvelope(const FVerseBehavior& Behavior) const;
+
+	/** Build the capability envelope for a sequence composite behavior. */
+	FBehaviorCapabilityEnvelope BuildSequenceCapabilityEnvelope(const FVerseBehavior& Behavior, TSet<uint32>& ActiveBehaviorIds) const;
+
+	/** Build the capability envelope for a selector composite behavior. */
+	FBehaviorCapabilityEnvelope BuildSelectorCapabilityEnvelope(const FVerseBehavior& Behavior, TSet<uint32>& ActiveBehaviorIds) const;
+
+	/** Shared composite registration helper used by sequence and selector. */
+	bool RegisterCompositeBehavior(
+		uint32 BehaviorID,
+		TConstArrayView<uint32> ChildBehaviorIds,
+		FString& OutErrors,
+		const void* TypeKey,
+		EFlightVerseBehaviorKind Kind);
+
+	/** Shared internal execution path that returns structured execution truth for atomic or composite behaviors. */
+	FBehaviorExecutionResult ExecuteBehaviorWithResult(uint32 BehaviorID, void* StructPtr, const void* TypeKey);
+
+	/** Persists the latest top-level execution truth onto the behavior and rebuilds orchestration reports. */
+	void CommitBehaviorExecutionResult(uint32 BehaviorID, const FBehaviorExecutionResult& Result);
+
+	/** Shared atomic execution path used by public struct/bulk execution and composite children. */
+	FBehaviorExecutionResult ExecuteAtomicBehaviorWithResult(uint32 BehaviorID, const FVerseBehavior& Behavior, void* StructPtr, const void* TypeKey);
+
+	/** Shared composite execution path used by public struct/bulk execution. */
+	FBehaviorExecutionResult ExecuteCompositeBehaviorWithResult(uint32 BehaviorID, const FVerseBehavior& Behavior, void* StructPtr, const void* TypeKey);
+
+	/** Sequence-only phase-one composite execution path. */
+	FBehaviorExecutionResult ExecuteSequenceBehaviorWithResult(uint32 BehaviorID, const FVerseBehavior& Behavior, void* StructPtr, const void* TypeKey);
+
+	/** Selector phase-one composite execution path without rollback guarantees. */
+	FBehaviorExecutionResult ExecuteSelectorBehaviorWithResult(uint32 BehaviorID, const FVerseBehavior& Behavior, void* StructPtr, const void* TypeKey);
+
+	/** Returns true when the guard symbol is legal for runtime evaluation on the effective type key. */
+	bool ValidateSelectorGuard(const FSelectorBranchGuard& Guard, const void* TypeKey, FString& OutError) const;
+
+	/** Attempts to read one runtime symbol value from the resolved host for guard evaluation. */
+	bool TryReadRuntimeSymbolValue(const FResolvedStorageHost& Host, void* StructPtr, const FString& SymbolName, Flight::Vex::FVexRuntimeValue& OutValue, FString& OutError) const;
+
+	/** Evaluates a selector branch guard against the current state host. */
+	bool EvaluateSelectorGuard(
+		const FSelectorBranchGuard& Guard,
+		const FResolvedStorageHost& Host,
+		void* StructPtr,
+		bool& bOutPassed,
+		FString& OutDetail) const;
+
 	/** Execute a behavior on a previously resolved storage host. */
 	bool ExecuteResolvedStorageHost(const FResolvedStorageHost& Host, const FVerseBehavior& Behavior, void* StructPtr);
 
@@ -300,6 +496,13 @@ private:
 		Flight::Vex::EVexBackendKind BackendKind,
 		TArrayView<struct FFlightTransformFragment> Transforms,
 		TArrayView<struct FFlightDroidStateFragment> DroidStates);
+
+	/** Execute a behavior on a previously resolved Mass/direct storage host using a processor-provided bundle. */
+	bool ExecuteResolvedDirectStorageHost(
+		const FResolvedStorageHost& Host,
+		const FVerseBehavior& Behavior,
+		Flight::Vex::EVexBackendKind BackendKind,
+		FMassFragmentHostBundle& Bundle);
 
 	/** Explicit AoS schema host for direct offset-backed scalar execution. */
 	void ExecuteOnAosSchemaHost(const Flight::Vex::FVexProgramAst& Program, void* StructPtr, const Flight::Vex::FVexTypeSchema& Schema);
@@ -313,6 +516,12 @@ private:
 		Flight::Vex::EVexBackendKind BackendKind,
 		TArrayView<struct FFlightTransformFragment> Transforms,
 		TArrayView<struct FFlightDroidStateFragment> DroidStates);
+
+	/** Explicit Mass/direct host for processor-provided fragment bundles. */
+	bool ExecuteOnMassSchemaHost(
+		const FVerseBehavior& Behavior,
+		Flight::Vex::EVexBackendKind BackendKind,
+		FMassFragmentHostBundle& Bundle);
 
 	/** Explicit GPU host placeholder for GPU-buffer-backed execution. */
 	bool ExecuteOnGpuSchemaHost(const FVerseBehavior& Behavior);

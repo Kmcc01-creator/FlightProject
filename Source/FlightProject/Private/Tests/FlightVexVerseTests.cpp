@@ -6,6 +6,7 @@
 #include "Verse/FlightGpuScriptBridge.h"
 #include "Vex/FlightVexBackendCapabilities.h"
 #include "Vex/FlightVexParser.h"
+#include "Vex/FlightVexSimdExecutor.h"
 #include "Vex/FlightVexSchemaOrchestrator.h"
 #include "Vex/FlightVexSymbolRegistry.h"
 #include "Verse/UFlightVerseSubsystem.h"
@@ -297,6 +298,13 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightBoundaryCompileArtifactReportTest, "Flig
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVerseBackendCommitTruthTest, "FlightProject.Functional.Verse.BackendCommitTruth", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVerseRuntimeDispatchGatingTest, "FlightProject.Functional.Verse.RuntimeDispatchGating", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVerseCompilePolicyIntegrationTest, "FlightProject.Functional.Verse.CompilePolicyIntegration", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVerseCompositeSequenceExecutionTest, "FlightProject.Functional.Verse.CompositeSequenceExecution", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVerseCompositeSequenceRegistrationFailureTest, "FlightProject.Functional.Verse.CompositeSequenceRegistrationFailure", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVerseCompositeCapabilityEnvelopeTest, "FlightProject.Functional.Verse.CompositeCapabilityEnvelope", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVerseCompositeSelectorExecutionTest, "FlightProject.Functional.Verse.CompositeSelectorExecution", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVerseCompositeSelectorCapabilityEnvelopeTest, "FlightProject.Functional.Verse.CompositeSelectorCapabilityEnvelope", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVerseGuardedCompositeSelectorExecutionTest, "FlightProject.Functional.Verse.GuardedCompositeSelectorExecution", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVerseGuardedCompositeSelectorRegistrationFailureTest, "FlightProject.Functional.Verse.GuardedCompositeSelectorRegistrationFailure", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightVerseGpuTerminalCommitTest, "FlightProject.Functional.Verse.GpuTerminalCommit", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightGpuScriptBridgeDeferredCompletionTest, "FlightProject.Gpu.ScriptBridge.DeferredCompletion", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
@@ -349,6 +357,9 @@ bool FFlightCompileArtifactReportTest::RunTest(const FString& Parameters)
 	const TArray<TSharedPtr<FJsonValue>>* BackendReports = nullptr;
 	TestTrue(TEXT("Compile artifact JSON should contain backendReports"), RootObject->TryGetArrayField(TEXT("backendReports"), BackendReports));
 	TestTrue(TEXT("Compile artifact report should record at least one backend report"), BackendReports && BackendReports->Num() > 0);
+
+	const TArray<TSharedPtr<FJsonValue>>* VectorSymbolReports = nullptr;
+	TestTrue(TEXT("Compile artifact JSON should contain vectorSymbolReports"), RootObject->TryGetArrayField(TEXT("vectorSymbolReports"), VectorSymbolReports));
 
 	const TSharedPtr<FJsonObject>* CodeShapeObject = nullptr;
 	TestTrue(TEXT("Compile artifact JSON should contain codeShapeMetrics"), RootObject->TryGetObjectField(TEXT("codeShapeMetrics"), CodeShapeObject));
@@ -605,6 +616,805 @@ bool FFlightVerseCompilePolicyIntegrationTest::RunTest(const FString& Parameters
 			TestTrue(TEXT("Orchestration report should preserve required contracts"), BehaviorRecord->RequiredContracts.Contains(TEXT("Nav.Route")));
 		}
 	}
+
+	return true;
+}
+
+bool FFlightVerseCompositeSequenceExecutionTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+
+	UWorld* World = FindAutomationWorld();
+	if (!World)
+	{
+		AddError(TEXT("No valid world context available for composite sequence execution test"));
+		return false;
+	}
+
+	UFlightVerseSubsystem* VerseSubsystem = World->GetSubsystem<UFlightVerseSubsystem>();
+	if (!VerseSubsystem)
+	{
+		AddError(TEXT("FlightVerseSubsystem not found"));
+		return false;
+	}
+
+	UFlightOrchestrationSubsystem* Orchestration = World->GetSubsystem<UFlightOrchestrationSubsystem>();
+	if (!Orchestration)
+	{
+		AddError(TEXT("FlightOrchestrationSubsystem not found"));
+		return false;
+	}
+
+	Flight::Vex::TTypeVexRegistry<Flight::Swarm::FDroidState>::Register();
+	const void* TypeKey = Flight::Vex::TTypeVexRegistry<Flight::Swarm::FDroidState>::GetTypeKey();
+	const uint32 CompositeBehaviorId = 19300;
+	const uint32 FirstChildBehaviorId = 19301;
+	const uint32 SecondChildBehaviorId = 19302;
+	FFlightBehaviorCompilePolicyRow PolicyRow;
+	PolicyRow.RowName = TEXT("Policy.CompositeSequenceTest");
+	UFlightVerseSubsystem::FCompilePolicyContext CompilePolicyContext;
+	CompilePolicyContext.ExplicitPolicy = &PolicyRow;
+
+	FString CompileDiagnostics;
+	TestTrue(
+		TEXT("First child behavior should compile"),
+		VerseSubsystem->CompileVex(FirstChildBehaviorId, TEXT("@cpu { @position = @velocity; }"), CompileDiagnostics, TypeKey, CompilePolicyContext));
+	TestTrue(
+		TEXT("Second child behavior should compile"),
+		VerseSubsystem->CompileVex(SecondChildBehaviorId, TEXT("@cpu { @velocity = @position; }"), CompileDiagnostics, TypeKey, CompilePolicyContext));
+
+	TArray<uint32> ChildBehaviorIds = { FirstChildBehaviorId, SecondChildBehaviorId };
+	FString RegistrationErrors;
+	const bool bRegistered = VerseSubsystem->RegisterCompositeSequenceBehavior(CompositeBehaviorId, ChildBehaviorIds, RegistrationErrors, TypeKey);
+	TestTrue(TEXT("Composite sequence behavior should register"), bRegistered);
+	TestTrue(TEXT("Composite sequence registration should not report errors"), RegistrationErrors.IsEmpty());
+
+	Flight::Swarm::FDroidState DroidState;
+	DroidState.Position = FVector3f::ZeroVector;
+	DroidState.Velocity = FVector3f(1.0f, 2.0f, 3.0f);
+
+	VerseSubsystem->ExecuteBehavior(CompositeBehaviorId, DroidState);
+
+	const FVector3f ExpectedPosition(1.0f, 2.0f, 3.0f);
+	TestEqual(TEXT("Composite sequence should execute the first child and overwrite position"), DroidState.Position, ExpectedPosition);
+	TestEqual(TEXT("Composite sequence should execute the second child after the first and copy the new position into velocity"), DroidState.Velocity, ExpectedPosition);
+
+	const UFlightVerseSubsystem::FVerseBehavior* CompositeBehavior = VerseSubsystem->Behaviors.Find(CompositeBehaviorId);
+	TestNotNull(TEXT("Composite behavior metadata should be registered"), CompositeBehavior);
+	if (!CompositeBehavior)
+	{
+		return false;
+	}
+
+	TestEqual(TEXT("Composite behavior should use the sequence kind"), CompositeBehavior->Kind, EFlightVerseBehaviorKind::Sequence);
+	TestEqual(TEXT("Composite behavior should retain the child count"), CompositeBehavior->ChildBehaviorIds.Num(), 2);
+	TestEqual(TEXT("Composite behavior should expose a composite bulk backend label"), VerseSubsystem->DescribeBulkExecutionBackend(CompositeBehaviorId), FString(TEXT("CompositeSequence")));
+	TestTrue(TEXT("Composite behavior capability envelope should expose at least one legal lane"), CompositeBehavior->CapabilityEnvelope.LegalLanes.Num() > 0);
+	TestTrue(TEXT("Composite behavior capability envelope should require a shared type key"), CompositeBehavior->CapabilityEnvelope.bRequiresSharedTypeKey);
+	TestFalse(TEXT("Composite behavior capability envelope should not allow mixed-lane execution in phase one"), CompositeBehavior->CapabilityEnvelope.bAllowsMixedLaneExecution);
+	TestTrue(TEXT("Composite behavior capability envelope should record a non-empty execution shape"), CompositeBehavior->CapabilityEnvelope.ExecutionShape != EFlightBehaviorExecutionShape::Unknown);
+
+	const Flight::Orchestration::FFlightBehaviorRecord* BehaviorRecord = Orchestration->GetReport().Behaviors.FindByPredicate(
+		[CompositeBehaviorId](const Flight::Orchestration::FFlightBehaviorRecord& Candidate)
+		{
+			return Candidate.BehaviorID == CompositeBehaviorId;
+		});
+	TestNotNull(TEXT("Orchestration report should surface the composite sequence behavior"), BehaviorRecord);
+	if (BehaviorRecord)
+	{
+		TestTrue(TEXT("Orchestration behavior report should mark the behavior as composite"), BehaviorRecord->bIsComposite);
+		TestEqual(TEXT("Orchestration behavior report should record the sequence operator"), BehaviorRecord->CompositeOperator, FString(TEXT("Sequence")));
+		TestEqual(TEXT("Orchestration behavior report should preserve child behavior ids"), BehaviorRecord->ChildBehaviorIds.Num(), 2);
+		TestTrue(TEXT("Composite behavior report should be executable"), BehaviorRecord->bExecutable);
+		TestTrue(TEXT("Composite behavior report should expose legal lanes"), BehaviorRecord->LegalLanes.Num() > 0);
+		TestEqual(TEXT("Composite behavior report should require a shared type key"), BehaviorRecord->bRequiresSharedTypeKey, true);
+		TestEqual(TEXT("Composite behavior report should preserve the phase-one mixed-lane rule"), BehaviorRecord->bAllowsMixedLaneExecution, false);
+		TestTrue(TEXT("Composite behavior report should surface a non-empty execution shape"), !BehaviorRecord->ExecutionShape.IsEmpty());
+	}
+
+	const FString ReportJson = Orchestration->BuildReportJson();
+	TestTrue(TEXT("Orchestration JSON report should be available"), !ReportJson.IsEmpty());
+
+	TSharedPtr<FJsonObject> RootObject;
+	const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ReportJson);
+	const bool bParsed = FJsonSerializer::Deserialize(Reader, RootObject) && RootObject.IsValid();
+	TestTrue(TEXT("Orchestration JSON report should deserialize"), bParsed);
+	if (bParsed && RootObject.IsValid())
+	{
+		const TArray<TSharedPtr<FJsonValue>>* BehaviorValues = nullptr;
+		TestTrue(TEXT("Orchestration JSON should contain behaviors"), RootObject->TryGetArrayField(TEXT("behaviors"), BehaviorValues));
+		bool bFoundCompositeJsonRecord = false;
+		if (BehaviorValues)
+		{
+			for (const TSharedPtr<FJsonValue>& Value : *BehaviorValues)
+			{
+				const TSharedPtr<FJsonObject> BehaviorObject = Value.IsValid() ? Value->AsObject() : nullptr;
+				if (!BehaviorObject.IsValid())
+				{
+					continue;
+				}
+
+				double BehaviorId = 0.0;
+				if (!BehaviorObject->TryGetNumberField(TEXT("behaviorId"), BehaviorId) || static_cast<uint32>(BehaviorId) != CompositeBehaviorId)
+				{
+					continue;
+				}
+
+				bool bIsComposite = false;
+				FString CompositeOperator;
+				FString ExecutionShape;
+				const TArray<TSharedPtr<FJsonValue>>* ChildIds = nullptr;
+				const TArray<TSharedPtr<FJsonValue>>* LegalLanes = nullptr;
+				TestTrue(TEXT("Composite JSON record should include isComposite"), BehaviorObject->TryGetBoolField(TEXT("isComposite"), bIsComposite));
+				TestTrue(TEXT("Composite JSON record should include compositeOperator"), BehaviorObject->TryGetStringField(TEXT("compositeOperator"), CompositeOperator));
+				TestTrue(TEXT("Composite JSON record should include childBehaviorIds"), BehaviorObject->TryGetArrayField(TEXT("childBehaviorIds"), ChildIds));
+				TestTrue(TEXT("Composite JSON record should include legalLanes"), BehaviorObject->TryGetArrayField(TEXT("legalLanes"), LegalLanes));
+				TestTrue(TEXT("Composite JSON record should include executionShape"), BehaviorObject->TryGetStringField(TEXT("executionShape"), ExecutionShape));
+				TestTrue(TEXT("Composite JSON record should mark the behavior as composite"), bIsComposite);
+				TestEqual(TEXT("Composite JSON record should expose the sequence operator"), CompositeOperator, FString(TEXT("Sequence")));
+				TestTrue(TEXT("Composite JSON record should contain two child ids"), ChildIds && ChildIds->Num() == 2);
+				TestTrue(TEXT("Composite JSON record should contain at least one legal lane"), LegalLanes && LegalLanes->Num() > 0);
+				TestFalse(TEXT("Composite JSON record should expose a non-empty execution shape"), ExecutionShape.IsEmpty());
+				bFoundCompositeJsonRecord = true;
+				break;
+			}
+		}
+		TestTrue(TEXT("Orchestration JSON should contain the composite sequence behavior record"), bFoundCompositeJsonRecord);
+	}
+
+	return true;
+}
+
+bool FFlightVerseCompositeCapabilityEnvelopeTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+
+	UWorld* World = FindAutomationWorld();
+	if (!World)
+	{
+		AddError(TEXT("No valid world context available for composite capability envelope test"));
+		return false;
+	}
+
+	UFlightVerseSubsystem* VerseSubsystem = World->GetSubsystem<UFlightVerseSubsystem>();
+	if (!VerseSubsystem)
+	{
+		AddError(TEXT("FlightVerseSubsystem not found"));
+		return false;
+	}
+
+	UFlightOrchestrationSubsystem* Orchestration = World->GetSubsystem<UFlightOrchestrationSubsystem>();
+	if (!Orchestration)
+	{
+		AddError(TEXT("FlightOrchestrationSubsystem not found"));
+		return false;
+	}
+
+	Flight::Vex::TTypeVexRegistry<Flight::Swarm::FDroidState>::Register();
+	const void* TypeKey = Flight::Vex::TTypeVexRegistry<Flight::Swarm::FDroidState>::GetTypeKey();
+	const uint32 CompositeBehaviorId = 19320;
+	const uint32 VectorChildBehaviorId = 19321;
+	const uint32 ScalarChildBehaviorId = 19322;
+
+	UFlightVerseSubsystem::FVerseBehavior& VectorChildSeed = VerseSubsystem->Behaviors.FindOrAdd(VectorChildBehaviorId);
+	VectorChildSeed = UFlightVerseSubsystem::FVerseBehavior();
+	VectorChildSeed.Kind = EFlightVerseBehaviorKind::Atomic;
+	VectorChildSeed.CompileState = EFlightVerseCompileState::VmCompiled;
+	VectorChildSeed.Tier = Flight::Vex::EVexTier::Literal;
+	VectorChildSeed.bHasExecutableProcedure = true;
+	VectorChildSeed.bUsesNativeFallback = true;
+	VectorChildSeed.FrameInterval = 1;
+	VectorChildSeed.BoundTypeKey = TypeKey;
+	VectorChildSeed.BoundTypeStableName = TEXT("FDroidState");
+	VectorChildSeed.SelectedBackend = TEXT("NativeSimd");
+	VectorChildSeed.CommittedBackend = TEXT("NativeScalar");
+	VectorChildSeed.CommitDetail = TEXT("Synthetic vector-capable test behavior.");
+	VectorChildSeed.LastCompileDiagnostics = TEXT("Synthetic vector-capable test behavior.");
+	VectorChildSeed.SimdPlan = MakeShared<Flight::Vex::FVexSimdExecutor>();
+
+	UFlightVerseSubsystem::FVerseBehavior& ScalarChildSeed = VerseSubsystem->Behaviors.FindOrAdd(ScalarChildBehaviorId);
+	ScalarChildSeed = UFlightVerseSubsystem::FVerseBehavior();
+	ScalarChildSeed.Kind = EFlightVerseBehaviorKind::Atomic;
+	ScalarChildSeed.CompileState = EFlightVerseCompileState::VmCompiled;
+	ScalarChildSeed.Tier = Flight::Vex::EVexTier::Full;
+	ScalarChildSeed.bHasExecutableProcedure = true;
+	ScalarChildSeed.bUsesNativeFallback = true;
+	ScalarChildSeed.FrameInterval = 1;
+	ScalarChildSeed.BoundTypeKey = TypeKey;
+	ScalarChildSeed.BoundTypeStableName = TEXT("FDroidState");
+	ScalarChildSeed.SelectedBackend = TEXT("NativeScalar");
+	ScalarChildSeed.CommittedBackend = TEXT("NativeScalar");
+	ScalarChildSeed.CommitDetail = TEXT("Synthetic scalar-only test behavior.");
+	ScalarChildSeed.LastCompileDiagnostics = TEXT("Synthetic scalar-only test behavior.");
+
+	TArray<uint32> ChildBehaviorIds = { VectorChildBehaviorId, ScalarChildBehaviorId };
+	FString RegistrationErrors;
+	TestTrue(
+		TEXT("Composite capability test sequence should register"),
+		VerseSubsystem->RegisterCompositeSequenceBehavior(CompositeBehaviorId, ChildBehaviorIds, RegistrationErrors, TypeKey));
+	TestTrue(TEXT("Composite capability test registration should not report errors"), RegistrationErrors.IsEmpty());
+
+	const UFlightVerseSubsystem::FVerseBehavior* VectorChild = VerseSubsystem->Behaviors.Find(VectorChildBehaviorId);
+	const UFlightVerseSubsystem::FVerseBehavior* ScalarChild = VerseSubsystem->Behaviors.Find(ScalarChildBehaviorId);
+	const UFlightVerseSubsystem::FVerseBehavior* CompositeBehavior = VerseSubsystem->Behaviors.Find(CompositeBehaviorId);
+	TestNotNull(TEXT("Vector child behavior should exist"), VectorChild);
+	TestNotNull(TEXT("Scalar child behavior should exist"), ScalarChild);
+	TestNotNull(TEXT("Composite behavior should exist"), CompositeBehavior);
+	if (!VectorChild || !ScalarChild || !CompositeBehavior)
+	{
+		return false;
+	}
+
+	TestTrue(TEXT("Vector child should retain NativeSimd as a legal lane"), VectorChild->CapabilityEnvelope.LegalLanes.Contains(TEXT("NativeSimd")));
+	TestTrue(TEXT("Vector child should expose a vector-capable execution shape"), VectorChild->CapabilityEnvelope.ExecutionShape == EFlightBehaviorExecutionShape::VectorPreferred || VectorChild->CapabilityEnvelope.ExecutionShape == EFlightBehaviorExecutionShape::VectorCapable);
+	TestFalse(TEXT("Scalar child should not expose NativeSimd as a legal lane"), ScalarChild->CapabilityEnvelope.LegalLanes.Contains(TEXT("NativeSimd")));
+	TestEqual(TEXT("Scalar child should degrade to a scalar-only execution shape"), ScalarChild->CapabilityEnvelope.ExecutionShape, EFlightBehaviorExecutionShape::ScalarOnly);
+	TestFalse(TEXT("Composite sequence should not retain NativeSimd when one child is scalar-only"), CompositeBehavior->CapabilityEnvelope.LegalLanes.Contains(TEXT("NativeSimd")));
+	TestTrue(TEXT("Composite sequence should retain NativeScalar as a legal lane"), CompositeBehavior->CapabilityEnvelope.LegalLanes.Contains(TEXT("NativeScalar")));
+	TestEqual(TEXT("Composite sequence should aggregate to a scalar-only execution shape"), CompositeBehavior->CapabilityEnvelope.ExecutionShape, EFlightBehaviorExecutionShape::ScalarOnly);
+	TestFalse(TEXT("Composite sequence should keep mixed-lane execution disabled"), CompositeBehavior->CapabilityEnvelope.bAllowsMixedLaneExecution);
+	TestTrue(TEXT("Composite sequence should require a shared type key"), CompositeBehavior->CapabilityEnvelope.bRequiresSharedTypeKey);
+
+	Orchestration->Rebuild();
+	const Flight::Orchestration::FFlightBehaviorRecord* BehaviorRecord = Orchestration->GetReport().Behaviors.FindByPredicate(
+		[CompositeBehaviorId](const Flight::Orchestration::FFlightBehaviorRecord& Candidate)
+		{
+			return Candidate.BehaviorID == CompositeBehaviorId;
+		});
+	TestNotNull(TEXT("Orchestration should surface the composite capability behavior"), BehaviorRecord);
+	if (BehaviorRecord)
+	{
+		TestFalse(TEXT("Composite report should not expose NativeSimd once aggregation removes it"), BehaviorRecord->LegalLanes.Contains(TEXT("NativeSimd")));
+		TestTrue(TEXT("Composite report should preserve NativeScalar legality"), BehaviorRecord->LegalLanes.Contains(TEXT("NativeScalar")));
+		TestEqual(TEXT("Composite report should preserve scalar-only execution shape"), BehaviorRecord->ExecutionShape, FString(TEXT("ScalarOnly")));
+	}
+
+	return true;
+}
+
+bool FFlightVerseCompositeSelectorExecutionTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+
+	UWorld* World = FindAutomationWorld();
+	if (!World)
+	{
+		AddError(TEXT("No valid world context available for composite selector execution test"));
+		return false;
+	}
+
+	UFlightVerseSubsystem* VerseSubsystem = World->GetSubsystem<UFlightVerseSubsystem>();
+	if (!VerseSubsystem)
+	{
+		AddError(TEXT("FlightVerseSubsystem not found"));
+		return false;
+	}
+
+	UFlightOrchestrationSubsystem* Orchestration = World->GetSubsystem<UFlightOrchestrationSubsystem>();
+	if (!Orchestration)
+	{
+		AddError(TEXT("FlightOrchestrationSubsystem not found"));
+		return false;
+	}
+
+	Flight::Vex::TTypeVexRegistry<Flight::Swarm::FDroidState>::Register();
+	const void* TypeKey = Flight::Vex::TTypeVexRegistry<Flight::Swarm::FDroidState>::GetTypeKey();
+	const uint32 SelectorBehaviorId = 19330;
+	const uint32 FailingChildBehaviorId = 19331;
+	const uint32 FallbackChildBehaviorId = 19332;
+
+	UFlightVerseSubsystem::FVerseBehavior& FailingChild = VerseSubsystem->Behaviors.FindOrAdd(FailingChildBehaviorId);
+	FailingChild = UFlightVerseSubsystem::FVerseBehavior();
+	FailingChild.Kind = EFlightVerseBehaviorKind::Atomic;
+	FailingChild.CompileState = EFlightVerseCompileState::VmCompiled;
+	FailingChild.bHasExecutableProcedure = true;
+	FailingChild.FrameInterval = 1;
+	FailingChild.BoundTypeKey = TypeKey;
+	FailingChild.BoundTypeStableName = TEXT("FDroidState");
+	FailingChild.SelectedBackend = TEXT("NativeScalar");
+	FailingChild.CommittedBackend = TEXT("Unknown");
+	FailingChild.LastCompileDiagnostics = TEXT("Synthetic selector failure branch.");
+
+	FFlightBehaviorCompilePolicyRow PolicyRow;
+	PolicyRow.RowName = TEXT("Policy.CompositeSelectorExecutionTest");
+	UFlightVerseSubsystem::FCompilePolicyContext CompilePolicyContext;
+	CompilePolicyContext.ExplicitPolicy = &PolicyRow;
+
+	FString CompileDiagnostics;
+	TestTrue(
+		TEXT("Fallback child behavior should compile"),
+		VerseSubsystem->CompileVex(FallbackChildBehaviorId, TEXT("@cpu { @position = @velocity; }"), CompileDiagnostics, TypeKey, CompilePolicyContext));
+
+	TArray<uint32> ChildBehaviorIds = { FailingChildBehaviorId, FallbackChildBehaviorId };
+	FString RegistrationErrors;
+	TestTrue(
+		TEXT("Composite selector behavior should register"),
+		VerseSubsystem->RegisterCompositeSelectorBehavior(SelectorBehaviorId, ChildBehaviorIds, RegistrationErrors, TypeKey));
+	TestTrue(TEXT("Composite selector registration should not report errors"), RegistrationErrors.IsEmpty());
+
+	Flight::Swarm::FDroidState DroidState;
+	DroidState.Position = FVector3f::ZeroVector;
+	DroidState.Velocity = FVector3f(5.0f, 6.0f, 7.0f);
+
+	VerseSubsystem->ExecuteBehavior(SelectorBehaviorId, DroidState);
+
+	const FVector3f ExpectedPosition(5.0f, 6.0f, 7.0f);
+	TestEqual(TEXT("Composite selector should fall back to the second child after the first branch fails"), DroidState.Position, ExpectedPosition);
+
+	const UFlightVerseSubsystem::FVerseBehavior* SelectorBehavior = VerseSubsystem->Behaviors.Find(SelectorBehaviorId);
+	TestNotNull(TEXT("Composite selector behavior metadata should be registered"), SelectorBehavior);
+	if (!SelectorBehavior)
+	{
+		return false;
+	}
+
+	TestEqual(TEXT("Composite selector should use the selector kind"), SelectorBehavior->Kind, EFlightVerseBehaviorKind::Selector);
+	TestEqual(TEXT("Composite selector should retain the child count"), SelectorBehavior->ChildBehaviorIds.Num(), 2);
+	TestEqual(TEXT("Composite selector should expose a composite bulk backend label"), VerseSubsystem->DescribeBulkExecutionBackend(SelectorBehaviorId), FString(TEXT("CompositeSelector")));
+	TestTrue(TEXT("Composite selector capability envelope should allow mixed-lane execution"), SelectorBehavior->CapabilityEnvelope.bAllowsMixedLaneExecution);
+	TestTrue(TEXT("Composite selector should expose NativeScalar as a legal lane"), SelectorBehavior->CapabilityEnvelope.LegalLanes.Contains(TEXT("NativeScalar")));
+
+	const Flight::Orchestration::FFlightBehaviorRecord* BehaviorRecord = Orchestration->GetReport().Behaviors.FindByPredicate(
+		[SelectorBehaviorId](const Flight::Orchestration::FFlightBehaviorRecord& Candidate)
+		{
+			return Candidate.BehaviorID == SelectorBehaviorId;
+		});
+	TestNotNull(TEXT("Orchestration report should surface the composite selector behavior"), BehaviorRecord);
+	if (BehaviorRecord)
+	{
+		TestTrue(TEXT("Composite selector report should mark the behavior as composite"), BehaviorRecord->bIsComposite);
+		TestEqual(TEXT("Composite selector report should record the selector operator"), BehaviorRecord->CompositeOperator, FString(TEXT("Selector")));
+		TestTrue(TEXT("Composite selector report should allow mixed-lane execution"), BehaviorRecord->bAllowsMixedLaneExecution);
+		TestTrue(TEXT("Composite selector report should preserve NativeScalar legality"), BehaviorRecord->LegalLanes.Contains(TEXT("NativeScalar")));
+	}
+
+	const FString ReportJson = Orchestration->BuildReportJson();
+	TestTrue(TEXT("Orchestration JSON report should be available for composite selector"), !ReportJson.IsEmpty());
+
+	TSharedPtr<FJsonObject> RootObject;
+	const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ReportJson);
+	const bool bParsed = FJsonSerializer::Deserialize(Reader, RootObject) && RootObject.IsValid();
+	TestTrue(TEXT("Composite selector orchestration JSON should deserialize"), bParsed);
+	if (bParsed && RootObject.IsValid())
+	{
+		const TArray<TSharedPtr<FJsonValue>>* BehaviorValues = nullptr;
+		TestTrue(TEXT("Composite selector JSON should contain behaviors"), RootObject->TryGetArrayField(TEXT("behaviors"), BehaviorValues));
+		bool bFoundSelectorJsonRecord = false;
+		if (BehaviorValues)
+		{
+			for (const TSharedPtr<FJsonValue>& Value : *BehaviorValues)
+			{
+				const TSharedPtr<FJsonObject> BehaviorObject = Value.IsValid() ? Value->AsObject() : nullptr;
+				if (!BehaviorObject.IsValid())
+				{
+					continue;
+				}
+
+				double BehaviorId = 0.0;
+				if (!BehaviorObject->TryGetNumberField(TEXT("behaviorId"), BehaviorId) || static_cast<uint32>(BehaviorId) != SelectorBehaviorId)
+				{
+					continue;
+				}
+
+				FString CompositeOperator;
+				bool bAllowsMixedLaneExecution = false;
+				TestTrue(TEXT("Composite selector JSON should include compositeOperator"), BehaviorObject->TryGetStringField(TEXT("compositeOperator"), CompositeOperator));
+				TestTrue(TEXT("Composite selector JSON should include allowsMixedLaneExecution"), BehaviorObject->TryGetBoolField(TEXT("allowsMixedLaneExecution"), bAllowsMixedLaneExecution));
+				TestEqual(TEXT("Composite selector JSON should expose the selector operator"), CompositeOperator, FString(TEXT("Selector")));
+				TestTrue(TEXT("Composite selector JSON should preserve mixed-lane allowance"), bAllowsMixedLaneExecution);
+				bFoundSelectorJsonRecord = true;
+				break;
+			}
+		}
+		TestTrue(TEXT("Composite selector JSON should contain the selector behavior record"), bFoundSelectorJsonRecord);
+	}
+
+	return true;
+}
+
+bool FFlightVerseCompositeSelectorCapabilityEnvelopeTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+
+	UWorld* World = FindAutomationWorld();
+	if (!World)
+	{
+		AddError(TEXT("No valid world context available for composite selector capability envelope test"));
+		return false;
+	}
+
+	UFlightVerseSubsystem* VerseSubsystem = World->GetSubsystem<UFlightVerseSubsystem>();
+	if (!VerseSubsystem)
+	{
+		AddError(TEXT("FlightVerseSubsystem not found"));
+		return false;
+	}
+
+	UFlightOrchestrationSubsystem* Orchestration = World->GetSubsystem<UFlightOrchestrationSubsystem>();
+	if (!Orchestration)
+	{
+		AddError(TEXT("FlightOrchestrationSubsystem not found"));
+		return false;
+	}
+
+	Flight::Vex::TTypeVexRegistry<Flight::Swarm::FDroidState>::Register();
+	const void* TypeKey = Flight::Vex::TTypeVexRegistry<Flight::Swarm::FDroidState>::GetTypeKey();
+	const uint32 SelectorBehaviorId = 19340;
+	const uint32 VectorChildBehaviorId = 19341;
+	const uint32 ScalarChildBehaviorId = 19342;
+
+	UFlightVerseSubsystem::FVerseBehavior& VectorChildSeed = VerseSubsystem->Behaviors.FindOrAdd(VectorChildBehaviorId);
+	VectorChildSeed = UFlightVerseSubsystem::FVerseBehavior();
+	VectorChildSeed.Kind = EFlightVerseBehaviorKind::Atomic;
+	VectorChildSeed.CompileState = EFlightVerseCompileState::VmCompiled;
+	VectorChildSeed.Tier = Flight::Vex::EVexTier::Literal;
+	VectorChildSeed.bHasExecutableProcedure = true;
+	VectorChildSeed.bUsesNativeFallback = true;
+	VectorChildSeed.FrameInterval = 1;
+	VectorChildSeed.BoundTypeKey = TypeKey;
+	VectorChildSeed.BoundTypeStableName = TEXT("FDroidState");
+	VectorChildSeed.SelectedBackend = TEXT("NativeSimd");
+	VectorChildSeed.CommittedBackend = TEXT("NativeScalar");
+	VectorChildSeed.CommitDetail = TEXT("Synthetic vector-capable selector child.");
+	VectorChildSeed.LastCompileDiagnostics = TEXT("Synthetic vector-capable selector child.");
+	VectorChildSeed.SimdPlan = MakeShared<Flight::Vex::FVexSimdExecutor>();
+
+	UFlightVerseSubsystem::FVerseBehavior& ScalarChildSeed = VerseSubsystem->Behaviors.FindOrAdd(ScalarChildBehaviorId);
+	ScalarChildSeed = UFlightVerseSubsystem::FVerseBehavior();
+	ScalarChildSeed.Kind = EFlightVerseBehaviorKind::Atomic;
+	ScalarChildSeed.CompileState = EFlightVerseCompileState::VmCompiled;
+	ScalarChildSeed.Tier = Flight::Vex::EVexTier::Full;
+	ScalarChildSeed.bHasExecutableProcedure = true;
+	ScalarChildSeed.bUsesNativeFallback = true;
+	ScalarChildSeed.FrameInterval = 1;
+	ScalarChildSeed.BoundTypeKey = TypeKey;
+	ScalarChildSeed.BoundTypeStableName = TEXT("FDroidState");
+	ScalarChildSeed.SelectedBackend = TEXT("NativeScalar");
+	ScalarChildSeed.CommittedBackend = TEXT("NativeScalar");
+	ScalarChildSeed.CommitDetail = TEXT("Synthetic scalar-only selector child.");
+	ScalarChildSeed.LastCompileDiagnostics = TEXT("Synthetic scalar-only selector child.");
+
+	TArray<uint32> ChildBehaviorIds = { VectorChildBehaviorId, ScalarChildBehaviorId };
+	FString RegistrationErrors;
+	TestTrue(
+		TEXT("Composite selector capability behavior should register"),
+		VerseSubsystem->RegisterCompositeSelectorBehavior(SelectorBehaviorId, ChildBehaviorIds, RegistrationErrors, TypeKey));
+	TestTrue(TEXT("Composite selector capability registration should not report errors"), RegistrationErrors.IsEmpty());
+
+	const UFlightVerseSubsystem::FVerseBehavior* SelectorBehavior = VerseSubsystem->Behaviors.Find(SelectorBehaviorId);
+	TestNotNull(TEXT("Composite selector capability behavior should exist"), SelectorBehavior);
+	if (!SelectorBehavior)
+	{
+		return false;
+	}
+
+	TestTrue(TEXT("Composite selector should retain NativeSimd as a legal lane"), SelectorBehavior->CapabilityEnvelope.LegalLanes.Contains(TEXT("NativeSimd")));
+	TestTrue(TEXT("Composite selector should retain NativeScalar as a legal lane"), SelectorBehavior->CapabilityEnvelope.LegalLanes.Contains(TEXT("NativeScalar")));
+	TestEqual(TEXT("Composite selector should aggregate to a shape-agnostic execution shape when branches disagree"), SelectorBehavior->CapabilityEnvelope.ExecutionShape, EFlightBehaviorExecutionShape::ShapeAgnostic);
+	TestTrue(TEXT("Composite selector should allow mixed-lane execution"), SelectorBehavior->CapabilityEnvelope.bAllowsMixedLaneExecution);
+	TestTrue(TEXT("Composite selector should require a shared type key"), SelectorBehavior->CapabilityEnvelope.bRequiresSharedTypeKey);
+
+	Orchestration->Rebuild();
+	const Flight::Orchestration::FFlightBehaviorRecord* BehaviorRecord = Orchestration->GetReport().Behaviors.FindByPredicate(
+		[SelectorBehaviorId](const Flight::Orchestration::FFlightBehaviorRecord& Candidate)
+		{
+			return Candidate.BehaviorID == SelectorBehaviorId;
+		});
+	TestNotNull(TEXT("Orchestration should surface the selector capability behavior"), BehaviorRecord);
+	if (BehaviorRecord)
+	{
+		TestTrue(TEXT("Selector capability report should preserve NativeSimd legality"), BehaviorRecord->LegalLanes.Contains(TEXT("NativeSimd")));
+		TestTrue(TEXT("Selector capability report should preserve NativeScalar legality"), BehaviorRecord->LegalLanes.Contains(TEXT("NativeScalar")));
+		TestEqual(TEXT("Selector capability report should preserve shape-agnostic execution shape"), BehaviorRecord->ExecutionShape, FString(TEXT("ShapeAgnostic")));
+		TestTrue(TEXT("Selector capability report should preserve mixed-lane allowance"), BehaviorRecord->bAllowsMixedLaneExecution);
+	}
+
+	return true;
+}
+
+bool FFlightVerseGuardedCompositeSelectorExecutionTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+
+	UWorld* World = FindAutomationWorld();
+	if (!World)
+	{
+		AddError(TEXT("No valid world context available for guarded composite selector execution test"));
+		return false;
+	}
+
+	UFlightVerseSubsystem* VerseSubsystem = World->GetSubsystem<UFlightVerseSubsystem>();
+	if (!VerseSubsystem)
+	{
+		AddError(TEXT("FlightVerseSubsystem not found"));
+		return false;
+	}
+
+	UFlightOrchestrationSubsystem* Orchestration = World->GetSubsystem<UFlightOrchestrationSubsystem>();
+	if (!Orchestration)
+	{
+		AddError(TEXT("FlightOrchestrationSubsystem not found"));
+		return false;
+	}
+
+	Flight::Vex::TTypeVexRegistry<Flight::Swarm::FDroidState>::Register();
+	const void* TypeKey = Flight::Vex::TTypeVexRegistry<Flight::Swarm::FDroidState>::GetTypeKey();
+	const uint32 SelectorBehaviorId = 19350;
+	const uint32 GuardedChildBehaviorId = 19351;
+	const uint32 FallbackChildBehaviorId = 19352;
+
+	FFlightBehaviorCompilePolicyRow PolicyRow;
+	PolicyRow.RowName = TEXT("Policy.GuardedCompositeSelectorExecutionTest");
+	UFlightVerseSubsystem::FCompilePolicyContext CompilePolicyContext;
+	CompilePolicyContext.ExplicitPolicy = &PolicyRow;
+
+	FString CompileDiagnostics;
+	TestTrue(
+		TEXT("Guarded child behavior should compile"),
+		VerseSubsystem->CompileVex(GuardedChildBehaviorId, TEXT("@cpu { @position = @velocity; }"), CompileDiagnostics, TypeKey, CompilePolicyContext));
+	TestTrue(
+		TEXT("Fallback child behavior should compile"),
+		VerseSubsystem->CompileVex(FallbackChildBehaviorId, TEXT("@cpu { @velocity = @position; }"), CompileDiagnostics, TypeKey, CompilePolicyContext));
+
+	UFlightVerseSubsystem::FSelectorBranchGuard ShieldLowGuard;
+	ShieldLowGuard.SymbolName = TEXT("@shield");
+	ShieldLowGuard.Comparison = EFlightBehaviorGuardComparison::Less;
+	ShieldLowGuard.ScalarValue = 10.0f;
+
+	UFlightVerseSubsystem::FCompositeSelectorBranchSpec GuardedBranch;
+	GuardedBranch.BehaviorID = GuardedChildBehaviorId;
+	GuardedBranch.bHasGuard = true;
+	GuardedBranch.Guard = ShieldLowGuard;
+
+	UFlightVerseSubsystem::FCompositeSelectorBranchSpec FallbackBranch;
+	FallbackBranch.BehaviorID = FallbackChildBehaviorId;
+
+	TArray<UFlightVerseSubsystem::FCompositeSelectorBranchSpec> BranchSpecs = { GuardedBranch, FallbackBranch };
+	FString RegistrationErrors;
+	TestTrue(
+		TEXT("Guarded composite selector should register"),
+		VerseSubsystem->RegisterGuardedCompositeSelectorBehavior(SelectorBehaviorId, BranchSpecs, RegistrationErrors, TypeKey));
+	TestTrue(TEXT("Guarded composite selector registration should not report errors"), RegistrationErrors.IsEmpty());
+
+	Flight::Swarm::FDroidState GuardRejectedState;
+	GuardRejectedState.Position = FVector3f(7.0f, 8.0f, 9.0f);
+	GuardRejectedState.Velocity = FVector3f(3.0f, 4.0f, 5.0f);
+	GuardRejectedState.Shield = 100.0f;
+	VerseSubsystem->ExecuteBehavior(SelectorBehaviorId, GuardRejectedState);
+	TestEqual(
+		TEXT("Guarded selector should leave position untouched when the first branch guard rejects"),
+		GuardRejectedState.Position,
+		FVector3f(7.0f, 8.0f, 9.0f));
+	TestEqual(
+		TEXT("Guarded selector should execute the fallback branch when the first branch guard rejects"),
+		GuardRejectedState.Velocity,
+		FVector3f(7.0f, 8.0f, 9.0f));
+
+	const Flight::Orchestration::FFlightBehaviorRecord* RejectedBehaviorRecord = Orchestration->GetReport().Behaviors.FindByPredicate(
+		[SelectorBehaviorId](const Flight::Orchestration::FFlightBehaviorRecord& Candidate)
+		{
+			return Candidate.BehaviorID == SelectorBehaviorId;
+		});
+	TestNotNull(TEXT("Guarded selector should report the rejected-guard execution"), RejectedBehaviorRecord);
+	if (RejectedBehaviorRecord)
+	{
+		TestTrue(TEXT("Rejected-guard execution should be marked as a recent execution"), RejectedBehaviorRecord->bHasLastExecutionResult);
+		TestTrue(TEXT("Rejected-guard execution should still succeed through fallback"), RejectedBehaviorRecord->bLastExecutionSucceeded);
+		TestTrue(TEXT("Rejected-guard execution should commit through fallback"), RejectedBehaviorRecord->bLastExecutionCommitted);
+		TestEqual(TEXT("Rejected-guard execution should report the fallback child as selected"), RejectedBehaviorRecord->LastSelectedChildBehaviorId, FallbackChildBehaviorId);
+		TestTrue(
+			TEXT("Rejected-guard execution should report a false guard outcome"),
+			RejectedBehaviorRecord->LastGuardOutcomes.ContainsByPredicate([](const FString& Entry)
+			{
+				return Entry.Contains(TEXT("evaluated false"));
+			}));
+		TestTrue(
+			TEXT("Rejected-guard execution commit detail should include branch evidence"),
+			RejectedBehaviorRecord->CommitDetail.Contains(TEXT("BranchEvidence=[")));
+	}
+
+	Flight::Swarm::FDroidState GuardPassedState;
+	GuardPassedState.Position = FVector3f::ZeroVector;
+	GuardPassedState.Velocity = FVector3f(1.0f, 2.0f, 3.0f);
+	GuardPassedState.Shield = 5.0f;
+	VerseSubsystem->ExecuteBehavior(SelectorBehaviorId, GuardPassedState);
+	TestEqual(
+		TEXT("Guarded selector should choose the guarded branch when the guard passes"),
+		GuardPassedState.Position,
+		FVector3f(1.0f, 2.0f, 3.0f));
+	TestEqual(
+		TEXT("Guarded selector should not execute the fallback branch when the guard passes"),
+		GuardPassedState.Velocity,
+		FVector3f(1.0f, 2.0f, 3.0f));
+
+	const UFlightVerseSubsystem::FVerseBehavior* SelectorBehavior = VerseSubsystem->Behaviors.Find(SelectorBehaviorId);
+	TestNotNull(TEXT("Guarded selector behavior metadata should exist"), SelectorBehavior);
+	if (!SelectorBehavior)
+	{
+		return false;
+	}
+
+	TestEqual(TEXT("Guarded selector should retain branch metadata"), SelectorBehavior->SelectorBranches.Num(), 2);
+	TestTrue(TEXT("Guarded selector should retain the first branch guard"), SelectorBehavior->SelectorBranches[0].bHasGuard);
+	TestTrue(TEXT("Guarded selector should record the latest execution truth"), SelectorBehavior->bHasLastExecutionResult);
+	TestTrue(TEXT("Guarded selector should record the latest execution as succeeded"), SelectorBehavior->bLastExecutionSucceeded);
+	TestTrue(TEXT("Guarded selector should record the latest execution as committed"), SelectorBehavior->bLastExecutionCommitted);
+	TestEqual(TEXT("Guarded selector should record the guarded child as the latest selected branch"), SelectorBehavior->LastSelectedChildBehaviorId, GuardedChildBehaviorId);
+	TestTrue(
+		TEXT("Guarded selector should record a true guard outcome"),
+		SelectorBehavior->LastGuardOutcomes.ContainsByPredicate([](const FString& Entry)
+		{
+			return Entry.Contains(TEXT("evaluated true"));
+		}));
+
+	const Flight::Orchestration::FFlightBehaviorRecord* BehaviorRecord = Orchestration->GetReport().Behaviors.FindByPredicate(
+		[SelectorBehaviorId](const Flight::Orchestration::FFlightBehaviorRecord& Candidate)
+		{
+			return Candidate.BehaviorID == SelectorBehaviorId;
+		});
+	TestNotNull(TEXT("Guarded selector should appear in orchestration reports"), BehaviorRecord);
+	if (BehaviorRecord)
+	{
+		TestEqual(TEXT("Guarded selector report should preserve the selector operator"), BehaviorRecord->CompositeOperator, FString(TEXT("Selector")));
+		TestTrue(TEXT("Guarded selector report should expose guard summaries"), BehaviorRecord->GuardSummaries.Num() == 1);
+		TestTrue(TEXT("Guarded selector report should expose last execution truth"), BehaviorRecord->bHasLastExecutionResult);
+		TestTrue(TEXT("Guarded selector report should retain the guarded branch as the latest selected child"), BehaviorRecord->LastSelectedChildBehaviorId == GuardedChildBehaviorId);
+		TestTrue(
+			TEXT("Guarded selector report should expose the latest guard outcome"),
+			BehaviorRecord->LastGuardOutcomes.ContainsByPredicate([](const FString& Entry)
+			{
+				return Entry.Contains(TEXT("evaluated true"));
+			}));
+		TestTrue(TEXT("Guarded selector report should retain the latest execution detail"), BehaviorRecord->LastExecutionDetail.Contains(TEXT("chose child behavior")));
+		TestTrue(TEXT("Guarded selector report should retain selector branch evidence in commit detail"), BehaviorRecord->CommitDetail.Contains(TEXT("GuardOutcomes=[")));
+		if (BehaviorRecord->GuardSummaries.Num() == 1)
+		{
+			TestTrue(TEXT("Guard summary should mention the shield guard"), BehaviorRecord->GuardSummaries[0].Contains(TEXT("@shield")));
+		}
+	}
+
+	const FString ReportJson = Orchestration->BuildReportJson();
+	TestTrue(TEXT("Guarded selector orchestration JSON should be available"), !ReportJson.IsEmpty());
+
+	TSharedPtr<FJsonObject> RootObject;
+	const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ReportJson);
+	const bool bParsed = FJsonSerializer::Deserialize(Reader, RootObject) && RootObject.IsValid();
+	TestTrue(TEXT("Guarded selector orchestration JSON should deserialize"), bParsed);
+	if (bParsed && RootObject.IsValid())
+	{
+		const TArray<TSharedPtr<FJsonValue>>* BehaviorValues = nullptr;
+		TestTrue(TEXT("Guarded selector JSON should contain behaviors"), RootObject->TryGetArrayField(TEXT("behaviors"), BehaviorValues));
+		bool bFoundGuardedSelectorJsonRecord = false;
+		if (BehaviorValues)
+		{
+			for (const TSharedPtr<FJsonValue>& Value : *BehaviorValues)
+			{
+				const TSharedPtr<FJsonObject> BehaviorObject = Value.IsValid() ? Value->AsObject() : nullptr;
+				if (!BehaviorObject.IsValid())
+				{
+					continue;
+				}
+
+				double BehaviorId = 0.0;
+				if (!BehaviorObject->TryGetNumberField(TEXT("behaviorId"), BehaviorId) || static_cast<uint32>(BehaviorId) != SelectorBehaviorId)
+				{
+					continue;
+				}
+
+				const TArray<TSharedPtr<FJsonValue>>* GuardSummaries = nullptr;
+				TestTrue(TEXT("Guarded selector JSON should include guardSummaries"), BehaviorObject->TryGetArrayField(TEXT("guardSummaries"), GuardSummaries));
+				TestTrue(TEXT("Guarded selector JSON should contain one guard summary"), GuardSummaries && GuardSummaries->Num() == 1);
+				bool bHasLastExecutionResult = false;
+				bool bLastExecutionCommitted = false;
+				double LastSelectedChildBehaviorId = 0.0;
+				const TArray<TSharedPtr<FJsonValue>>* LastGuardOutcomes = nullptr;
+				FString LastExecutionDetail;
+				TestTrue(TEXT("Guarded selector JSON should include hasLastExecutionResult"), BehaviorObject->TryGetBoolField(TEXT("hasLastExecutionResult"), bHasLastExecutionResult));
+				TestTrue(TEXT("Guarded selector JSON should include lastExecutionCommitted"), BehaviorObject->TryGetBoolField(TEXT("lastExecutionCommitted"), bLastExecutionCommitted));
+				TestTrue(TEXT("Guarded selector JSON should include lastSelectedChildBehaviorId"), BehaviorObject->TryGetNumberField(TEXT("lastSelectedChildBehaviorId"), LastSelectedChildBehaviorId));
+				TestTrue(TEXT("Guarded selector JSON should include lastGuardOutcomes"), BehaviorObject->TryGetArrayField(TEXT("lastGuardOutcomes"), LastGuardOutcomes));
+				TestTrue(TEXT("Guarded selector JSON should include lastExecutionDetail"), BehaviorObject->TryGetStringField(TEXT("lastExecutionDetail"), LastExecutionDetail));
+				TestTrue(TEXT("Guarded selector JSON should report a recent execution"), bHasLastExecutionResult);
+				TestTrue(TEXT("Guarded selector JSON should report a committed execution"), bLastExecutionCommitted);
+				TestEqual(TEXT("Guarded selector JSON should report the guarded child as the latest selected child"), static_cast<uint32>(LastSelectedChildBehaviorId), GuardedChildBehaviorId);
+				TestTrue(
+					TEXT("Guarded selector JSON should include a true guard outcome"),
+					LastGuardOutcomes && LastGuardOutcomes->ContainsByPredicate([](const TSharedPtr<FJsonValue>& Entry)
+					{
+						return Entry.IsValid() && Entry->AsString().Contains(TEXT("evaluated true"));
+					}));
+				TestTrue(TEXT("Guarded selector JSON should retain the latest execution detail"), LastExecutionDetail.Contains(TEXT("chose child behavior")));
+				bFoundGuardedSelectorJsonRecord = true;
+				break;
+			}
+		}
+		TestTrue(TEXT("Guarded selector JSON should contain the guarded selector behavior record"), bFoundGuardedSelectorJsonRecord);
+	}
+
+	return true;
+}
+
+bool FFlightVerseGuardedCompositeSelectorRegistrationFailureTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+
+	UWorld* World = FindAutomationWorld();
+	if (!World)
+	{
+		AddError(TEXT("No valid world context available for guarded composite selector registration failure test"));
+		return false;
+	}
+
+	UFlightVerseSubsystem* VerseSubsystem = World->GetSubsystem<UFlightVerseSubsystem>();
+	if (!VerseSubsystem)
+	{
+		AddError(TEXT("FlightVerseSubsystem not found"));
+		return false;
+	}
+
+	Flight::Vex::TTypeVexRegistry<Flight::Swarm::FDroidState>::Register();
+	const void* TypeKey = Flight::Vex::TTypeVexRegistry<Flight::Swarm::FDroidState>::GetTypeKey();
+	const uint32 SelectorBehaviorId = 19360;
+	const uint32 ChildBehaviorId = 19361;
+
+	UFlightVerseSubsystem::FVerseBehavior& ChildBehavior = VerseSubsystem->Behaviors.FindOrAdd(ChildBehaviorId);
+	ChildBehavior = UFlightVerseSubsystem::FVerseBehavior();
+	ChildBehavior.Kind = EFlightVerseBehaviorKind::Atomic;
+	ChildBehavior.CompileState = EFlightVerseCompileState::VmCompiled;
+	ChildBehavior.bHasExecutableProcedure = true;
+	ChildBehavior.bUsesNativeFallback = true;
+	ChildBehavior.FrameInterval = 1;
+	ChildBehavior.BoundTypeKey = TypeKey;
+	ChildBehavior.BoundTypeStableName = TEXT("FDroidState");
+	ChildBehavior.SelectedBackend = TEXT("NativeScalar");
+	ChildBehavior.CommittedBackend = TEXT("NativeScalar");
+
+	UFlightVerseSubsystem::FCompositeSelectorBranchSpec InvalidBranch;
+	InvalidBranch.BehaviorID = ChildBehaviorId;
+	InvalidBranch.bHasGuard = true;
+	InvalidBranch.Guard.SymbolName = TEXT("@missing_symbol");
+	InvalidBranch.Guard.Comparison = EFlightBehaviorGuardComparison::Greater;
+	InvalidBranch.Guard.ScalarValue = 1.0f;
+
+	TArray<UFlightVerseSubsystem::FCompositeSelectorBranchSpec> BranchSpecs = { InvalidBranch };
+	FString RegistrationErrors;
+	const bool bRegistered = VerseSubsystem->RegisterGuardedCompositeSelectorBehavior(SelectorBehaviorId, BranchSpecs, RegistrationErrors, TypeKey);
+	TestFalse(TEXT("Guarded selector registration should fail when the guard symbol is not readable"), bRegistered);
+	TestTrue(TEXT("Guarded selector registration failure should mention the missing guard symbol"), RegistrationErrors.Contains(TEXT("@missing_symbol")));
+
+	return true;
+}
+
+bool FFlightVerseCompositeSequenceRegistrationFailureTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+
+	UWorld* World = FindAutomationWorld();
+	if (!World)
+	{
+		AddError(TEXT("No valid world context available for composite sequence registration failure test"));
+		return false;
+	}
+
+	UFlightVerseSubsystem* VerseSubsystem = World->GetSubsystem<UFlightVerseSubsystem>();
+	if (!VerseSubsystem)
+	{
+		AddError(TEXT("FlightVerseSubsystem not found"));
+		return false;
+	}
+
+	Flight::Vex::TTypeVexRegistry<Flight::Swarm::FDroidState>::Register();
+	const void* TypeKey = Flight::Vex::TTypeVexRegistry<Flight::Swarm::FDroidState>::GetTypeKey();
+	const uint32 MissingCompositeBehaviorId = 19310;
+
+	TArray<uint32> MissingChildBehaviorIds = { 999999u };
+	FString RegistrationErrors;
+	const bool bRegistered = VerseSubsystem->RegisterCompositeSequenceBehavior(MissingCompositeBehaviorId, MissingChildBehaviorIds, RegistrationErrors, TypeKey);
+	TestFalse(TEXT("Composite sequence registration should fail when a child behavior is missing"), bRegistered);
+	TestTrue(TEXT("Composite sequence registration failure should explain the missing child"), RegistrationErrors.Contains(TEXT("missing child behavior")));
+
+	const UFlightVerseSubsystem::FVerseBehavior* MissingCompositeBehavior = VerseSubsystem->Behaviors.Find(MissingCompositeBehaviorId);
+	TestNull(TEXT("Failed composite registration should not persist a behavior record"), MissingCompositeBehavior);
 
 	return true;
 }

@@ -8,6 +8,7 @@ It is a reference frame for understanding what the project is becoming, what has
 For project organization, see `Docs/Architecture/ProjectOrganization.md`.
 For world-scoped coordination, see `Docs/Architecture/OrchestrationSubsystem.md`.
 For the VEX mutation-centered compiler frame, see `Docs/Architecture/VexStateMutationSchemaFrame.md`.
+For the current direction on composite behaviors as behavior-owned execution graphs, see `Docs/Architecture/BehaviorComposition.md`.
 For active implementation work, see `Docs/Workflow/CurrentFocus.md`.
 
 ## 1. Short Version

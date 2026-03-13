@@ -111,6 +111,27 @@ struct FLIGHTPROJECT_API FFlightCompileBackendReport
 	TArray<FString> Reasons;
 };
 
+struct FLIGHTPROJECT_API FFlightCompileVectorSymbolReport
+{
+	FString SymbolName;
+	FString ValueType;
+	FString StorageKind;
+	FString VectorStorageClass;
+	FString HighestLegalClass;
+	TArray<FString> LegalBackends;
+	TArray<FString> Reasons;
+};
+
+struct FLIGHTPROJECT_API FFlightCompileFragmentRequirementReport
+{
+	FString FragmentType;
+	FString StorageKind;
+	TArray<FString> ReadSymbols;
+	TArray<FString> WrittenSymbols;
+	bool bSupportedByCurrentDirectProcessor = false;
+	FString CurrentDirectProcessorSupportReason;
+};
+
 struct FLIGHTPROJECT_API FFlightCompileArtifactReport
 {
 	FString SchemaVersion = TEXT("0.1");
@@ -145,6 +166,8 @@ struct FLIGHTPROJECT_API FFlightCompileArtifactReport
 	TArray<FString> ImportedSymbols;
 	TArray<FString> ExportedSymbols;
 	TArray<FString> ReferencedStorageKinds;
+	TArray<FFlightCompileFragmentRequirementReport> FragmentRequirementReports;
+	TArray<FFlightCompileVectorSymbolReport> VectorSymbolReports;
 	TArray<FString> PolicyRequiredContracts;
 	TArray<FString> PolicyRequiredSymbols;
 	int32 BoundaryOperatorCount = 0;

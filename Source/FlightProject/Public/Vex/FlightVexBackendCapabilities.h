@@ -17,6 +17,7 @@ enum class EVexBackendKind : uint8
 {
 	NativeScalar,
 	NativeSimd,
+	NativeAvx256x8,
 	VerseVm,
 	GpuKernel
 };
@@ -63,6 +64,7 @@ struct FLIGHTPROJECT_API FVexBackendCapabilityProfile
 	TSet<EFlightVexSymbolResidency> AllowedResidencies;
 	TSet<EFlightVexSymbolAffinity> AllowedAffinities;
 	TSet<EVexStorageKind> SupportedStorageKinds;
+	TSet<EVexVectorStorageClass> SupportedVectorStorageClasses;
 };
 
 struct FLIGHTPROJECT_API FVexSymbolBackendCompatibility
@@ -70,6 +72,7 @@ struct FLIGHTPROJECT_API FVexSymbolBackendCompatibility
 	FString SymbolName;
 	EVexSchemaAccessKind AccessKind;
 	EVexBackendKind Backend = EVexBackendKind::NativeScalar;
+	EVexVectorStorageClass VectorStorageClass = EVexVectorStorageClass::None;
 	EVexBackendDecision Decision = EVexBackendDecision::Rejected;
 	bool bPreferredFastLane = false;
 	FString Reason;
@@ -103,6 +106,7 @@ struct FLIGHTPROJECT_API FVexBackendSelection
 
 FLIGHTPROJECT_API const FVexBackendCapabilityProfile& GetNativeScalarBackendProfile();
 FLIGHTPROJECT_API const FVexBackendCapabilityProfile& GetNativeSimdBackendProfile();
+FLIGHTPROJECT_API const FVexBackendCapabilityProfile& GetNativeAvx256x8BackendProfile();
 FLIGHTPROJECT_API const FVexBackendCapabilityProfile& GetVerseVmBackendProfile();
 FLIGHTPROJECT_API const FVexBackendCapabilityProfile& GetGpuKernelBackendProfile();
 

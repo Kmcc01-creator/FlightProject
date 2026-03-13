@@ -9,6 +9,7 @@
 #include "Orchestration/FlightOrchestrationSubsystem.h"
 #include "Swarm/FlightSwarmSubsystem.h"
 #include "Swarm/SwarmSimulationTypes.h"
+#include "Verse/FlightVerseMassHostBundle.h"
 #include "Verse/UFlightVerseSubsystem.h"
 #include "Verse/UFlightVexTaskSubsystem.h"
 
@@ -16,6 +17,75 @@ namespace
 {
 
 const FName DefaultSwarmCohortName(TEXT("Swarm.Default"));
+
+template <typename TFragment>
+FMassFragmentHostView MakeChunkFragmentHostView(
+	TArrayView<TFragment> Fragments,
+	const FName FragmentType,
+	const bool bWritable = true,
+	FMassFragmentHostView::FPostWriteFn PostWrite = {})
+{
+	FMassFragmentHostView View;
+	View.FragmentType = FragmentType;
+	View.BasePtr = reinterpret_cast<uint8*>(Fragments.GetData());
+	View.FragmentStride = sizeof(TFragment);
+	View.EntityCount = Fragments.Num();
+	View.bWritable = bWritable;
+	View.PostWrite = MoveTemp(PostWrite);
+	return View;
+}
+
+bool BuildDirectFragmentViewsForBehavior(
+	const UFlightVerseSubsystem::FVerseBehavior& Behavior,
+	FMassExecutionContext& ChunkContext,
+	TArray<FMassFragmentHostView>& OutViews)
+{
+	OutViews.Reset();
+
+	if (!Behavior.SchemaBinding.IsSet())
+	{
+		return false;
+	}
+
+	for (const Flight::Vex::FVexSchemaFragmentBinding& FragmentBinding : Behavior.SchemaBinding->FragmentBindings)
+	{
+		if (FragmentBinding.StorageKind != Flight::Vex::EVexStorageKind::MassFragmentField
+			|| FragmentBinding.FragmentType.IsNone())
+		{
+			return false;
+		}
+
+		const bool bWritable = FragmentBinding.WrittenSymbols.Num() > 0;
+		if (FragmentBinding.FragmentType == TEXT("FFlightTransformFragment"))
+		{
+			OutViews.Add(MakeChunkFragmentHostView(
+				ChunkContext.GetMutableFragmentView<FFlightTransformFragment>(),
+				FragmentBinding.FragmentType,
+				bWritable));
+			continue;
+		}
+
+		if (FragmentBinding.FragmentType == TEXT("FFlightDroidStateFragment"))
+		{
+			OutViews.Add(MakeChunkFragmentHostView(
+				ChunkContext.GetMutableFragmentView<FFlightDroidStateFragment>(),
+				FragmentBinding.FragmentType,
+				bWritable,
+				[](uint8* FragmentPtr)
+				{
+					if (FFlightDroidStateFragment* DroidState = reinterpret_cast<FFlightDroidStateFragment*>(FragmentPtr))
+					{
+						DroidState->bIsDirty = true;
+					}
+				}));
+			continue;
+		}
+
+		return false;
+	}
+
+	return OutViews.Num() > 0;
+}
 
 bool IsBehaviorExecutable(const UFlightVerseSubsystem::FVerseBehavior& Behavior)
 {
@@ -187,9 +257,13 @@ void UFlightVexBehaviorProcessor::Execute(FMassEntityManager& EntityManager, FMa
 		const TArrayView<::FFlightDroidStateFragment> DroidStates = ChunkContext.GetMutableFragmentView<::FFlightDroidStateFragment>();
 		const int32 NumEntities = ChunkContext.GetNumEntities();
 
-		if (Behavior->Tier == Flight::Vex::EVexTier::Literal && Behavior->SimdPlan.IsValid())
+		TArray<FMassFragmentHostView> DirectFragmentViews;
+		const bool bHasDirectFragmentViews = BuildDirectFragmentViewsForBehavior(*Behavior, ChunkContext, DirectFragmentViews);
+		if (Behavior->Tier == Flight::Vex::EVexTier::Literal
+			&& Behavior->SimdPlan.IsValid()
+			&& bHasDirectFragmentViews)
 		{
-			VerseSubsystem->ExecuteBehaviorDirect(BehaviorID, Transforms, DroidStates);
+			VerseSubsystem->ExecuteBehaviorDirect(BehaviorID, DirectFragmentViews);
 			SwarmSubsystem->RequestSort(ESwarmSortRequirement::Behavior);
 			return;
 		}

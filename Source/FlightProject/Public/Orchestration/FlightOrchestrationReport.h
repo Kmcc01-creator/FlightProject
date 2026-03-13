@@ -80,11 +80,51 @@ struct FLIGHTPROJECT_API FFlightStartupProfileReport
 	TArray<Flight::Startup::FFlightStartupStageReport> Stages;
 };
 
+struct FLIGHTPROJECT_API FFlightSimdFeatureFlags
+{
+	bool bSse42 = false;
+	bool bAvx = false;
+	bool bAvx2 = false;
+	bool bAvx512F = false;
+	bool bAvx512Bw = false;
+	bool bAvx512Vl = false;
+	bool bAvx512Vnni = false;
+	bool bAvxVnni = false;
+	bool bAvx512Bf16 = false;
+	bool bFma = false;
+	bool bXsave = false;
+};
+
+struct FLIGHTPROJECT_API FFlightSimdVerificationReport
+{
+	bool bProbeAvailable = false;
+	FString ProbeSource;
+	FString Architecture;
+	FString Vendor;
+	FString Model;
+	FString BuildVectorProfile;
+	FString CompiledHardwareSimdTarget;
+	FString VectorShapeModel;
+	FString VerificationBaseline;
+	FString HostOptimizedTarget;
+	FString HardwareSimdTarget;
+	TArray<FString> CpuFlags;
+	FFlightSimdFeatureFlags Features;
+	TArray<FString> Recommendations;
+	TArray<FString> Notes;
+};
+
+struct FLIGHTPROJECT_API FFlightSystemVerificationReport
+{
+	FFlightSimdVerificationReport Simd;
+};
+
 struct FLIGHTPROJECT_API FFlightOrchestrationReport
 {
 	FString WorldName;
 	FDateTime BuiltAtUtc;
 	FFlightStartupProfileReport Startup;
+	FFlightSystemVerificationReport SystemVerification;
 	TArray<FFlightServiceStatus> Services;
 	TArray<FFlightParticipantRecord> Participants;
 	TArray<FFlightNavigationCandidateRecord> NavigationCandidates;

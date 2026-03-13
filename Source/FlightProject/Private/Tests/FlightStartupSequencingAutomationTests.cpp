@@ -252,10 +252,13 @@ bool FFlightStartupSequencingComplexTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("Startup report should reference the active world"), RootObject->GetStringField(TEXT("worldName")), World->GetName());
 		TestTrue(TEXT("Startup report should include a built timestamp"), RootObject->HasTypedField<EJson::String>(TEXT("builtAtUtc")));
 		TestTrue(TEXT("Startup report should include startup metadata"), RootObject->HasTypedField<EJson::Object>(TEXT("startup")));
+		TestTrue(TEXT("Startup report should include system verification metadata"), RootObject->HasTypedField<EJson::Object>(TEXT("systemVerification")));
 		TestTrue(TEXT("Startup report should include services"), RootObject->HasTypedField<EJson::Array>(TEXT("services")));
 		TestTrue(TEXT("Startup report should include an execution plan"), RootObject->HasTypedField<EJson::Object>(TEXT("executionPlan")));
 		const TSharedPtr<FJsonObject>* StartupObject = nullptr;
+		const TSharedPtr<FJsonObject>* SystemVerificationObject = nullptr;
 		TestTrue(TEXT("Startup report should expose a startup object"), RootObject->TryGetObjectField(TEXT("startup"), StartupObject));
+		TestTrue(TEXT("Startup report should expose a systemVerification object"), RootObject->TryGetObjectField(TEXT("systemVerification"), SystemVerificationObject));
 		if (StartupObject && StartupObject->IsValid())
 		{
 			TestTrue(TEXT("Startup report startup object should expose a GameMode-presence flag"),
@@ -266,6 +269,45 @@ bool FFlightStartupSequencingComplexTest::RunTest(const FString& Parameters)
 				(*StartupObject)->HasTypedField<EJson::Boolean>(TEXT("startupRunCompleted")));
 			TestTrue(TEXT("Startup report startup object should expose startup stages"),
 				(*StartupObject)->HasTypedField<EJson::Array>(TEXT("stages")));
+		}
+		if (SystemVerificationObject && SystemVerificationObject->IsValid())
+		{
+			const TSharedPtr<FJsonObject>* SimdObject = nullptr;
+			TestTrue(TEXT("Startup report systemVerification object should expose a simd object"),
+				(*SystemVerificationObject)->TryGetObjectField(TEXT("simd"), SimdObject));
+			if (SimdObject && SimdObject->IsValid())
+			{
+				TestTrue(TEXT("Startup report SIMD object should expose probe availability"),
+					(*SimdObject)->HasTypedField<EJson::Boolean>(TEXT("probeAvailable")));
+				TestTrue(TEXT("Startup report SIMD object should expose probe source"),
+					(*SimdObject)->HasTypedField<EJson::String>(TEXT("probeSource")));
+				TestTrue(TEXT("Startup report SIMD object should expose vector shape model"),
+					(*SimdObject)->HasTypedField<EJson::String>(TEXT("vectorShapeModel")));
+				TestTrue(TEXT("Startup report SIMD object should expose verification baseline"),
+					(*SimdObject)->HasTypedField<EJson::String>(TEXT("verificationBaseline")));
+				TestTrue(TEXT("Startup report SIMD object should expose compiled hardware SIMD target"),
+					(*SimdObject)->HasTypedField<EJson::String>(TEXT("compiledHardwareSimdTarget")));
+				TestTrue(TEXT("Startup report SIMD object should expose CPU flags"),
+					(*SimdObject)->HasTypedField<EJson::Array>(TEXT("cpuFlags")));
+				TestTrue(TEXT("Startup report SIMD object should expose recommendations"),
+					(*SimdObject)->HasTypedField<EJson::Array>(TEXT("recommendations")));
+				const TSharedPtr<FJsonObject>* FeaturesObject = nullptr;
+				TestTrue(TEXT("Startup report SIMD object should expose feature flags"),
+					(*SimdObject)->TryGetObjectField(TEXT("features"), FeaturesObject));
+				if (FeaturesObject && FeaturesObject->IsValid())
+				{
+					TestTrue(TEXT("Startup report SIMD features should expose AVX2"),
+						(*FeaturesObject)->HasTypedField<EJson::Boolean>(TEXT("avx2")));
+					TestTrue(TEXT("Startup report SIMD features should expose FMA"),
+						(*FeaturesObject)->HasTypedField<EJson::Boolean>(TEXT("fma")));
+				}
+
+				FString VectorShapeModel;
+				TestTrue(TEXT("Startup report SIMD object should provide the FlightProject vector shape model"),
+					(*SimdObject)->TryGetStringField(TEXT("vectorShapeModel"), VectorShapeModel));
+				TestEqual(TEXT("Startup report SIMD object should preserve the current FlightProject vector shape model"),
+					VectorShapeModel, FString(TEXT("NativeVector4xFloat")));
+			}
 		}
 		return true;
 	}

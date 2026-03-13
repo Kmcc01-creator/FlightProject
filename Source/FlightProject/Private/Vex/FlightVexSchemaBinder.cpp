@@ -332,6 +332,13 @@ FVexLogicalSymbolSchema FVexSchemaBinder::MakeSyntheticLogicalSymbol(const FVexS
 	Logical.AlignmentRequirement = Definition.AlignmentRequirement;
 	Logical.MathDeterminismProfile = Definition.MathDeterminismProfile;
 	Logical.Storage.Kind = EVexStorageKind::ExternalProvider;
+	Logical.VectorPack = BuildDefaultVectorPackContract(
+		Logical.Storage,
+		Logical.ValueType,
+		Logical.AlignmentRequirement,
+		Logical.bSimdReadAllowed,
+		Logical.bSimdWriteAllowed,
+		Logical.bGpuTier1Allowed);
 
 	if (Definition.SymbolName.StartsWith(TEXT("@")))
 	{

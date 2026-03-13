@@ -36,6 +36,8 @@ When adding new automation, source `env_common.sh` first so every helper shares 
    - `TEST_SCOPE=gpu_required` / `all` for the full GPU-required lane
    Additional comparison toggles: `TEST_VIDEO_BACKEND=auto|wayland|x11|dummy`, `TEST_RENDER_OFFSCREEN=1|0`, `TEST_SESSION_WRAPPER=auto|uwsm|none`, `TEST_USE_GAMESCOPE=1|0`, `TEST_GAMESCOPE_ARGS="..."`, `TEST_VK_VALIDATION=0..5`, `TEST_VK_GPU_VALIDATION=1|0`, `TEST_VK_DEBUG_SYNC=1|0`, `TEST_VK_BEST_PRACTICES=1|0`, `TEST_VK_DEBUG_UTILS=1|0`, `TEST_VK_DRIVER_FILES=/path/to/icd.json`, `TEST_VK_ICD_FILENAMES=/path/to/icd.json`, and `TEST_VK_LOADER_LAYERS_DISABLE='~implicit~'`.
    The GPU runner also now honors the shared output controls: `--preset`, `--profile`, `--output`, `--automation-only`, `--summary`, `--errors-only`, `--all-output`, `--show-python`, `--show-startup`, `--extra-log-cmds`, `--timestamps`, and `--scope`. Like the headless runner, it rebuilds by default before test execution; use `--no-build` or `--build-config <Debug|Development|Shipping>` to override.
+7. `./Scripts/check_simd_baseline.sh [--json]`  
+   Probes the local CPU ISA surface and the compiler's `-march=native` view, then prints a practical FlightProject SIMD verification baseline. Use `--json` when CI, orchestration tooling, or local scripts need the same result as machine-readable output. Use this when deciding whether a machine should be treated as `AVX2`, extended `AVX-512`, `Neon`, or scalar-only for backend verification work.
 
 ## Vulkan Recovery / Triage
 

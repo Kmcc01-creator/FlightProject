@@ -172,6 +172,41 @@ void AddBackendReportsToJson(const TArray<FFlightCompileBackendReport>& Reports,
 	Object->SetArrayField(FieldName, Values);
 }
 
+void AddVectorSymbolReportsToJson(const TArray<FFlightCompileVectorSymbolReport>& Reports, const TCHAR* FieldName, TSharedRef<FJsonObject> Object)
+{
+	TArray<TSharedPtr<FJsonValue>> Values;
+	for (const FFlightCompileVectorSymbolReport& Report : Reports)
+	{
+		TSharedRef<FJsonObject> SymbolObject = MakeShared<FJsonObject>();
+		SymbolObject->SetStringField(TEXT("symbolName"), Report.SymbolName);
+		SymbolObject->SetStringField(TEXT("valueType"), Report.ValueType);
+		SymbolObject->SetStringField(TEXT("storageKind"), Report.StorageKind);
+		SymbolObject->SetStringField(TEXT("vectorStorageClass"), Report.VectorStorageClass);
+		SymbolObject->SetStringField(TEXT("highestLegalClass"), Report.HighestLegalClass);
+		AddStringArrayToJson(Report.LegalBackends, TEXT("legalBackends"), SymbolObject);
+		AddStringArrayToJson(Report.Reasons, TEXT("reasons"), SymbolObject);
+		Values.Add(MakeShared<FJsonValueObject>(SymbolObject));
+	}
+	Object->SetArrayField(FieldName, Values);
+}
+
+void AddFragmentRequirementReportsToJson(const TArray<FFlightCompileFragmentRequirementReport>& Reports, const TCHAR* FieldName, TSharedRef<FJsonObject> Object)
+{
+	TArray<TSharedPtr<FJsonValue>> Values;
+	for (const FFlightCompileFragmentRequirementReport& Report : Reports)
+	{
+		TSharedRef<FJsonObject> FragmentObject = MakeShared<FJsonObject>();
+		FragmentObject->SetStringField(TEXT("fragmentType"), Report.FragmentType);
+		FragmentObject->SetStringField(TEXT("storageKind"), Report.StorageKind);
+		AddStringArrayToJson(Report.ReadSymbols, TEXT("readSymbols"), FragmentObject);
+		AddStringArrayToJson(Report.WrittenSymbols, TEXT("writtenSymbols"), FragmentObject);
+		FragmentObject->SetBoolField(TEXT("supportedByCurrentDirectProcessor"), Report.bSupportedByCurrentDirectProcessor);
+		FragmentObject->SetStringField(TEXT("currentDirectProcessorSupportReason"), Report.CurrentDirectProcessorSupportReason);
+		Values.Add(MakeShared<FJsonValueObject>(FragmentObject));
+	}
+	Object->SetArrayField(FieldName, Values);
+}
+
 } // namespace
 
 FString CompileArtifactKindToString(const EFlightCompileArtifactKind Kind)
@@ -479,6 +514,8 @@ FString BuildCompileArtifactReportJson(const FFlightCompileArtifactReport& Repor
 	AddStringArrayToJson(Report.ImportedSymbols, TEXT("importedSymbols"), Root);
 	AddStringArrayToJson(Report.ExportedSymbols, TEXT("exportedSymbols"), Root);
 	AddStringArrayToJson(Report.ReferencedStorageKinds, TEXT("referencedStorageKinds"), Root);
+	AddFragmentRequirementReportsToJson(Report.FragmentRequirementReports, TEXT("fragmentRequirementReports"), Root);
+	AddVectorSymbolReportsToJson(Report.VectorSymbolReports, TEXT("vectorSymbolReports"), Root);
 	AddStringArrayToJson(Report.PolicyRequiredContracts, TEXT("policyRequiredContracts"), Root);
 	AddStringArrayToJson(Report.PolicyRequiredSymbols, TEXT("policyRequiredSymbols"), Root);
 	Root->SetNumberField(TEXT("boundaryOperatorCount"), static_cast<double>(Report.BoundaryOperatorCount));

@@ -4,7 +4,15 @@ This file tracks TODOs that sit at the VEX compiler, Verse runtime, backend-sele
 
 ## Current TODOs
 
-No active TODOs are tracked in this area right now. Keep new items here when backend-selection, compile-policy, or execution-commit parity slips again.
+### 1. Promote Fragment Requirement Reports To Compiled MassQueryContract
+
+Priority: Medium  
+Status: Active  
+Owner/Surface: schema binding, compile artifacts, Mass query validation
+
+The current fragment requirement surface is intentionally report-first: compile artifacts and orchestration now expose fragment families, symbol read/write sets, and whether the current direct processor path can support them. Promote that from a summary/report surface into a compiled `MassQueryContract` so processor-query mismatch can be validated before execution rather than only observed through runtime routing support.
+
+Relevant surfaces: [CompiledFragmentRequirementReporting.md](../Architecture/CompiledFragmentRequirementReporting.md), [VerseSubsystemModularization.md](../Architecture/VerseSubsystemModularization.md), [FlightCompileArtifacts.h](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Public/Vex/FlightCompileArtifacts.h), [UFlightVexBehaviorProcessor.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Mass/UFlightVexBehaviorProcessor.cpp), [UFlightVerseSubsystem.cpp](/home/kelly/Unreal/Projects/FlightProject/Source/FlightProject/Private/Verse/UFlightVerseSubsystem.cpp).
 
 ## Exit Condition
 

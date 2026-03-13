@@ -46,6 +46,15 @@ void EnsureCanonicalRecords(FVexTypeSchema& Schema)
 		Record.MathDeterminismProfile = Pair.Value.MathDeterminismProfile;
 		Record.BackendBinding = Pair.Value.BackendBinding;
 		Record.Storage = Pair.Value.Storage;
+		Record.VectorPack = Pair.Value.VectorPack.StorageClass == EVexVectorStorageClass::None
+			? BuildDefaultVectorPackContract(
+				Record.Storage,
+				Record.ValueType,
+				Record.AlignmentRequirement,
+				Record.bSimdReadAllowed,
+				Record.bSimdWriteAllowed,
+				Record.bGpuTier1Allowed)
+			: Pair.Value.VectorPack;
 
 		if (const FVexSymbolAccessor* Accessor = Schema.Symbols.Find(Pair.Key))
 		{
@@ -119,6 +128,14 @@ FVexTypeSchema FVexSchemaOrchestrator::MergeManifestRequirements(FVexTypeSchema 
 		{
 			Record.Storage.Kind = EVexStorageKind::ExternalProvider;
 		}
+
+		Record.VectorPack = BuildDefaultVectorPackContract(
+			Record.Storage,
+			Record.ValueType,
+			Record.AlignmentRequirement,
+			Record.bSimdReadAllowed,
+			Record.bSimdWriteAllowed,
+			Record.bGpuTier1Allowed);
 	}
 
 	BaseSchema.RebuildLegacyViews();
@@ -159,6 +176,12 @@ uint32 FVexSchemaOrchestrator::ComputeSchemaLayoutHash(const FVexTypeSchema& Sch
 		LayoutText += FString::FromInt(static_cast<int32>(Record ? Record->Storage.Kind : Logical->Storage.Kind));
 		LayoutText += TEXT("|");
 		LayoutText += FString::FromInt(Record ? Record->Storage.MemberOffset : Logical->Storage.MemberOffset);
+		LayoutText += TEXT("|");
+		LayoutText += FString::FromInt(static_cast<int32>(Record ? Record->VectorPack.StorageClass : Logical->VectorPack.StorageClass));
+		LayoutText += TEXT("|");
+		LayoutText += FString::FromInt((Record ? Record->VectorPack.bSupportsDirectSimdRead : Logical->VectorPack.bSupportsDirectSimdRead) ? 1 : 0);
+		LayoutText += TEXT("|");
+		LayoutText += FString::FromInt((Record ? Record->VectorPack.bSupportsDirectSimdWrite : Logical->VectorPack.bSupportsDirectSimdWrite) ? 1 : 0);
 		LayoutText += TEXT("|");
 		LayoutText += Record ? Record->BackendBinding.HlslIdentifier : Logical->BackendBinding.HlslIdentifier;
 		LayoutText += TEXT("|");

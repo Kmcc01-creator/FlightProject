@@ -1,5 +1,9 @@
 # SIMD/HLSL Strategy Implementation Plan
 
+For the current contract boundary between vector-shaped execution and provable hardware SIMD backends, start with [SimdBackendContract.md](SimdBackendContract.md).
+For schema-bound vector packing on arbitrary symbols, see [VexArbitrarySymbolVectorContract.md](VexArbitrarySymbolVectorContract.md).
+For the Unreal/clang implementation structure behind explicit ISA kernels, see [ClangSimdBackendImplementation.md](ClangSimdBackendImplementation.md).
+
 This plan turns the architecture in `SIMD_HLSL_INTRINSICS.md` into concrete implementation work for FlightProject.
 
 ## Objectives

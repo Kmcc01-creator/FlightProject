@@ -20,6 +20,7 @@
 #include "Orchestration/FlightParticipantTypes.h"
 #include "Orchestration/FlightStartupCoordinatorSubsystem.h"
 #include "Rendering/FlightSimpleSCSLShaderPipelineSubsystem.h"
+#include "Misc/FileHelper.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 #include "Spatial/FlightSpatialSubsystem.h"
@@ -271,8 +272,234 @@ FString VerseCompileStateToString(const EFlightVerseCompileState CompileState)
 	}
 }
 
+FString BehaviorExecutionShapeToString(const EFlightBehaviorExecutionShape Shape)
+{
+	switch (Shape)
+	{
+	case EFlightBehaviorExecutionShape::ScalarOnly:
+		return TEXT("ScalarOnly");
+	case EFlightBehaviorExecutionShape::VectorCapable:
+		return TEXT("VectorCapable");
+	case EFlightBehaviorExecutionShape::VectorPreferred:
+		return TEXT("VectorPreferred");
+	case EFlightBehaviorExecutionShape::ShapeAgnostic:
+		return TEXT("ShapeAgnostic");
+	default:
+		return TEXT("Unknown");
+	}
+}
+
+FString DetectHostArchitecture()
+{
+#if defined(__x86_64__) || defined(_M_X64)
+	return TEXT("x86_64");
+#elif defined(__aarch64__) || defined(_M_ARM64)
+	return TEXT("aarch64");
+#elif defined(__arm__) || defined(_M_ARM)
+	return TEXT("arm");
+#else
+	return TEXT("unknown");
+#endif
+}
+
+FString DetectCompiledHardwareSimdTarget()
+{
+#if defined(__x86_64__) || defined(_M_X64)
+	#if defined(__AVX512F__) && defined(__AVX512BW__) && defined(__AVX512VL__)
+		return TEXT("x86_64 AVX-512 (F/BW/VL)");
+	#elif defined(__AVX2__) && defined(__FMA__)
+		return TEXT("x86_64 AVX2/FMA");
+	#elif defined(__SSE4_2__)
+		return TEXT("x86_64 SSE4.2");
+	#else
+		return TEXT("x86_64 generic");
+	#endif
+#elif defined(__aarch64__) || defined(_M_ARM64)
+	return TEXT("arm64 Neon128x4");
+#else
+	return TEXT("Unknown");
+#endif
+}
+
+FString DetectBuildVectorProfile()
+{
+#if defined(__x86_64__) || defined(_M_X64)
+	#if defined(__AVX512F__) && defined(__AVX512BW__) && defined(__AVX512VL__)
+		return TEXT("Binary compiled with AVX-512 foundation plus BW/VL enabled");
+	#elif defined(__AVX2__) && defined(__FMA__)
+		return TEXT("Binary compiled with AVX2/FMA enabled");
+	#elif defined(__SSE4_2__)
+		return TEXT("Binary compiled with SSE4.2 enabled");
+	#else
+		return TEXT("Binary compiled without an explicit ISA-specific x86 SIMD target");
+	#endif
+#elif defined(__aarch64__) || defined(_M_ARM64)
+	return TEXT("Binary compiled for arm64/Neon-class vector support");
+#else
+	return TEXT("Unknown build vector profile");
+#endif
+}
+
+FString FindCpuInfoValue(const FString& CpuInfo, const TCHAR* FieldName)
+{
+	TArray<FString> Lines;
+	CpuInfo.ParseIntoArrayLines(Lines, true);
+
+	for (const FString& Line : Lines)
+	{
+		FString Key;
+		FString Value;
+		if (!Line.Split(TEXT(":"), &Key, &Value))
+		{
+			continue;
+		}
+
+		if (Key.TrimStartAndEnd() == FieldName)
+		{
+			return Value.TrimStartAndEnd();
+		}
+	}
+
+	return FString();
+}
+
+bool HasCpuFlag(const TArray<FString>& CpuFlags, const TCHAR* Flag)
+{
+	return CpuFlags.ContainsByPredicate([Flag](const FString& Entry)
+	{
+		return Entry == Flag;
+	});
+}
+
+Flight::Orchestration::FFlightSimdVerificationReport BuildSimdVerificationReport()
+{
+	Flight::Orchestration::FFlightSimdVerificationReport Report;
+	Report.ProbeSource = TEXT("RuntimeHostCpuProbe");
+	Report.Architecture = DetectHostArchitecture();
+	Report.BuildVectorProfile = DetectBuildVectorProfile();
+	Report.CompiledHardwareSimdTarget = DetectCompiledHardwareSimdTarget();
+	Report.VectorShapeModel = TEXT("NativeVector4xFloat");
+
+	FString CpuInfo;
+#if PLATFORM_LINUX
+	Report.bProbeAvailable = FFileHelper::LoadFileToString(CpuInfo, TEXT("/proc/cpuinfo"));
+	if (Report.bProbeAvailable)
+	{
+		Report.Vendor = FindCpuInfoValue(CpuInfo, TEXT("vendor_id"));
+		Report.Model = FindCpuInfoValue(CpuInfo, TEXT("model name"));
+		FString Flags = FindCpuInfoValue(CpuInfo, TEXT("flags"));
+		if (Flags.IsEmpty())
+		{
+			Flags = FindCpuInfoValue(CpuInfo, TEXT("Features"));
+		}
+
+		Flags.ParseIntoArrayWS(Report.CpuFlags);
+	}
+	else
+	{
+		Report.Notes.Add(TEXT("Runtime host probe could not read /proc/cpuinfo; host SIMD evidence is incomplete."));
+	}
+#else
+	Report.Notes.Add(TEXT("Runtime host probe currently implements detailed SIMD evidence only on Linux."));
+#endif
+
+	Report.Features.bSse42 = HasCpuFlag(Report.CpuFlags, TEXT("sse4_2"));
+	Report.Features.bAvx = HasCpuFlag(Report.CpuFlags, TEXT("avx"));
+	Report.Features.bAvx2 = HasCpuFlag(Report.CpuFlags, TEXT("avx2"));
+	Report.Features.bAvx512F = HasCpuFlag(Report.CpuFlags, TEXT("avx512f"));
+	Report.Features.bAvx512Bw = HasCpuFlag(Report.CpuFlags, TEXT("avx512bw"));
+	Report.Features.bAvx512Vl = HasCpuFlag(Report.CpuFlags, TEXT("avx512vl"));
+	Report.Features.bAvx512Vnni = HasCpuFlag(Report.CpuFlags, TEXT("avx512_vnni")) || HasCpuFlag(Report.CpuFlags, TEXT("avx512vnni"));
+	Report.Features.bAvxVnni = HasCpuFlag(Report.CpuFlags, TEXT("avx_vnni"));
+	Report.Features.bAvx512Bf16 = HasCpuFlag(Report.CpuFlags, TEXT("avx512_bf16")) || HasCpuFlag(Report.CpuFlags, TEXT("avx512bf16"));
+	Report.Features.bFma = HasCpuFlag(Report.CpuFlags, TEXT("fma"));
+	Report.Features.bXsave = HasCpuFlag(Report.CpuFlags, TEXT("xsave"));
+
+	if (!Report.bProbeAvailable)
+	{
+		Report.VerificationBaseline = TEXT("Unavailable");
+		Report.HostOptimizedTarget = TEXT("Unavailable");
+		Report.HardwareSimdTarget = TEXT("Unavailable");
+		Report.Recommendations.Add(TEXT("Keep host SIMD evidence marked unavailable until a runtime probe succeeds on this platform."));
+		Report.Recommendations.Add(TEXT("Keep FlightProject's current 4-lane executor classified as VectorShape until ISA-specific lowerers exist."));
+		return Report;
+	}
+
+	if (Report.Architecture == TEXT("x86_64"))
+	{
+		if (Report.Features.bAvx2)
+		{
+			Report.VerificationBaseline = TEXT("x86_64 AVX2/FMA");
+		}
+		else if (Report.Features.bSse42)
+		{
+			Report.VerificationBaseline = TEXT("x86_64 SSE4.2");
+		}
+		else
+		{
+			Report.VerificationBaseline = TEXT("x86_64 scalar-only");
+		}
+
+		if (Report.Features.bAvx512F && Report.Features.bAvx512Bw && Report.Features.bAvx512Vl)
+		{
+			Report.HostOptimizedTarget = TEXT("x86_64 AVX-512 (F/BW/VL)");
+			Report.Notes.Add(TEXT("Host advertises AVX-512 foundation plus BW/VL; treat this as an extended verification lane, not the default portability baseline."));
+		}
+		else if (Report.Features.bAvx2)
+		{
+			Report.HostOptimizedTarget = TEXT("x86_64 AVX2/FMA");
+		}
+		else
+		{
+			Report.HostOptimizedTarget = TEXT("x86_64 SSE4.2");
+		}
+
+		Report.HardwareSimdTarget = Report.VerificationBaseline;
+		if (Report.Features.bAvx512Vnni || Report.Features.bAvxVnni)
+		{
+			Report.Notes.Add(TEXT("Host advertises VNNI-class dot-product features."));
+		}
+		if (Report.Features.bAvx512Bf16)
+		{
+			Report.Notes.Add(TEXT("Host advertises BF16 support for future specialized numeric lanes."));
+		}
+		if (Report.Features.bXsave && Report.Features.bAvx)
+		{
+			Report.Notes.Add(TEXT("Kernel-exposed flags indicate OS-enabled AVX state management."));
+		}
+
+		Report.Recommendations.Add(TEXT("Use AVX2/FMA as the primary x86_64 verification baseline."));
+		Report.Recommendations.Add(TEXT("Use AVX-512 on this host as an extended or experimental verification lane."));
+		Report.Recommendations.Add(TEXT("Compare host SIMD evidence against compiled SIMD target before claiming hardware-SIMD execution."));
+		Report.Recommendations.Add(TEXT("Keep FlightProject's current 4-lane executor classified as VectorShape until ISA-specific lowerers exist."));
+	}
+	else if (Report.Architecture == TEXT("aarch64") || Report.Architecture == TEXT("arm64"))
+	{
+		Report.VerificationBaseline = TEXT("arm64 Neon128x4");
+		Report.HostOptimizedTarget = TEXT("arm64 Neon128x4");
+		Report.HardwareSimdTarget = Report.VerificationBaseline;
+		Report.Notes.Add(TEXT("Add SVE/SVE2 probing separately if FlightProject later grows ARM-specific hardware SIMD backends."));
+		Report.Recommendations.Add(TEXT("Use Neon128x4 as the primary ARM verification baseline."));
+		Report.Recommendations.Add(TEXT("Compare host SIMD evidence against compiled SIMD target before claiming hardware-SIMD execution."));
+	}
+	else
+	{
+		Report.VerificationBaseline = FString::Printf(TEXT("%s scalar-only"), *Report.Architecture);
+		Report.HostOptimizedTarget = Report.VerificationBaseline;
+		Report.HardwareSimdTarget = Report.VerificationBaseline;
+		Report.Recommendations.Add(TEXT("Treat this host as scalar-only until a platform-specific SIMD contract is added."));
+	}
+
+	return Report;
+}
+
 EFlightExecutionDomain ResolveExecutionDomain(const UFlightVerseSubsystem::FVerseBehavior& Behavior)
 {
+	if (Behavior.Kind != EFlightVerseBehaviorKind::Atomic)
+	{
+		return EFlightExecutionDomain::NativeCpu;
+	}
+
 	for (const Flight::Vex::FVexStatementAst& Statement : Behavior.NativeProgram.Statements)
 	{
 		if (Statement.Kind == Flight::Vex::EVexStatementKind::TargetDirective && Statement.SourceSpan == TEXT("@gpu"))
@@ -319,6 +546,34 @@ void AddStringArrayToJson(const TArray<FString>& Strings, const TCHAR* FieldName
 		Values.Add(MakeShared<FJsonValueString>(Value));
 	}
 	Object->SetArrayField(FieldName, Values);
+}
+
+void AddUInt32ArrayToJson(const TArray<uint32>& ValuesIn, const TCHAR* FieldName, TSharedRef<FJsonObject> Object)
+{
+	TArray<TSharedPtr<FJsonValue>> Values;
+	Values.Reserve(ValuesIn.Num());
+	for (const uint32 Value : ValuesIn)
+	{
+		Values.Add(MakeShared<FJsonValueNumber>(static_cast<double>(Value)));
+	}
+	Object->SetArrayField(FieldName, Values);
+}
+
+void AddSimdFeaturesToJson(
+	const Flight::Orchestration::FFlightSimdFeatureFlags& Features,
+	TSharedRef<FJsonObject> Object)
+{
+	Object->SetBoolField(TEXT("sse42"), Features.bSse42);
+	Object->SetBoolField(TEXT("avx"), Features.bAvx);
+	Object->SetBoolField(TEXT("avx2"), Features.bAvx2);
+	Object->SetBoolField(TEXT("avx512f"), Features.bAvx512F);
+	Object->SetBoolField(TEXT("avx512bw"), Features.bAvx512Bw);
+	Object->SetBoolField(TEXT("avx512vl"), Features.bAvx512Vl);
+	Object->SetBoolField(TEXT("avx512vnni"), Features.bAvx512Vnni);
+	Object->SetBoolField(TEXT("avxVnni"), Features.bAvxVnni);
+	Object->SetBoolField(TEXT("avx512bf16"), Features.bAvx512Bf16);
+	Object->SetBoolField(TEXT("fma"), Features.bFma);
+	Object->SetBoolField(TEXT("xsave"), Features.bXsave);
 }
 
 void AddVectorToJson(const FVector& Value, const TCHAR* FieldName, TSharedRef<FJsonObject> Object)
@@ -1386,6 +1641,28 @@ FString UFlightOrchestrationSubsystem::BuildReportJson() const
 	StartupObject->SetArrayField(TEXT("stages"), StartupStageValues);
 	Root->SetObjectField(TEXT("startup"), StartupObject);
 
+	TSharedRef<FJsonObject> SystemVerificationObject = MakeShared<FJsonObject>();
+	TSharedRef<FJsonObject> SimdObject = MakeShared<FJsonObject>();
+	SimdObject->SetBoolField(TEXT("probeAvailable"), CachedReport.SystemVerification.Simd.bProbeAvailable);
+	SimdObject->SetStringField(TEXT("probeSource"), CachedReport.SystemVerification.Simd.ProbeSource);
+	SimdObject->SetStringField(TEXT("architecture"), CachedReport.SystemVerification.Simd.Architecture);
+	SimdObject->SetStringField(TEXT("vendor"), CachedReport.SystemVerification.Simd.Vendor);
+	SimdObject->SetStringField(TEXT("model"), CachedReport.SystemVerification.Simd.Model);
+	SimdObject->SetStringField(TEXT("buildVectorProfile"), CachedReport.SystemVerification.Simd.BuildVectorProfile);
+	SimdObject->SetStringField(TEXT("compiledHardwareSimdTarget"), CachedReport.SystemVerification.Simd.CompiledHardwareSimdTarget);
+	SimdObject->SetStringField(TEXT("vectorShapeModel"), CachedReport.SystemVerification.Simd.VectorShapeModel);
+	SimdObject->SetStringField(TEXT("verificationBaseline"), CachedReport.SystemVerification.Simd.VerificationBaseline);
+	SimdObject->SetStringField(TEXT("hostOptimizedTarget"), CachedReport.SystemVerification.Simd.HostOptimizedTarget);
+	SimdObject->SetStringField(TEXT("hardwareSimdTarget"), CachedReport.SystemVerification.Simd.HardwareSimdTarget);
+	Flight::Orchestration::AddStringArrayToJson(CachedReport.SystemVerification.Simd.CpuFlags, TEXT("cpuFlags"), SimdObject);
+	TSharedRef<FJsonObject> SimdFeaturesObject = MakeShared<FJsonObject>();
+	Flight::Orchestration::AddSimdFeaturesToJson(CachedReport.SystemVerification.Simd.Features, SimdFeaturesObject);
+	SimdObject->SetObjectField(TEXT("features"), SimdFeaturesObject);
+	Flight::Orchestration::AddStringArrayToJson(CachedReport.SystemVerification.Simd.Recommendations, TEXT("recommendations"), SimdObject);
+	Flight::Orchestration::AddStringArrayToJson(CachedReport.SystemVerification.Simd.Notes, TEXT("notes"), SimdObject);
+	SystemVerificationObject->SetObjectField(TEXT("simd"), SimdObject);
+	Root->SetObjectField(TEXT("systemVerification"), SystemVerificationObject);
+
 	TArray<TSharedPtr<FJsonValue>> ServiceValues;
 	for (const Flight::Orchestration::FFlightServiceStatus& Service : CachedReport.Services)
 	{
@@ -1497,19 +1774,40 @@ FString UFlightOrchestrationSubsystem::BuildReportJson() const
 		BehaviorObject->SetNumberField(TEXT("behaviorId"), Behavior.BehaviorID);
 		BehaviorObject->SetStringField(TEXT("name"), Behavior.Name.ToString());
 		BehaviorObject->SetStringField(TEXT("compileState"), Behavior.CompileState);
+		BehaviorObject->SetBoolField(TEXT("isComposite"), Behavior.bIsComposite);
+		BehaviorObject->SetStringField(TEXT("compositeOperator"), Behavior.CompositeOperator);
+		Flight::Orchestration::AddUInt32ArrayToJson(Behavior.ChildBehaviorIds, TEXT("childBehaviorIds"), BehaviorObject);
 		BehaviorObject->SetNumberField(TEXT("executionRateHz"), Behavior.ExecutionRateHz);
 		BehaviorObject->SetNumberField(TEXT("frameInterval"), Behavior.FrameInterval);
 		BehaviorObject->SetBoolField(TEXT("async"), Behavior.bAsync);
 		BehaviorObject->SetBoolField(TEXT("executable"), Behavior.bExecutable);
 		BehaviorObject->SetStringField(TEXT("resolvedDomain"), Flight::Orchestration::ExecutionDomainToString(Behavior.ResolvedDomain));
 		Flight::Orchestration::AddNameArrayToJson(Behavior.RequiredContracts, TEXT("requiredContracts"), BehaviorObject);
+		Flight::Orchestration::AddStringArrayToJson(Behavior.LegalLanes, TEXT("legalLanes"), BehaviorObject);
+		BehaviorObject->SetStringField(TEXT("preferredLane"), Behavior.PreferredLane);
+		BehaviorObject->SetStringField(TEXT("committedLane"), Behavior.CommittedLane);
+		BehaviorObject->SetStringField(TEXT("executionShape"), Behavior.ExecutionShape);
+		BehaviorObject->SetStringField(TEXT("committedExecutionShape"), Behavior.CommittedExecutionShape);
+		BehaviorObject->SetBoolField(TEXT("allowsMixedLaneExecution"), Behavior.bAllowsMixedLaneExecution);
+		BehaviorObject->SetBoolField(TEXT("requiresSharedTypeKey"), Behavior.bRequiresSharedTypeKey);
+		Flight::Orchestration::AddStringArrayToJson(Behavior.DisallowedLaneReasons, TEXT("disallowedLaneReasons"), BehaviorObject);
+		Flight::Orchestration::AddStringArrayToJson(Behavior.GuardSummaries, TEXT("guardSummaries"), BehaviorObject);
 		BehaviorObject->SetStringField(TEXT("selectedBackend"), Behavior.SelectedBackend);
 		BehaviorObject->SetStringField(TEXT("committedBackend"), Behavior.CommittedBackend);
 		BehaviorObject->SetStringField(TEXT("commitDetail"), Behavior.CommitDetail);
+		BehaviorObject->SetBoolField(TEXT("hasLastExecutionResult"), Behavior.bHasLastExecutionResult);
+		BehaviorObject->SetBoolField(TEXT("lastExecutionSucceeded"), Behavior.bLastExecutionSucceeded);
+		BehaviorObject->SetBoolField(TEXT("lastExecutionCommitted"), Behavior.bLastExecutionCommitted);
+		BehaviorObject->SetNumberField(TEXT("lastSelectedChildBehaviorId"), static_cast<double>(Behavior.LastSelectedChildBehaviorId));
+		Flight::Orchestration::AddStringArrayToJson(Behavior.LastBranchEvidence, TEXT("lastBranchEvidence"), BehaviorObject);
+		Flight::Orchestration::AddStringArrayToJson(Behavior.LastGuardOutcomes, TEXT("lastGuardOutcomes"), BehaviorObject);
+		BehaviorObject->SetStringField(TEXT("lastExecutionDetail"), Behavior.LastExecutionDetail);
 		BehaviorObject->SetStringField(TEXT("selectedPolicyRow"), Behavior.SelectedPolicyRow);
 		BehaviorObject->SetStringField(TEXT("policyPreferredDomain"), Behavior.PolicyPreferredDomain);
 		Flight::Orchestration::AddStringArrayToJson(Behavior.ImportedSymbols, TEXT("importedSymbols"), BehaviorObject);
 		Flight::Orchestration::AddStringArrayToJson(Behavior.ExportedSymbols, TEXT("exportedSymbols"), BehaviorObject);
+		Flight::Orchestration::AddStringArrayToJson(Behavior.FragmentRequirementSummaries, TEXT("fragmentRequirementSummaries"), BehaviorObject);
+		Flight::Orchestration::AddStringArrayToJson(Behavior.VectorLegalitySummaries, TEXT("vectorLegalitySummaries"), BehaviorObject);
 		BehaviorObject->SetNumberField(TEXT("boundaryOperatorCount"), Behavior.BoundaryOperatorCount);
 		BehaviorObject->SetBoolField(TEXT("hasBoundarySemantics"), Behavior.bHasBoundarySemantics);
 		BehaviorObject->SetBoolField(TEXT("boundarySemanticsExecutable"), Behavior.bBoundarySemanticsExecutable);
@@ -1826,20 +2124,87 @@ void UFlightOrchestrationSubsystem::IngestBehaviors()
 		Record.BehaviorID = Pair.Key;
 		Record.Name = FName(*FString::Printf(TEXT("Behavior_%u"), Pair.Key));
 		Record.CompileState = Flight::Orchestration::VerseCompileStateToString(Pair.Value.CompileState);
+		Record.bIsComposite = Pair.Value.Kind != EFlightVerseBehaviorKind::Atomic;
+		switch (Pair.Value.Kind)
+		{
+		case EFlightVerseBehaviorKind::Sequence:
+			Record.CompositeOperator = TEXT("Sequence");
+			break;
+		case EFlightVerseBehaviorKind::Selector:
+			Record.CompositeOperator = TEXT("Selector");
+			break;
+		default:
+			Record.CompositeOperator = TEXT("Atomic");
+			break;
+		}
+		Record.ChildBehaviorIds = Pair.Value.ChildBehaviorIds;
 		Record.ExecutionRateHz = Pair.Value.ExecutionRateHz;
 		Record.FrameInterval = Pair.Value.FrameInterval;
 		Record.bAsync = Pair.Value.bIsAsync;
 		Record.ResolvedDomain = Flight::Orchestration::ResolveExecutionDomain(Pair.Value);
 		Record.RequiredContracts = Pair.Value.RequiredContracts;
+		Record.LegalLanes = Pair.Value.CapabilityEnvelope.LegalLanes;
+		Record.PreferredLane = Pair.Value.CapabilityEnvelope.PreferredLane;
+		Record.CommittedLane = Pair.Value.CapabilityEnvelope.CommittedLane;
+		Record.ExecutionShape = Flight::Orchestration::BehaviorExecutionShapeToString(Pair.Value.CapabilityEnvelope.ExecutionShape);
+		Record.CommittedExecutionShape = Flight::Orchestration::BehaviorExecutionShapeToString(Pair.Value.CapabilityEnvelope.CommittedExecutionShape);
+		Record.bAllowsMixedLaneExecution = Pair.Value.CapabilityEnvelope.bAllowsMixedLaneExecution;
+		Record.bRequiresSharedTypeKey = Pair.Value.CapabilityEnvelope.bRequiresSharedTypeKey;
+		Record.DisallowedLaneReasons = Pair.Value.CapabilityEnvelope.DisallowedLaneReasons;
+		Record.GuardSummaries.Reset();
+		for (const UFlightVerseSubsystem::FCompositeSelectorBranchSpec& BranchSpec : Pair.Value.SelectorBranches)
+		{
+			if (BranchSpec.bHasGuard)
+			{
+				Record.GuardSummaries.Add(FString::Printf(TEXT("%u: %s"), BranchSpec.BehaviorID, *UFlightVerseSubsystem::DescribeSelectorGuard(BranchSpec.Guard)));
+			}
+		}
 		Record.SelectedBackend = Pair.Value.SelectedBackend;
 		Record.CommittedBackend = Pair.Value.CommittedBackend;
 		Record.CommitDetail = Pair.Value.CommitDetail;
+		Record.bHasLastExecutionResult = Pair.Value.bHasLastExecutionResult;
+		Record.bLastExecutionSucceeded = Pair.Value.bLastExecutionSucceeded;
+		Record.bLastExecutionCommitted = Pair.Value.bLastExecutionCommitted;
+		Record.LastSelectedChildBehaviorId = Pair.Value.LastSelectedChildBehaviorId;
+		Record.LastBranchEvidence = Pair.Value.LastBranchEvidence;
+		Record.LastGuardOutcomes = Pair.Value.LastGuardOutcomes;
+		Record.LastExecutionDetail = Pair.Value.LastExecutionDetail;
 		Record.SelectedPolicyRow = Pair.Value.SelectedPolicyRowName.IsNone()
 			? FString()
 			: Pair.Value.SelectedPolicyRowName.ToString();
 		Record.PolicyPreferredDomain = FlightBehaviorCompileDomainPreferenceToString(Pair.Value.PolicyPreferredDomain);
 		Record.ImportedSymbols = Pair.Value.ImportedSymbols;
 		Record.ExportedSymbols = Pair.Value.ExportedSymbols;
+		Record.FragmentRequirementSummaries.Reset();
+		for (const Flight::Vex::FFlightCompileFragmentRequirementReport& FragmentReport : Pair.Value.CompileArtifactReport.FragmentRequirementReports)
+		{
+			const FString ReadText = FragmentReport.ReadSymbols.Num() > 0
+				? FString::Join(FragmentReport.ReadSymbols, TEXT(", "))
+				: TEXT("none");
+			const FString WriteText = FragmentReport.WrittenSymbols.Num() > 0
+				? FString::Join(FragmentReport.WrittenSymbols, TEXT(", "))
+				: TEXT("none");
+			Record.FragmentRequirementSummaries.Add(FString::Printf(
+				TEXT("%s: read=[%s] write=[%s] direct=%s (%s)"),
+				*FragmentReport.FragmentType,
+				*ReadText,
+				*WriteText,
+				FragmentReport.bSupportedByCurrentDirectProcessor ? TEXT("supported") : TEXT("unsupported"),
+				*FragmentReport.CurrentDirectProcessorSupportReason));
+		}
+		Record.VectorLegalitySummaries.Reset();
+		for (const Flight::Vex::FFlightCompileVectorSymbolReport& VectorReport : Pair.Value.CompileArtifactReport.VectorSymbolReports)
+		{
+			const FString BackendText = VectorReport.LegalBackends.Num() > 0
+				? FString::Join(VectorReport.LegalBackends, TEXT(", "))
+				: TEXT("none");
+			Record.VectorLegalitySummaries.Add(FString::Printf(
+				TEXT("%s: %s [%s] (%s)"),
+				*VectorReport.SymbolName,
+				*VectorReport.HighestLegalClass,
+				*VectorReport.VectorStorageClass,
+				*BackendText));
+		}
 		Record.BoundaryOperatorCount = Pair.Value.BoundaryOperatorCount;
 		Record.bHasBoundarySemantics = Pair.Value.bHasBoundarySemantics;
 		Record.bBoundarySemanticsExecutable = Pair.Value.bBoundarySemanticsExecutable;
@@ -2076,6 +2441,7 @@ void UFlightOrchestrationSubsystem::RebuildCachedReport()
 		CachedReport.Startup.ResolutionSource = TEXT("Unavailable");
 		CachedReport.Startup.Detail = TEXT("FlightStartupCoordinatorSubsystem is not present in the current world.");
 	}
+	CachedReport.SystemVerification.Simd = Flight::Orchestration::BuildSimdVerificationReport();
 	CachedReport.Services = Services;
 	CachedReport.MissingContracts = MissingContracts;
 	CachedReport.Diagnostics = Diagnostics;

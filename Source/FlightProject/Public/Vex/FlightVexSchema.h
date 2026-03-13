@@ -222,6 +222,7 @@ struct FVexSymbolRecord
 	EFlightVexMathDeterminismProfile MathDeterminismProfile = EFlightVexMathDeterminismProfile::Fast;
 	FVexBackendBinding BackendBinding;
 	FVexStorageBinding Storage;
+	FVexVectorPackContract VectorPack;
 	ReadValueFn ReadValue;
 	WriteValueFn WriteValue;
 	FVexSymbolAccessor::GetterFn Getter;
@@ -312,6 +313,9 @@ struct FVexSymbolRecord
 		Logical.MathDeterminismProfile = MathDeterminismProfile;
 		Logical.BackendBinding = BackendBinding;
 		Logical.Storage = Storage;
+		Logical.VectorPack = VectorPack.StorageClass == EVexVectorStorageClass::None
+			? BuildDefaultVectorPackContract(Storage, ValueType, AlignmentRequirement, bSimdReadAllowed, bSimdWriteAllowed, bGpuTier1Allowed)
+			: VectorPack;
 		return Logical;
 	}
 };
@@ -380,8 +384,18 @@ struct FLIGHTPROJECT_API FVexTypeSchema
 		Symbols.Reset();
 		LogicalSymbols.Reset();
 
-		for (const TPair<FString, FVexSymbolRecord>& Pair : SymbolRecords)
+		for (TPair<FString, FVexSymbolRecord>& Pair : SymbolRecords)
 		{
+			if (Pair.Value.VectorPack.StorageClass == EVexVectorStorageClass::None)
+			{
+				Pair.Value.VectorPack = BuildDefaultVectorPackContract(
+					Pair.Value.Storage,
+					Pair.Value.ValueType,
+					Pair.Value.AlignmentRequirement,
+					Pair.Value.bSimdReadAllowed,
+					Pair.Value.bSimdWriteAllowed,
+					Pair.Value.bGpuTier1Allowed);
+			}
 			Symbols.Add(Pair.Key, Pair.Value.MakeAccessor());
 			LogicalSymbols.Add(Pair.Key, Pair.Value.MakeLogicalSymbol());
 		}

@@ -13,6 +13,8 @@ Use this folder when you need to know what is current, what is blocked, and what
 ## Current Implementation Plans
 
 - [OrchestrationImplementationPlan.md](OrchestrationImplementationPlan.md)
+- [BehaviorCompositionVerticalSlicePlan.md](BehaviorCompositionVerticalSlicePlan.md)
+- [BehaviorCompositionCapabilityPlan.md](BehaviorCompositionCapabilityPlan.md)
 - [SchemaIrImplementationPlan.md](SchemaIrImplementationPlan.md)
 - [BoundaryAwareIrImplementationPlan.md](BoundaryAwareIrImplementationPlan.md)
 - [ReflectionGenerativeTestingRecoveryPlan.md](ReflectionGenerativeTestingRecoveryPlan.md)

@@ -4,6 +4,7 @@
 
 #include "Vex/FlightVexOptics.h"
 #include "Vex/FlightVexSchemaIr.h"
+#include "Vex/FlightVexSimdExecutor.h"
 
 namespace Flight::Vex
 {
@@ -98,8 +99,21 @@ FVexBackendCapabilityProfile MakeNativeSimdProfile()
 		EFlightVexSymbolAffinity::WorkerThread
 	};
 	Profile.SupportedStorageKinds = {
-		EVexStorageKind::AosOffset
+		EVexStorageKind::AosOffset,
+		EVexStorageKind::MassFragmentField
 	};
+	Profile.SupportedVectorStorageClasses = {
+		EVexVectorStorageClass::AosPacked,
+		EVexVectorStorageClass::MassFragmentColumn
+	};
+	return Profile;
+}
+
+FVexBackendCapabilityProfile MakeNativeAvx256x8Profile()
+{
+	FVexBackendCapabilityProfile Profile = MakeNativeSimdProfile();
+	Profile.Backend = EVexBackendKind::NativeAvx256x8;
+	Profile.PreferredLane = EVexAbiLane::FloatVector;
 	return Profile;
 }
 
@@ -161,6 +175,10 @@ FVexBackendCapabilityProfile MakeGpuKernelProfile()
 		EVexStorageKind::GpuBufferElement,
 		EVexStorageKind::SoaColumn
 	};
+	Profile.SupportedVectorStorageClasses = {
+		EVexVectorStorageClass::SoaContiguous,
+		EVexVectorStorageClass::GpuBufferColumn
+	};
 	return Profile;
 }
 
@@ -168,6 +186,7 @@ bool SupportsTier(const FVexBackendCapabilityProfile& Profile, const EVexTier Ti
 {
 	switch (Profile.Backend)
 	{
+	case EVexBackendKind::NativeAvx256x8:
 	case EVexBackendKind::NativeSimd:
 	case EVexBackendKind::GpuKernel:
 		return Tier == EVexTier::Literal;
@@ -190,6 +209,9 @@ int32 ScoreBackendSelection(
 	int32 Score = 0;
 	switch (Report.Backend)
 	{
+	case EVexBackendKind::NativeAvx256x8:
+		Score = bPreferSimd ? 230 : 185;
+		break;
 	case EVexBackendKind::NativeSimd:
 		Score = bPreferSimd ? 220 : 180;
 		break;
@@ -251,6 +273,7 @@ FVexSymbolRecord MakeSyntheticSymbolRecord(const FVexSchemaBoundSymbol& BoundSym
 	Record.MathDeterminismProfile = BoundSymbol.LogicalSymbol.MathDeterminismProfile;
 	Record.BackendBinding = BoundSymbol.LogicalSymbol.BackendBinding;
 	Record.Storage = BoundSymbol.LogicalSymbol.Storage;
+	Record.VectorPack = BoundSymbol.LogicalSymbol.VectorPack;
 	return Record;
 }
 
@@ -265,6 +288,12 @@ const FVexBackendCapabilityProfile& GetNativeScalarBackendProfile()
 const FVexBackendCapabilityProfile& GetNativeSimdBackendProfile()
 {
 	static const FVexBackendCapabilityProfile Profile = MakeNativeSimdProfile();
+	return Profile;
+}
+
+const FVexBackendCapabilityProfile& GetNativeAvx256x8BackendProfile()
+{
+	static const FVexBackendCapabilityProfile Profile = MakeNativeAvx256x8Profile();
 	return Profile;
 }
 
@@ -289,6 +318,18 @@ FVexSymbolBackendCompatibility EvaluateSymbolForBackend(
 	Result.SymbolName = Symbol.SymbolName;
 	Result.AccessKind = AccessKind;
 	Result.Backend = Profile.Backend;
+	Result.VectorStorageClass = Symbol.VectorPack.StorageClass;
+
+	const FVexVectorPackContract EffectiveVectorPack = Symbol.VectorPack.StorageClass == EVexVectorStorageClass::None
+		? BuildDefaultVectorPackContract(
+			Symbol.Storage,
+			Symbol.ValueType,
+			Symbol.AlignmentRequirement,
+			Symbol.bSimdReadAllowed,
+			Symbol.bSimdWriteAllowed,
+			Symbol.bGpuTier1Allowed)
+		: Symbol.VectorPack;
+	Result.VectorStorageClass = EffectiveVectorPack.StorageClass;
 
 	const bool bReadable = AccessKind == EVexSchemaAccessKind::Read;
 	if ((bReadable && !Symbol.bReadable) || (!bReadable && !Symbol.bWritable))
@@ -315,6 +356,14 @@ FVexSymbolBackendCompatibility EvaluateSymbolForBackend(
 		return Result;
 	}
 
+	if (!Profile.SupportedVectorStorageClasses.IsEmpty() && !Profile.SupportedVectorStorageClasses.Contains(EffectiveVectorPack.StorageClass))
+	{
+		Result.Reason = FString::Printf(
+			TEXT("Vector storage class '%s' is not supported."),
+			*VexVectorStorageClassToString(EffectiveVectorPack.StorageClass));
+		return Result;
+	}
+
 	const FVexValueTypeCapability* Capability = Profile.ValueCapabilities.Find(Symbol.ValueType);
 	if (!Capability)
 	{
@@ -328,7 +377,7 @@ FVexSymbolBackendCompatibility EvaluateSymbolForBackend(
 		return Result;
 	}
 
-	if (Profile.Backend == EVexBackendKind::NativeSimd
+	if ((Profile.Backend == EVexBackendKind::NativeSimd || Profile.Backend == EVexBackendKind::NativeAvx256x8)
 		&& ((bReadable && !Symbol.bSimdReadAllowed) || (!bReadable && !Symbol.bSimdWriteAllowed)))
 	{
 		Result.Reason = TEXT("Symbol contract disallows SIMD access.");
@@ -341,10 +390,55 @@ FVexSymbolBackendCompatibility EvaluateSymbolForBackend(
 		return Result;
 	}
 
+	const bool bSupportsDirectSimdAccess = bReadable
+		? EffectiveVectorPack.bSupportsDirectSimdRead
+		: EffectiveVectorPack.bSupportsDirectSimdWrite;
+	const bool bSupportsDirectGpuAccess = bReadable
+		? EffectiveVectorPack.bSupportsGpuColumnRead
+		: EffectiveVectorPack.bSupportsGpuColumnWrite;
+
+	if ((Profile.Backend == EVexBackendKind::NativeSimd || Profile.Backend == EVexBackendKind::NativeAvx256x8)
+		&& !bSupportsDirectSimdAccess)
+	{
+		Result.Reason = TEXT("Vector pack contract does not provide a direct SIMD load/store path.");
+		return Result;
+	}
+
+	if (Profile.Backend == EVexBackendKind::GpuKernel && !bSupportsDirectGpuAccess)
+	{
+		Result.Reason = TEXT("Vector pack contract does not provide a direct GPU column path.");
+		return Result;
+	}
+
 	Result.bPreferredFastLane =
 		Capability->bPreferredFastLane
-		&& Symbol.Storage.HasDirectOffset()
-		&& Symbol.Storage.Kind == EVexStorageKind::AosOffset;
+		&& (EffectiveVectorPack.StorageClass == EVexVectorStorageClass::AosPacked
+			|| EffectiveVectorPack.StorageClass == EVexVectorStorageClass::MassFragmentColumn
+			|| EffectiveVectorPack.StorageClass == EVexVectorStorageClass::GpuBufferColumn
+			|| EffectiveVectorPack.StorageClass == EVexVectorStorageClass::SoaContiguous);
+
+	if ((Profile.Backend == EVexBackendKind::NativeSimd || Profile.Backend == EVexBackendKind::NativeAvx256x8)
+		&& bSupportsDirectSimdAccess)
+	{
+		Result.Decision = Result.bPreferredFastLane
+			? EVexBackendDecision::Supported
+			: EVexBackendDecision::SupportedWithFallback;
+		Result.Reason = Result.bPreferredFastLane
+			? TEXT("Direct SIMD load/store supported on the preferred vector storage class.")
+			: TEXT("Direct SIMD load/store supported.");
+		return Result;
+	}
+
+	if (Profile.Backend == EVexBackendKind::GpuKernel && bSupportsDirectGpuAccess)
+	{
+		Result.Decision = Result.bPreferredFastLane
+			? EVexBackendDecision::Supported
+			: EVexBackendDecision::SupportedWithFallback;
+		Result.Reason = Result.bPreferredFastLane
+			? TEXT("Direct GPU column access supported on the preferred vector storage class.")
+			: TEXT("Direct GPU column access supported.");
+		return Result;
+	}
 
 	if (Symbol.Storage.HasDirectOffset() && Capability->bDirectLoadStore)
 	{
@@ -557,6 +651,7 @@ FVexBackendSelection SelectBackendForProgram(
 	const TArray<FVexBackendCapabilityProfile> Profiles = {
 		GetNativeScalarBackendProfile(),
 		GetNativeSimdBackendProfile(),
+		GetNativeAvx256x8BackendProfile(),
 		GetVerseVmBackendProfile(),
 		GetGpuKernelBackendProfile()
 	};
@@ -565,6 +660,12 @@ FVexBackendSelection SelectBackendForProgram(
 	for (const FVexBackendCapabilityProfile& Profile : Profiles)
 	{
 		FVexBackendCompatibilityReport Report = EvaluateBindingForBackend(Binding, Schema, Tier, bAsync, Profile);
+		if (Profile.Backend == EVexBackendKind::NativeAvx256x8
+			&& !FVexSimdExecutor::HasExplicitAvx256x8KernelSupport())
+		{
+			Report.Decision = EVexBackendDecision::Rejected;
+			Report.Reasons.Add(TEXT("Explicit AVX2/FMA kernels are not compiled into this build."));
+		}
 		if (Profile.Backend == EVexBackendKind::VerseVm && !bVerseVmAvailable)
 		{
 			Report.Decision = EVexBackendDecision::Rejected;
@@ -601,6 +702,7 @@ FString VexBackendKindToString(const EVexBackendKind Backend)
 	{
 	case EVexBackendKind::NativeScalar: return TEXT("NativeScalar");
 	case EVexBackendKind::NativeSimd: return TEXT("NativeSimd");
+	case EVexBackendKind::NativeAvx256x8: return TEXT("NativeAvx256x8");
 	case EVexBackendKind::VerseVm: return TEXT("VerseVm");
 	case EVexBackendKind::GpuKernel: return TEXT("GpuKernel");
 	default: return TEXT("Unknown");

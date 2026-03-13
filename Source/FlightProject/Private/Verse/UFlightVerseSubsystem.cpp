@@ -1,6 +1,9 @@
 // Copyright Kelly Rey Wilson. All Rights Reserved.
 
 #include "Verse/UFlightVerseSubsystem.h"
+#include "Verse/FlightVerseMassHostBundle.h"
+#include "Verse/FlightVerseRuntimeValueAccess.h"
+#include "Verse/FlightVerseSubsystemLog.h"
 #include "FlightDataSubsystem.h"
 #include "Verse/FlightGpuScriptBridge.h"
 #include "Vex/FlightCompileArtifacts.h"
@@ -38,7 +41,7 @@
 #include "Vex/FlightVexSymbolRegistry.h"
 #endif
 
-DEFINE_LOG_CATEGORY_STATIC(LogFlightVerseSubsystem, Log, All);
+DEFINE_LOG_CATEGORY(LogFlightVerseSubsystem);
 
 namespace
 {
@@ -108,6 +111,345 @@ namespace
 	const void* GetDroidStateTypeKey()
 	{
 		return Flight::Vex::TTypeVexRegistry<Flight::Swarm::FDroidState>::GetTypeKey();
+	}
+
+	FString VerseBehaviorKindToString(const EFlightVerseBehaviorKind Kind)
+	{
+		switch (Kind)
+		{
+		case EFlightVerseBehaviorKind::Atomic:
+			return TEXT("Atomic");
+		case EFlightVerseBehaviorKind::Sequence:
+			return TEXT("Sequence");
+		case EFlightVerseBehaviorKind::Selector:
+			return TEXT("Selector");
+		default:
+			return TEXT("Unknown");
+		}
+	}
+
+	FString CompositeBehaviorBackendLabel(const EFlightVerseBehaviorKind Kind)
+	{
+		switch (Kind)
+		{
+		case EFlightVerseBehaviorKind::Sequence:
+			return TEXT("CompositeSequence");
+		case EFlightVerseBehaviorKind::Selector:
+			return TEXT("CompositeSelector");
+		default:
+			return TEXT("CompositeUnknown");
+		}
+	}
+
+	bool IsHardwareSimdBackendKind(const Flight::Vex::EVexBackendKind Backend)
+	{
+		return Backend == Flight::Vex::EVexBackendKind::NativeAvx256x8;
+	}
+
+	bool IsVectorShapeBackendKind(const Flight::Vex::EVexBackendKind Backend)
+	{
+		return Backend == Flight::Vex::EVexBackendKind::NativeSimd
+			|| Backend == Flight::Vex::EVexBackendKind::NativeAvx256x8;
+	}
+
+	FString DeriveVectorLegalityClass(
+		const bool bHasVectorShape,
+		const bool bHasHardwareSimd,
+		const bool bHasGpu)
+	{
+		if (bHasGpu)
+		{
+			return TEXT("GpuLegal");
+		}
+		if (bHasHardwareSimd)
+		{
+			return TEXT("HardwareSimdLegal");
+		}
+		if (bHasVectorShape)
+		{
+			return TEXT("VectorShapeLegal");
+		}
+		return TEXT("ScalarOnly");
+	}
+
+	TArray<Flight::Vex::FFlightCompileVectorSymbolReport> BuildVectorSymbolReports(
+		const Flight::Vex::FVexSchemaBindingResult& SchemaBinding)
+	{
+		struct FSymbolVectorAggregation
+		{
+			Flight::Vex::FFlightCompileVectorSymbolReport Report;
+			TSet<FString> LegalBackends;
+			TSet<FString> Reasons;
+			bool bHasVectorShape = false;
+			bool bHasHardwareSimd = false;
+			bool bHasGpu = false;
+		};
+
+		TMap<FString, FSymbolVectorAggregation> Aggregations;
+		for (const Flight::Vex::FVexSchemaBoundSymbol& BoundSymbol : SchemaBinding.BoundSymbols)
+		{
+			FSymbolVectorAggregation& Aggregation = Aggregations.FindOrAdd(BoundSymbol.SymbolName);
+			const Flight::Vex::FVexVectorPackContract EffectiveVectorPack = BoundSymbol.LogicalSymbol.VectorPack.StorageClass == Flight::Vex::EVexVectorStorageClass::None
+				? Flight::Vex::BuildDefaultVectorPackContract(
+					BoundSymbol.LogicalSymbol.Storage,
+					BoundSymbol.LogicalSymbol.ValueType,
+					BoundSymbol.LogicalSymbol.AlignmentRequirement,
+					BoundSymbol.LogicalSymbol.bSimdReadAllowed,
+					BoundSymbol.LogicalSymbol.bSimdWriteAllowed,
+					BoundSymbol.LogicalSymbol.bGpuTier1Allowed)
+				: BoundSymbol.LogicalSymbol.VectorPack;
+			Aggregation.Report.SymbolName = BoundSymbol.SymbolName;
+			Aggregation.Report.ValueType = Flight::Vex::ToTypeString(BoundSymbol.LogicalSymbol.ValueType);
+			Aggregation.Report.StorageKind = Flight::Vex::VexStorageKindToString(BoundSymbol.LogicalSymbol.Storage.Kind);
+			Aggregation.Report.VectorStorageClass = Flight::Vex::VexVectorStorageClassToString(EffectiveVectorPack.StorageClass);
+			Aggregation.Report.HighestLegalClass = TEXT("ScalarOnly");
+		}
+
+		for (const Flight::Vex::FVexBackendBindingDiagnostic& Diagnostic : SchemaBinding.BackendDiagnostics)
+		{
+			if (!IsVectorShapeBackendKind(Diagnostic.Backend)
+				&& Diagnostic.Backend != Flight::Vex::EVexBackendKind::GpuKernel)
+			{
+				continue;
+			}
+
+			FSymbolVectorAggregation* Aggregation = Aggregations.Find(Diagnostic.SymbolName);
+			if (!Aggregation)
+			{
+				continue;
+			}
+
+			const FString BackendName = Flight::Vex::VexBackendKindToString(Diagnostic.Backend);
+			if (Diagnostic.Decision != Flight::Vex::EVexBackendDecision::Rejected)
+			{
+				Aggregation->LegalBackends.Add(BackendName);
+				Aggregation->bHasVectorShape |= IsVectorShapeBackendKind(Diagnostic.Backend);
+				Aggregation->bHasHardwareSimd |= IsHardwareSimdBackendKind(Diagnostic.Backend);
+				Aggregation->bHasGpu |= Diagnostic.Backend == Flight::Vex::EVexBackendKind::GpuKernel;
+			}
+			else if (!Diagnostic.Reason.IsEmpty())
+			{
+				Aggregation->Reasons.Add(FString::Printf(TEXT("%s: %s"), *BackendName, *Diagnostic.Reason));
+			}
+		}
+
+		TArray<Flight::Vex::FFlightCompileVectorSymbolReport> Reports;
+		for (TPair<FString, FSymbolVectorAggregation>& Pair : Aggregations)
+		{
+			Pair.Value.Report.LegalBackends = Pair.Value.LegalBackends.Array();
+			Pair.Value.Report.LegalBackends.Sort();
+			Pair.Value.Report.Reasons = Pair.Value.Reasons.Array();
+			Pair.Value.Report.Reasons.Sort();
+			Pair.Value.Report.HighestLegalClass = DeriveVectorLegalityClass(
+				Pair.Value.bHasVectorShape,
+				Pair.Value.bHasHardwareSimd,
+				Pair.Value.bHasGpu);
+			Reports.Add(MoveTemp(Pair.Value.Report));
+		}
+
+		Reports.Sort([](const Flight::Vex::FFlightCompileVectorSymbolReport& A, const Flight::Vex::FFlightCompileVectorSymbolReport& B)
+		{
+			return A.SymbolName < B.SymbolName;
+		});
+		return Reports;
+	}
+
+	FString DescribeCurrentDirectProcessorFragmentSupport(
+		const Flight::Vex::FVexSchemaFragmentBinding& FragmentBinding,
+		bool& bOutSupported)
+	{
+		bOutSupported = false;
+		if (FragmentBinding.StorageKind != Flight::Vex::EVexStorageKind::MassFragmentField)
+		{
+			return TEXT("Direct Mass processor only supports MassFragmentField storage.");
+		}
+
+		if (FragmentBinding.FragmentType == TEXT("FFlightTransformFragment")
+			|| FragmentBinding.FragmentType == TEXT("FFlightDroidStateFragment"))
+		{
+			bOutSupported = true;
+			return TEXT("Supported by the current direct Mass processor view resolver.");
+		}
+
+		return FString::Printf(
+			TEXT("Unsupported by the current direct Mass processor view resolver for fragment '%s'."),
+			*FragmentBinding.FragmentType.ToString());
+	}
+
+	TArray<Flight::Vex::FFlightCompileFragmentRequirementReport> BuildFragmentRequirementReports(
+		const Flight::Vex::FVexSchemaBindingResult& SchemaBinding)
+	{
+		TArray<Flight::Vex::FFlightCompileFragmentRequirementReport> Reports;
+		Reports.Reserve(SchemaBinding.FragmentBindings.Num());
+
+		for (const Flight::Vex::FVexSchemaFragmentBinding& FragmentBinding : SchemaBinding.FragmentBindings)
+		{
+			Flight::Vex::FFlightCompileFragmentRequirementReport& Report = Reports.AddDefaulted_GetRef();
+			Report.FragmentType = FragmentBinding.FragmentType.ToString();
+			Report.StorageKind = Flight::Vex::VexStorageKindToString(FragmentBinding.StorageKind);
+			Report.ReadSymbols = FragmentBinding.ReadSymbols.Array();
+			Report.ReadSymbols.Sort();
+			Report.WrittenSymbols = FragmentBinding.WrittenSymbols.Array();
+			Report.WrittenSymbols.Sort();
+			Report.CurrentDirectProcessorSupportReason = DescribeCurrentDirectProcessorFragmentSupport(
+				FragmentBinding,
+				Report.bSupportedByCurrentDirectProcessor);
+		}
+
+		Reports.Sort([](
+			const Flight::Vex::FFlightCompileFragmentRequirementReport& Left,
+			const Flight::Vex::FFlightCompileFragmentRequirementReport& Right)
+		{
+			return Left.FragmentType < Right.FragmentType;
+		});
+		return Reports;
+	}
+
+	FString SelectorGuardComparisonToStringLocal(const EFlightBehaviorGuardComparison Comparison)
+	{
+		switch (Comparison)
+		{
+		case EFlightBehaviorGuardComparison::Less:
+			return TEXT("Less");
+		case EFlightBehaviorGuardComparison::LessEqual:
+			return TEXT("LessEqual");
+		case EFlightBehaviorGuardComparison::Greater:
+			return TEXT("Greater");
+		case EFlightBehaviorGuardComparison::GreaterEqual:
+			return TEXT("GreaterEqual");
+		case EFlightBehaviorGuardComparison::Equal:
+			return TEXT("Equal");
+		case EFlightBehaviorGuardComparison::NotEqual:
+			return TEXT("NotEqual");
+		case EFlightBehaviorGuardComparison::IsTrue:
+			return TEXT("IsTrue");
+		case EFlightBehaviorGuardComparison::IsFalse:
+			return TEXT("IsFalse");
+		default:
+			return TEXT("Unknown");
+		}
+	}
+
+	FString BehaviorExecutionShapeToString(const EFlightBehaviorExecutionShape Shape)
+	{
+		switch (Shape)
+		{
+		case EFlightBehaviorExecutionShape::ScalarOnly:
+			return TEXT("ScalarOnly");
+		case EFlightBehaviorExecutionShape::VectorCapable:
+			return TEXT("VectorCapable");
+		case EFlightBehaviorExecutionShape::VectorPreferred:
+			return TEXT("VectorPreferred");
+		case EFlightBehaviorExecutionShape::ShapeAgnostic:
+			return TEXT("ShapeAgnostic");
+		default:
+			return TEXT("Unknown");
+		}
+	}
+
+	FString BuildChildBehaviorListString(TConstArrayView<uint32> ChildBehaviorIds)
+	{
+		TArray<FString> ChildStrings;
+		ChildStrings.Reserve(ChildBehaviorIds.Num());
+		for (const uint32 ChildBehaviorId : ChildBehaviorIds)
+		{
+			ChildStrings.Add(FString::FromInt(static_cast<int32>(ChildBehaviorId)));
+		}
+		return FString::Join(ChildStrings, TEXT(", "));
+	}
+
+	constexpr const TCHAR* NativeScalarLane = TEXT("NativeScalar");
+	constexpr const TCHAR* NativeSimdLane = TEXT("NativeSimd");
+	constexpr const TCHAR* NativeAvx256x8Lane = TEXT("NativeAvx256x8");
+	constexpr const TCHAR* VerseVmLane = TEXT("VerseVm");
+	constexpr const TCHAR* GpuKernelLane = TEXT("GpuKernel");
+
+	bool IsVectorExecutionLane(const FString& Lane)
+	{
+		return Lane == NativeSimdLane || Lane == NativeAvx256x8Lane;
+	}
+
+	bool IsConcreteExecutionLane(const FString& Lane)
+	{
+		return Lane == NativeScalarLane
+			|| Lane == NativeSimdLane
+			|| Lane == NativeAvx256x8Lane
+			|| Lane == VerseVmLane
+			|| Lane == GpuKernelLane;
+	}
+
+	int32 FindLanePriority(const FString& Lane)
+	{
+		if (Lane == NativeAvx256x8Lane)
+		{
+			return 0;
+		}
+		if (Lane == NativeSimdLane)
+		{
+			return 1;
+		}
+		if (Lane == NativeScalarLane)
+		{
+			return 2;
+		}
+		if (Lane == VerseVmLane)
+		{
+			return 3;
+		}
+		if (Lane == GpuKernelLane)
+		{
+			return 4;
+		}
+		return 5;
+	}
+
+	void SortLanes(TArray<FString>& Lanes)
+	{
+		Lanes.Sort([](const FString& A, const FString& B)
+		{
+			const int32 PriorityCompare = FindLanePriority(A) - FindLanePriority(B);
+			return PriorityCompare == 0 ? A < B : PriorityCompare < 0;
+		});
+	}
+
+	EFlightBehaviorExecutionShape DeriveExecutionShapeFromLanes(
+		const TArray<FString>& LegalLanes,
+		const FString& PreferredLane)
+	{
+		const bool bHasVectorLane = LegalLanes.ContainsByPredicate([](const FString& Lane)
+		{
+			return IsVectorExecutionLane(Lane);
+		});
+		if (bHasVectorLane)
+		{
+			return IsVectorExecutionLane(PreferredLane)
+				? EFlightBehaviorExecutionShape::VectorPreferred
+				: EFlightBehaviorExecutionShape::VectorCapable;
+		}
+
+		if (LegalLanes.Contains(NativeScalarLane) || LegalLanes.Contains(VerseVmLane))
+		{
+			return EFlightBehaviorExecutionShape::ScalarOnly;
+		}
+
+		if (LegalLanes.Num() > 0)
+		{
+			return EFlightBehaviorExecutionShape::ShapeAgnostic;
+		}
+
+		return EFlightBehaviorExecutionShape::Unknown;
+	}
+
+	EFlightBehaviorExecutionShape DeriveCommittedExecutionShape(const FString& CommittedLane)
+	{
+		if (CommittedLane.IsEmpty())
+		{
+			return EFlightBehaviorExecutionShape::Unknown;
+		}
+
+		TArray<FString> SingleLane;
+		SingleLane.Add(CommittedLane);
+		return DeriveExecutionShapeFromLanes(SingleLane, CommittedLane);
 	}
 }
 
@@ -194,269 +536,6 @@ namespace
 		else if (SymbolName == TEXT("@velocity")) DroidState.Velocity = AsVec3(Value);
 		else if (SymbolName == TEXT("@shield")) DroidState.Shield = AsFloat(Value);
 		else if (SymbolName == TEXT("@status")) DroidState.Status = static_cast<uint32>(FMath::Max(0, AsInt(Value)));
-	}
-
-	struct FMassEntityExecutionView
-	{
-		FFlightTransformFragment* Transform = nullptr;
-		FFlightDroidStateFragment* DroidState = nullptr;
-	};
-
-	const void* ResolveMassFragmentViewConst(const FMassEntityExecutionView& View, const FName FragmentType)
-	{
-		if (FragmentType == TEXT("FFlightTransformFragment"))
-		{
-			return View.Transform;
-		}
-		if (FragmentType == TEXT("FFlightDroidStateFragment"))
-		{
-			return View.DroidState;
-		}
-		return nullptr;
-	}
-
-	void* ResolveMassFragmentViewMutable(const FMassEntityExecutionView& View, const FName FragmentType)
-	{
-		if (FragmentType == TEXT("FFlightTransformFragment"))
-		{
-			return View.Transform;
-		}
-		if (FragmentType == TEXT("FFlightDroidStateFragment"))
-		{
-			return View.DroidState;
-		}
-		return nullptr;
-	}
-
-	uint32 ResolveStorageStride(const Flight::Vex::FVexSymbolRecord& Symbol)
-	{
-		if (Symbol.Storage.ElementStride != 0)
-		{
-			return Symbol.Storage.ElementStride;
-		}
-
-		switch (Symbol.ValueType)
-		{
-		case Flight::Vex::EVexValueType::Float:
-			return sizeof(float);
-		case Flight::Vex::EVexValueType::Float2:
-			return sizeof(FVector2f);
-		case Flight::Vex::EVexValueType::Float3:
-			return sizeof(FVector3f);
-		case Flight::Vex::EVexValueType::Float4:
-			return sizeof(FVector4f);
-		case Flight::Vex::EVexValueType::Int:
-			return sizeof(int32);
-		case Flight::Vex::EVexValueType::Bool:
-			return sizeof(bool);
-		default:
-			return 0;
-		}
-	}
-
-	FNativeValue ReadRuntimeValueFromAddress(
-		const uint8* Bytes,
-		const Flight::Vex::EVexValueType ValueType,
-		const uint32 ElementStride)
-	{
-		switch (ValueType)
-		{
-		case Flight::Vex::EVexValueType::Float:
-			return MakeFloat(*reinterpret_cast<const float*>(Bytes));
-		case Flight::Vex::EVexValueType::Int:
-		{
-			if (ElementStride == sizeof(uint32))
-			{
-				return MakeInt(static_cast<int32>(*reinterpret_cast<const uint32*>(Bytes)));
-			}
-			return MakeInt(*reinterpret_cast<const int32*>(Bytes));
-		}
-		case Flight::Vex::EVexValueType::Bool:
-			return MakeBool(*reinterpret_cast<const bool*>(Bytes));
-		case Flight::Vex::EVexValueType::Float2:
-		{
-			if (ElementStride == sizeof(FVector2D))
-			{
-				const FVector2D& Value = *reinterpret_cast<const FVector2D*>(Bytes);
-				return Flight::Vex::FVexRuntimeValue::FromVec2(FVector2f(Value));
-			}
-			return Flight::Vex::FVexRuntimeValue::FromVec2(*reinterpret_cast<const FVector2f*>(Bytes));
-		}
-		case Flight::Vex::EVexValueType::Float3:
-		{
-			if (ElementStride == sizeof(FVector))
-			{
-				const FVector& Value = *reinterpret_cast<const FVector*>(Bytes);
-				return MakeVec3(FVector3f(Value));
-			}
-			return MakeVec3(*reinterpret_cast<const FVector3f*>(Bytes));
-		}
-		case Flight::Vex::EVexValueType::Float4:
-		{
-			if (ElementStride == sizeof(FVector4))
-			{
-				const FVector4& Value = *reinterpret_cast<const FVector4*>(Bytes);
-				return Flight::Vex::FVexRuntimeValue::FromVec4(FVector4f(Value));
-			}
-			return Flight::Vex::FVexRuntimeValue::FromVec4(*reinterpret_cast<const FVector4f*>(Bytes));
-		}
-		default:
-			return FNativeValue();
-		}
-	}
-
-	bool WriteRuntimeValueToAddress(
-		uint8* Bytes,
-		const Flight::Vex::EVexValueType ValueType,
-		const uint32 ElementStride,
-		const FNativeValue& Value)
-	{
-		switch (ValueType)
-		{
-		case Flight::Vex::EVexValueType::Float:
-			*reinterpret_cast<float*>(Bytes) = AsFloat(Value);
-			return true;
-		case Flight::Vex::EVexValueType::Int:
-			if (ElementStride == sizeof(uint32))
-			{
-				*reinterpret_cast<uint32*>(Bytes) = static_cast<uint32>(FMath::Max(0, AsInt(Value)));
-				return true;
-			}
-			*reinterpret_cast<int32*>(Bytes) = AsInt(Value);
-			return true;
-		case Flight::Vex::EVexValueType::Bool:
-			*reinterpret_cast<bool*>(Bytes) = AsBool(Value);
-			return true;
-		case Flight::Vex::EVexValueType::Float2:
-			if (ElementStride == sizeof(FVector2D))
-			{
-				const FVector2f Vec2Value = Value.AsVec2();
-				*reinterpret_cast<FVector2D*>(Bytes) = FVector2D(Vec2Value.X, Vec2Value.Y);
-				return true;
-			}
-			*reinterpret_cast<FVector2f*>(Bytes) = Value.AsVec2();
-			return true;
-		case Flight::Vex::EVexValueType::Float3:
-			if (ElementStride == sizeof(FVector))
-			{
-				const FVector3f Vec3Value = AsVec3(Value);
-				*reinterpret_cast<FVector*>(Bytes) = FVector(Vec3Value.X, Vec3Value.Y, Vec3Value.Z);
-				return true;
-			}
-			*reinterpret_cast<FVector3f*>(Bytes) = AsVec3(Value);
-			return true;
-		case Flight::Vex::EVexValueType::Float4:
-			if (ElementStride == sizeof(FVector4))
-			{
-				const FVector4f Vec4Value = Value.AsVec4();
-				*reinterpret_cast<FVector4*>(Bytes) = FVector4(Vec4Value.X, Vec4Value.Y, Vec4Value.Z, Vec4Value.W);
-				return true;
-			}
-			*reinterpret_cast<FVector4f*>(Bytes) = Value.AsVec4();
-			return true;
-		default:
-			return false;
-		}
-	}
-
-	FNativeValue ReadMassFragmentSymbolValue(
-		const FMassEntityExecutionView& View,
-		const Flight::Vex::FVexSymbolRecord& Symbol)
-	{
-		const void* FragmentPtr = ResolveMassFragmentViewConst(View, Symbol.Storage.FragmentType);
-		if (!FragmentPtr)
-		{
-			return FNativeValue();
-		}
-
-		if (Symbol.Storage.MemberOffset == INDEX_NONE)
-		{
-			return FNativeValue();
-		}
-
-		const uint32 ElementStride = ResolveStorageStride(Symbol);
-		const uint8* Bytes = reinterpret_cast<const uint8*>(FragmentPtr) + Symbol.Storage.MemberOffset;
-		return ReadRuntimeValueFromAddress(Bytes, Symbol.ValueType, ElementStride);
-	}
-
-	bool WriteMassFragmentSymbolValue(
-		const FMassEntityExecutionView& View,
-		const Flight::Vex::FVexSymbolRecord& Symbol,
-		const FNativeValue& Value)
-	{
-		void* FragmentPtr = ResolveMassFragmentViewMutable(View, Symbol.Storage.FragmentType);
-		if (!FragmentPtr)
-		{
-			return false;
-		}
-
-		if (Symbol.Storage.MemberOffset == INDEX_NONE)
-		{
-			return false;
-		}
-
-		const uint32 ElementStride = ResolveStorageStride(Symbol);
-		uint8* Bytes = reinterpret_cast<uint8*>(FragmentPtr) + Symbol.Storage.MemberOffset;
-		if (!WriteRuntimeValueToAddress(Bytes, Symbol.ValueType, ElementStride, Value))
-		{
-			return false;
-		}
-
-		if (Symbol.Storage.FragmentType == TEXT("FFlightDroidStateFragment") && View.DroidState)
-		{
-			View.DroidState->bIsDirty = true;
-		}
-		return true;
-	}
-
-	bool BuildMassRuntimeSchema(
-		const Flight::Vex::FVexTypeSchema& BaseSchema,
-		const Flight::Vex::FVexSchemaBindingResult& Binding,
-		const FMassEntityExecutionView& View,
-		Flight::Vex::FVexTypeSchema& OutSchema)
-	{
-		OutSchema = BaseSchema;
-		OutSchema.SymbolRecords.Reset();
-
-		for (const TPair<FString, Flight::Vex::FVexSymbolRecord>& Pair : BaseSchema.SymbolRecords)
-		{
-			const Flight::Vex::FVexSymbolRecord& SourceRecord = Pair.Value;
-			if (SourceRecord.Storage.Kind != Flight::Vex::EVexStorageKind::MassFragmentField)
-			{
-				return false;
-			}
-
-			const Flight::Vex::FVexSchemaBoundSymbol* BoundSymbol = Binding.FindBoundSymbolByName(Pair.Key);
-			if (!BoundSymbol)
-			{
-				return false;
-			}
-
-			const Flight::Vex::FVexSchemaFragmentBinding* FragmentBinding =
-				Binding.FindFragmentBindingByType(BoundSymbol->LogicalSymbol.Storage.FragmentType);
-			if (!FragmentBinding || FragmentBinding->StorageKind != Flight::Vex::EVexStorageKind::MassFragmentField)
-			{
-				return false;
-			}
-
-			Flight::Vex::FVexSymbolRecord RuntimeRecord = SourceRecord;
-			RuntimeRecord.Storage.FragmentType = FragmentBinding->FragmentType;
-			const Flight::Vex::FVexSymbolRecord AdaptedRecord = RuntimeRecord;
-			RuntimeRecord.ReadValue = [View, AdaptedRecord](const void*) -> Flight::Vex::FVexRuntimeValue
-			{
-				return ReadMassFragmentSymbolValue(View, AdaptedRecord);
-			};
-			RuntimeRecord.WriteValue = [View, AdaptedRecord](void*, const Flight::Vex::FVexRuntimeValue& Value) -> bool
-			{
-				return WriteMassFragmentSymbolValue(View, AdaptedRecord, Value);
-			};
-			RuntimeRecord.Getter = {};
-			RuntimeRecord.Setter = {};
-			OutSchema.SymbolRecords.Add(Pair.Key, MoveTemp(RuntimeRecord));
-		}
-
-		OutSchema.RebuildLegacyViews();
-		return true;
 	}
 
 	FNativeValue ApplyArithmetic(const FString& OperatorLexeme, const FNativeValue& Left, const FNativeValue& Right)
@@ -834,89 +913,6 @@ void UFlightVerseSubsystem::Deinitialize()
 	Super::Deinitialize();
 }
 
-UFlightVerseSubsystem::FResolvedStorageHost UFlightVerseSubsystem::ResolveStorageHost(
-	const FVerseBehavior& Behavior,
-	const void* RequestedTypeKey) const
-{
-	FResolvedStorageHost Host;
-	Host.TypeKey = RequestedTypeKey ? RequestedTypeKey : Behavior.BoundTypeKey;
-	Host.TypeName = Behavior.BoundTypeStableName;
-
-	if (Host.TypeKey)
-	{
-		Host.Schema = Flight::Vex::FVexSymbolRegistry::Get().GetSchema(Host.TypeKey);
-	}
-
-	if (Host.Schema)
-	{
-		if (!Behavior.SchemaBinding.IsSet())
-		{
-			Host.Kind = EStorageHostKind::SchemaAccessor;
-			return Host;
-		}
-
-		bool bUsesAos = false;
-		bool bUsesAccessor = false;
-		bool bUsesMass = false;
-		bool bUsesGpu = false;
-		for (const Flight::Vex::FVexSchemaSymbolUse& Use : Behavior.SchemaBinding->SymbolUses)
-		{
-			if (!Behavior.SchemaBinding->BoundSymbols.IsValidIndex(Use.BoundSymbolIndex))
-			{
-				continue;
-			}
-
-			const Flight::Vex::FVexSchemaBoundSymbol& BoundSymbol = Behavior.SchemaBinding->BoundSymbols[Use.BoundSymbolIndex];
-			const Flight::Vex::FVexStorageBinding& Storage = BoundSymbol.LogicalSymbol.Storage;
-			switch (Storage.Kind)
-			{
-			case Flight::Vex::EVexStorageKind::AosOffset:
-				bUsesAos = true;
-				break;
-			case Flight::Vex::EVexStorageKind::Accessor:
-			case Flight::Vex::EVexStorageKind::ExternalProvider:
-			case Flight::Vex::EVexStorageKind::None:
-				bUsesAccessor = true;
-				break;
-			case Flight::Vex::EVexStorageKind::MassFragmentField:
-				bUsesMass = true;
-				break;
-			case Flight::Vex::EVexStorageKind::SoaColumn:
-			case Flight::Vex::EVexStorageKind::GpuBufferElement:
-				bUsesGpu = true;
-				break;
-			default:
-				return Host;
-			}
-		}
-
-		if (bUsesGpu)
-		{
-			Host.Kind = EStorageHostKind::GpuBuffer;
-		}
-		else if (bUsesMass)
-		{
-			Host.Kind = EStorageHostKind::MassFragments;
-		}
-		else if (bUsesAccessor || !bUsesAos)
-		{
-			Host.Kind = EStorageHostKind::SchemaAccessor;
-		}
-		else
-		{
-			Host.Kind = EStorageHostKind::SchemaAos;
-		}
-		return Host;
-	}
-
-	if (Host.TypeKey == GetDroidStateTypeKey())
-	{
-		Host.Kind = EStorageHostKind::LegacyDroidState;
-	}
-
-	return Host;
-}
-
 bool UFlightVerseSubsystem::ExecuteResolvedStorageHost(
 	const FResolvedStorageHost& Host,
 	const FVerseBehavior& Behavior,
@@ -940,192 +936,334 @@ bool UFlightVerseSubsystem::ExecuteResolvedStorageHost(
 	}
 }
 
-bool UFlightVerseSubsystem::ExecuteResolvedDirectStorageHost(
-	const FResolvedStorageHost& Host,
-	const FVerseBehavior& Behavior,
-	const Flight::Vex::EVexBackendKind BackendKind,
-	TArrayView<FFlightTransformFragment> Transforms,
-	TArrayView<FFlightDroidStateFragment> DroidStates)
+bool UFlightVerseSubsystem::RegisterCompositeSequenceBehavior(
+	uint32 BehaviorID,
+	TConstArrayView<uint32> ChildBehaviorIds,
+	FString& OutErrors,
+	const void* TypeKey)
 {
-	switch (Host.Kind)
+	return RegisterCompositeBehavior(BehaviorID, ChildBehaviorIds, OutErrors, TypeKey, EFlightVerseBehaviorKind::Sequence);
+}
+
+bool UFlightVerseSubsystem::RegisterCompositeSelectorBehavior(
+	uint32 BehaviorID,
+	TConstArrayView<uint32> ChildBehaviorIds,
+	FString& OutErrors,
+	const void* TypeKey)
+{
+	return RegisterCompositeBehavior(BehaviorID, ChildBehaviorIds, OutErrors, TypeKey, EFlightVerseBehaviorKind::Selector);
+}
+
+bool UFlightVerseSubsystem::RegisterGuardedCompositeSelectorBehavior(
+	uint32 BehaviorID,
+	TConstArrayView<FCompositeSelectorBranchSpec> BranchSpecs,
+	FString& OutErrors,
+	const void* TypeKey)
+{
+	OutErrors.Reset();
+	if (BranchSpecs.IsEmpty())
 	{
-	case EStorageHostKind::MassFragments:
-		return ExecuteOnMassSchemaHost(Behavior, BackendKind, Transforms, DroidStates);
-	case EStorageHostKind::GpuBuffer:
-		return BackendKind == Flight::Vex::EVexBackendKind::GpuKernel
-			? ExecuteOnGpuSchemaHost(Behavior)
-			: false;
-	default:
-		return false;
-	}
-}
-
-void UFlightVerseSubsystem::ExecuteOnAosSchemaHost(
-	const Flight::Vex::FVexProgramAst& Program,
-	void* StructPtr,
-	const Flight::Vex::FVexTypeSchema& Schema)
-{
-	ExecuteOnSchema(Program, StructPtr, Schema);
-}
-
-void UFlightVerseSubsystem::ExecuteOnAccessorSchemaHost(
-	const Flight::Vex::FVexProgramAst& Program,
-	void* StructPtr,
-	const Flight::Vex::FVexTypeSchema& Schema)
-{
-	ExecuteOnSchema(Program, StructPtr, Schema);
-}
-
-bool UFlightVerseSubsystem::ExecuteOnMassSchemaHost(
-	const FVerseBehavior& Behavior,
-	const Flight::Vex::EVexBackendKind BackendKind,
-	TArrayView<FFlightTransformFragment> Transforms,
-	TArrayView<FFlightDroidStateFragment> DroidStates)
-{
-	if (!Behavior.SchemaBinding.IsSet())
-	{
+		OutErrors = TEXT("Guarded composite selector registration requires at least one branch.");
 		return false;
 	}
 
-	const Flight::Vex::FVexTypeSchema* BaseSchema = Behavior.BoundTypeKey
-		? Flight::Vex::FVexSymbolRegistry::Get().GetSchema(Behavior.BoundTypeKey)
-		: nullptr;
-	if (!BaseSchema)
+	const void* EffectiveTypeKey = TypeKey;
+	TArray<uint32> ChildBehaviorIds;
+	ChildBehaviorIds.Reserve(BranchSpecs.Num());
+	for (const FCompositeSelectorBranchSpec& BranchSpec : BranchSpecs)
 	{
-		return false;
-	}
-
-	if (BackendKind == Flight::Vex::EVexBackendKind::NativeSimd)
-	{
-		if (Behavior.Tier != Flight::Vex::EVexTier::Literal || !Behavior.SimdPlan.IsValid())
+		if (BranchSpec.BehaviorID == 0)
 		{
+			OutErrors = TEXT("Guarded composite selector registration requires non-zero child behavior ids.");
 			return false;
 		}
 
-		Behavior.SimdPlan->ExecuteDirect(Transforms, DroidStates);
-		return true;
+		if (!EffectiveTypeKey)
+		{
+			if (const FVerseBehavior* ChildBehavior = Behaviors.Find(BranchSpec.BehaviorID))
+			{
+				EffectiveTypeKey = ResolveEffectiveBehaviorTypeKey(*ChildBehavior);
+			}
+		}
+
+		if (BranchSpec.bHasGuard)
+		{
+			FString GuardError;
+			if (!ValidateSelectorGuard(BranchSpec.Guard, EffectiveTypeKey, GuardError))
+			{
+				OutErrors = GuardError.IsEmpty()
+					? FString::Printf(TEXT("Selector guard for child %u is invalid."), BranchSpec.BehaviorID)
+					: GuardError;
+				return false;
+			}
+		}
+
+		ChildBehaviorIds.Add(BranchSpec.BehaviorID);
 	}
 
-	if (BackendKind != Flight::Vex::EVexBackendKind::NativeScalar)
+	if (!RegisterCompositeBehavior(BehaviorID, ChildBehaviorIds, OutErrors, TypeKey, EFlightVerseBehaviorKind::Selector))
 	{
 		return false;
 	}
 
-	const int32 NumEntities = FMath::Min(Transforms.Num(), DroidStates.Num());
-	for (int32 Index = 0; Index < NumEntities; ++Index)
+	FVerseBehavior* Behavior = Behaviors.Find(BehaviorID);
+	if (!Behavior)
 	{
-		FMassEntityExecutionView View;
-		View.Transform = &Transforms[Index];
-		View.DroidState = &DroidStates[Index];
+		OutErrors = FString::Printf(TEXT("Guarded composite selector behavior %u was not retained after registration."), BehaviorID);
+		return false;
+	}
 
-		Flight::Vex::FVexTypeSchema RuntimeSchema;
-		if (!BuildMassRuntimeSchema(*BaseSchema, *Behavior.SchemaBinding, View, RuntimeSchema))
+	Behavior->SelectorBranches.Reset();
+	Behavior->SelectorBranches.Append(BranchSpecs.GetData(), BranchSpecs.Num());
+	Behavior->bHasLastExecutionResult = false;
+	Behavior->bLastExecutionSucceeded = false;
+	Behavior->bLastExecutionCommitted = false;
+	Behavior->LastSelectedChildBehaviorId = 0;
+	Behavior->LastBranchEvidence.Reset();
+	Behavior->LastGuardOutcomes.Reset();
+	Behavior->LastExecutionDetail.Reset();
+
+	TArray<FString> GuardDescriptions;
+	for (const FCompositeSelectorBranchSpec& BranchSpec : Behavior->SelectorBranches)
+	{
+		if (BranchSpec.bHasGuard)
 		{
-			return false;
+			GuardDescriptions.Add(FString::Printf(TEXT("%u: %s"), BranchSpec.BehaviorID, *DescribeSelectorGuard(BranchSpec.Guard)));
 		}
+	}
 
-		ExecuteOnSchema(Behavior.NativeProgram, &View, RuntimeSchema);
+	if (GuardDescriptions.Num() > 0)
+	{
+		Behavior->LastCompileDiagnostics = FString::Printf(
+			TEXT("Registered guarded composite selector behavior with branches [%s]."),
+			*FString::Join(GuardDescriptions, TEXT(", ")));
+		Behavior->CommitDetail += FString::Printf(TEXT(" Guards=[%s]."), *FString::Join(GuardDescriptions, TEXT(", ")));
+	}
+
+	RefreshCapabilityEnvelopes();
+
+	if (UWorld* World = GetWorld())
+	{
+		if (UFlightOrchestrationSubsystem* Orchestration = World->GetSubsystem<UFlightOrchestrationSubsystem>())
+		{
+			Orchestration->Rebuild();
+		}
 	}
 
 	return true;
 }
 
-bool UFlightVerseSubsystem::ExecuteOnGpuSchemaHost(const FVerseBehavior& Behavior)
+bool UFlightVerseSubsystem::RegisterCompositeBehavior(
+	uint32 BehaviorID,
+	TConstArrayView<uint32> ChildBehaviorIds,
+	FString& OutErrors,
+	const void* TypeKey,
+	const EFlightVerseBehaviorKind Kind)
 {
-	UWorld* World = GetWorld();
-	UFlightGpuScriptBridgeSubsystem* GpuBridge = World ? World->GetSubsystem<UFlightGpuScriptBridgeSubsystem>() : nullptr;
-	if (!GpuBridge)
+	OutErrors.Reset();
+
+	const FString OperatorName = VerseBehaviorKindToString(Kind);
+	const FString BackendLabel = CompositeBehaviorBackendLabel(Kind);
+	const FString OperatorNameLower = OperatorName.ToLower();
+	if (ChildBehaviorIds.IsEmpty())
 	{
-		UE_LOG(
-			LogFlightVerseSubsystem,
-			Verbose,
-			TEXT("Behavior %u resolved to explicit GPU storage hosting, but no GPU script bridge is available."),
-			Behavior.CompileArtifactReport.BehaviorID);
+		OutErrors = FString::Printf(TEXT("Composite %s registration requires at least one child behavior."), *OperatorNameLower);
 		return false;
 	}
 
-	FFlightGpuInvocation Invocation;
-	Invocation.ProgramId = Behavior.BoundTypeStableName.IsNone()
-		? FName(*FString::Printf(TEXT("Behavior_%u"), Behavior.CompileArtifactReport.BehaviorID))
-		: Behavior.BoundTypeStableName;
-	Invocation.BehaviorId = Behavior.CompileArtifactReport.BehaviorID;
-	Invocation.LatencyClass = EFlightGpuLatencyClass::NextFrameGpu;
-	Invocation.bAwaitRequested = Behavior.bHasAwaitableBoundary;
-	Invocation.bMirrorRequested = Behavior.bHasMirrorRequest;
-	Invocation.bAllowDeferredExternalSignal = true;
+	const void* EffectiveTypeKey = TypeKey;
+	uint32 SharedFrameInterval = 1;
+	float SharedExecutionRateHz = 0.0f;
+	bool bInitializedTiming = false;
+	TArray<FName> AggregatedContracts;
+	TArray<FString> AggregatedImportedSymbols;
+	TArray<FString> AggregatedExportedSymbols;
 
-	for (const FString& ImportedSymbol : Behavior.ImportedSymbols)
+	for (const uint32 ChildBehaviorId : ChildBehaviorIds)
 	{
-		FFlightGpuResourceBinding& Binding = Invocation.ResourceBindings.AddDefaulted_GetRef();
-		Binding.Name = FName(*ImportedSymbol);
-		Binding.SymbolName = ImportedSymbol;
-	}
-
-	for (const FString& ExportedSymbol : Behavior.ExportedSymbols)
-	{
-		FFlightGpuResourceBinding& Binding = Invocation.ResourceBindings.AddDefaulted_GetRef();
-		Binding.Name = FName(*ExportedSymbol);
-		Binding.SymbolName = ExportedSymbol;
-	}
-
-	FString SubmissionDetail;
-	const FFlightGpuSubmissionHandle Handle = GpuBridge->Submit(Invocation, SubmissionDetail);
-	if (!Handle.IsValid())
-	{
-		UpdateBehaviorCommitState(
-			Behavior.CompileArtifactReport.BehaviorID,
-			TEXT("Unknown"),
-			FString::Printf(TEXT("GPU submission failed before a runtime commit could be proven: %s"), *SubmissionDetail));
-		return false;
-	}
-
-	FString AwaitReason;
-	const TWeakObjectPtr<UFlightVerseSubsystem> WeakSubsystem(this);
-	const bool bAwaitRegistered = GpuBridge->Await(
-		Handle,
-		[WeakSubsystem, BehaviorID = Behavior.CompileArtifactReport.BehaviorID, SubmissionHandle = Handle.Value](
-			const EFlightGpuSubmissionStatus Status,
-			const FString& Detail)
+		if (ChildBehaviorId == BehaviorID)
 		{
-			if (UFlightVerseSubsystem* ResolvedSubsystem = WeakSubsystem.Get())
-			{
-				ResolvedSubsystem->ResolveGpuExecutionCommit(
-					BehaviorID,
-					SubmissionHandle,
-					Status == EFlightGpuSubmissionStatus::Completed,
-					Detail);
-			}
-		},
-		AwaitReason);
-	if (!bAwaitRegistered)
-	{
-		UpdateBehaviorCommitState(
-			Behavior.CompileArtifactReport.BehaviorID,
-			TEXT("Unknown"),
-			FString::Printf(TEXT("GPU submission was accepted, but no terminal await could be registered: %s"), *AwaitReason));
-		return false;
+			OutErrors = FString::Printf(
+				TEXT("Composite %s behavior %u cannot reference itself as a child."),
+				*OperatorNameLower,
+				BehaviorID);
+			return false;
+		}
+
+		const FVerseBehavior* ChildBehavior = Behaviors.Find(ChildBehaviorId);
+		if (!ChildBehavior)
+		{
+			OutErrors = FString::Printf(
+				TEXT("Composite %s behavior %u is missing child behavior %u."),
+				*OperatorNameLower,
+				BehaviorID,
+				ChildBehaviorId);
+			return false;
+		}
+
+		if (IsCompositeBehavior(*ChildBehavior))
+		{
+			OutErrors = FString::Printf(
+				TEXT("Composite %s behavior %u does not yet support composite child behavior %u."),
+				*OperatorNameLower,
+				BehaviorID,
+				ChildBehaviorId);
+			return false;
+		}
+
+		if (!ChildBehavior->bHasExecutableProcedure
+			&& !ChildBehavior->bUsesNativeFallback
+			&& !ChildBehavior->SimdPlan.IsValid())
+		{
+			OutErrors = FString::Printf(
+				TEXT("Composite %s behavior %u requires executable child behavior %u."),
+				*OperatorNameLower,
+				BehaviorID,
+				ChildBehaviorId);
+			return false;
+		}
+
+		if (ChildBehavior->bIsAsync)
+		{
+			OutErrors = FString::Printf(
+				TEXT("Composite %s behavior %u does not yet support async child behavior %u."),
+				*OperatorNameLower,
+				BehaviorID,
+				ChildBehaviorId);
+			return false;
+		}
+
+		if (ChildBehavior->bHasBoundarySemantics)
+		{
+			OutErrors = FString::Printf(
+				TEXT("Composite %s behavior %u does not yet support boundary-aware child behavior %u."),
+				*OperatorNameLower,
+				BehaviorID,
+				ChildBehaviorId);
+			return false;
+		}
+
+		const void* ChildTypeKey = ResolveEffectiveBehaviorTypeKey(*ChildBehavior);
+		if (!EffectiveTypeKey)
+		{
+			EffectiveTypeKey = ChildTypeKey;
+		}
+		else if (ChildTypeKey && EffectiveTypeKey != ChildTypeKey)
+		{
+			OutErrors = FString::Printf(
+				TEXT("Composite %s behavior %u requires children to share one type key; child %u is incompatible."),
+				*OperatorNameLower,
+				BehaviorID,
+				ChildBehaviorId);
+			return false;
+		}
+
+		if (!bInitializedTiming)
+		{
+			SharedFrameInterval = FMath::Max(1u, ChildBehavior->FrameInterval);
+			SharedExecutionRateHz = ChildBehavior->ExecutionRateHz;
+			bInitializedTiming = true;
+		}
+		else if (SharedFrameInterval != ChildBehavior->FrameInterval
+			|| !FMath::IsNearlyEqual(SharedExecutionRateHz, ChildBehavior->ExecutionRateHz))
+		{
+			OutErrors = FString::Printf(
+				TEXT("Composite %s behavior %u currently requires children to share one execution interval; child %u does not match."),
+				*OperatorNameLower,
+				BehaviorID,
+				ChildBehaviorId);
+			return false;
+		}
+
+		for (const FName Contract : ChildBehavior->RequiredContracts)
+		{
+			AggregatedContracts.AddUnique(Contract);
+		}
+
+		for (const FString& ImportedSymbol : ChildBehavior->ImportedSymbols)
+		{
+			AggregatedImportedSymbols.AddUnique(ImportedSymbol);
+		}
+
+		for (const FString& ExportedSymbol : ChildBehavior->ExportedSymbols)
+		{
+			AggregatedExportedSymbols.AddUnique(ExportedSymbol);
+		}
 	}
 
-	if (FVerseBehavior* MutableBehavior = Behaviors.Find(Behavior.CompileArtifactReport.BehaviorID))
+	Behaviors.Remove(BehaviorID);
+	FVerseBehavior& Behavior = Behaviors.FindOrAdd(BehaviorID);
+	Behavior.Kind = Kind;
+	Behavior.ChildBehaviorIds.Reset();
+	Behavior.ChildBehaviorIds.Append(ChildBehaviorIds.GetData(), ChildBehaviorIds.Num());
+	Behavior.SelectorBranches.Reset();
+	Behavior.CompileState = EFlightVerseCompileState::VmCompiled;
+	Behavior.Tier = Flight::Vex::EVexTier::Full;
+	Behavior.ExecutionRateHz = SharedExecutionRateHz;
+	Behavior.FrameInterval = SharedFrameInterval;
+	Behavior.bHasExecutableProcedure = true;
+	Behavior.bUsesNativeFallback = false;
+	Behavior.bUsesVmEntryPoint = false;
+	Behavior.NativeProgram = Flight::Vex::FVexProgramAst();
+	Behavior.BoundTypeKey = EffectiveTypeKey;
+	Behavior.SchemaBinding.Reset();
+	Behavior.SelectedBackend = BackendLabel;
+	Behavior.CommittedBackend = BackendLabel;
+	Behavior.CommitDetail = FString::Printf(
+		TEXT("Composite %s behavior registered over child behaviors [%s]."),
+		*OperatorNameLower,
+		*BuildChildBehaviorListString(Behavior.ChildBehaviorIds));
+	Behavior.bHasLastExecutionResult = false;
+	Behavior.bLastExecutionSucceeded = false;
+	Behavior.bLastExecutionCommitted = false;
+	Behavior.LastSelectedChildBehaviorId = 0;
+	Behavior.LastBranchEvidence.Reset();
+	Behavior.LastGuardOutcomes.Reset();
+	Behavior.LastExecutionDetail.Reset();
+	Behavior.RequiredContracts = MoveTemp(AggregatedContracts);
+	Behavior.ImportedSymbols = MoveTemp(AggregatedImportedSymbols);
+	Behavior.ExportedSymbols = MoveTemp(AggregatedExportedSymbols);
+	Behavior.BoundaryOperatorCount = 0;
+	Behavior.bHasBoundarySemantics = false;
+	Behavior.bBoundarySemanticsExecutable = true;
+	Behavior.bHasAwaitableBoundary = false;
+	Behavior.bHasMirrorRequest = false;
+	Behavior.BoundaryExecutionDetail.Reset();
+	Behavior.CapabilityEnvelope = FBehaviorCapabilityEnvelope();
+	Behavior.bHasCompileArtifactReport = false;
+	Behavior.CompileArtifactReport = Flight::Vex::FFlightCompileArtifactReport();
+	Behavior.LastCompileDiagnostics = FString::Printf(
+		TEXT("Registered composite %s behavior with child behaviors [%s]."),
+		*OperatorNameLower,
+		*BuildChildBehaviorListString(Behavior.ChildBehaviorIds));
+
+	if (const Flight::Vex::FVexTypeSchema* Schema = EffectiveTypeKey
+		? Flight::Vex::FVexSymbolRegistry::Get().GetSchema(EffectiveTypeKey)
+		: nullptr)
 	{
-		MutableBehavior->LastGpuSubmissionHandle = Handle.Value;
-		MutableBehavior->LastGpuSubmissionDetail = SubmissionDetail;
-		MutableBehavior->bGpuExecutionPending = true;
+		Behavior.BoundTypeStableName = Schema->TypeId.StableName.IsNone()
+			? FName(*Schema->TypeName)
+			: Schema->TypeId.StableName;
+		Behavior.BoundSchemaLayoutHash = Schema->LayoutHash;
 	}
-	UpdateBehaviorCommitState(
-		Behavior.CompileArtifactReport.BehaviorID,
-		TEXT("Unknown"),
-		FString::Printf(
-			TEXT("GPU submission %llu accepted; waiting for a terminal bridge result before commit. %s"),
-			static_cast<unsigned long long>(Handle.Value),
-			*SubmissionDetail));
-	UE_LOG(
-		LogFlightVerseSubsystem,
-		Verbose,
-		TEXT("Behavior %u resolved to explicit GPU storage hosting. BridgeHandle=%llu Detail=%s"),
-		Behavior.CompileArtifactReport.BehaviorID,
-		static_cast<unsigned long long>(Handle.Value),
-		*SubmissionDetail);
+	else
+	{
+		Behavior.BoundTypeStableName = EffectiveTypeKey == GetDroidStateTypeKey()
+			? FName(TEXT("FDroidState"))
+			: NAME_None;
+		Behavior.BoundSchemaLayoutHash = 0;
+	}
+
+	RefreshCapabilityEnvelopes();
+
+	if (UWorld* World = GetWorld())
+	{
+		if (UFlightOrchestrationSubsystem* Orchestration = World->GetSubsystem<UFlightOrchestrationSubsystem>())
+		{
+			Orchestration->Rebuild();
+		}
+	}
+
 	return true;
 }
 
@@ -1173,6 +1311,9 @@ bool UFlightVerseSubsystem::CompileVex(
 {
 	// Initialize behavior state pessimistically; flip to executable only when a runnable path is available.
 	FVerseBehavior& Behavior = Behaviors.FindOrAdd(BehaviorID);
+	Behavior.Kind = EFlightVerseBehaviorKind::Atomic;
+	Behavior.ChildBehaviorIds.Reset();
+	Behavior.SelectorBranches.Reset();
 	Behavior.CompileState = EFlightVerseCompileState::VmCompileFailed;
 	Behavior.bHasExecutableProcedure = false;
 	Behavior.bUsesNativeFallback = false;
@@ -1187,6 +1328,13 @@ bool UFlightVerseSubsystem::CompileVex(
 	Behavior.SelectedBackend.Reset();
 	Behavior.CommittedBackend.Reset();
 	Behavior.CommitDetail.Reset();
+	Behavior.bHasLastExecutionResult = false;
+	Behavior.bLastExecutionSucceeded = false;
+	Behavior.bLastExecutionCommitted = false;
+	Behavior.LastSelectedChildBehaviorId = 0;
+	Behavior.LastBranchEvidence.Reset();
+	Behavior.LastGuardOutcomes.Reset();
+	Behavior.LastExecutionDetail.Reset();
 	Behavior.LastGpuSubmissionHandle = 0;
 	Behavior.LastGpuSubmissionDetail.Reset();
 	Behavior.bGpuExecutionPending = false;
@@ -1206,6 +1354,7 @@ bool UFlightVerseSubsystem::CompileVex(
 	Behavior.bHasMirrorRequest = false;
 	Behavior.BoundaryExecutionDetail.Reset();
 	Behavior.SimdCompileDiagnostics.Reset();
+	Behavior.CapabilityEnvelope = FBehaviorCapabilityEnvelope();
 	Behavior.CompileArtifactReport = Flight::Vex::FFlightCompileArtifactReport();
 	Behavior.bHasCompileArtifactReport = false;
 
@@ -1284,6 +1433,7 @@ bool UFlightVerseSubsystem::CompileVex(
 		ArtifactReport.ImportedSymbols.Reset();
 		ArtifactReport.ExportedSymbols.Reset();
 		ArtifactReport.ReferencedStorageKinds.Reset();
+		ArtifactReport.VectorSymbolReports.Reset();
 		ArtifactReport.PolicyRequiredContracts.Reset();
 		ArtifactReport.PolicyRequiredSymbols.Reset();
 		ArtifactReport.BoundaryOperatorCount = 0;
@@ -1321,6 +1471,8 @@ bool UFlightVerseSubsystem::CompileVex(
 
 			ArtifactReport.ReferencedStorageKinds = ReferencedStorageKinds.Array();
 			ArtifactReport.ReferencedStorageKinds.Sort();
+			ArtifactReport.FragmentRequirementReports = BuildFragmentRequirementReports(Behavior.SchemaBinding.GetValue());
+			ArtifactReport.VectorSymbolReports = BuildVectorSymbolReports(Behavior.SchemaBinding.GetValue());
 		}
 
 		for (const FName RequiredContract : Behavior.RequiredContracts)
@@ -1399,6 +1551,7 @@ bool UFlightVerseSubsystem::CompileVex(
 
 		Behavior.CompileArtifactReport = ArtifactReport;
 		Behavior.bHasCompileArtifactReport = true;
+		RefreshCapabilityEnvelopes();
 
 		if (UWorld* World = GetWorld())
 		{
@@ -1603,7 +1756,9 @@ bool UFlightVerseSubsystem::CompileVex(
 		const bool bSimdEligible = Flight::Vex::FVexSimdExecutor::CanCompileProgram(Result.Program, LocalDefinitions, &SimdReason);
 		if (bSimdEligible && IrProgram.IsValid())
 		{
-			Behavior.SimdPlan = Flight::Vex::FVexSimdExecutor::Compile(IrProgram);
+			Behavior.SimdPlan = Flight::Vex::FVexSimdExecutor::Compile(
+				IrProgram,
+				Behavior.SchemaBinding.IsSet() ? &Behavior.SchemaBinding.GetValue() : nullptr);
 			Behavior.SimdCompileDiagnostics = Behavior.SimdPlan.IsValid()
 				? FString::Printf(TEXT("SIMD Tier 1 plan compiled successfully via IR. (%d instructions, %d registers)"), IrProgram->Instructions.Num(), IrProgram->MaxRegisters)
 				: TEXT("SIMD Tier 1 IR generation passed, but plan generation failed.");
@@ -1667,6 +1822,7 @@ bool UFlightVerseSubsystem::CompileVex(
 		{
 		case Flight::Vex::EVexBackendKind::NativeScalar:
 			return bCanUseNativePath;
+		case Flight::Vex::EVexBackendKind::NativeAvx256x8:
 		case Flight::Vex::EVexBackendKind::NativeSimd:
 			return bCanUseNativePath && bCanUseSimdPath;
 		case Flight::Vex::EVexBackendKind::VerseVm:
@@ -1834,43 +1990,8 @@ void UFlightVerseSubsystem::ExecuteBehavior(uint32 BehaviorID, Flight::Swarm::FD
 
 void UFlightVerseSubsystem::ExecuteBehaviorOnStruct(uint32 BehaviorID, void* StructPtr, const void* TypeKey)
 {
-	const FVerseBehavior* Behavior = Behaviors.Find(BehaviorID);
-	if (!Behavior || !Behavior->bHasExecutableProcedure)
-	{
-		return;
-	}
-
-	const FResolvedStorageHost Host = ResolveStorageHost(*Behavior, TypeKey);
-	const TOptional<Flight::Vex::EVexBackendKind> RuntimeBackend = ResolveStructExecutionBackendKind(*Behavior, Host.TypeKey);
-
-#if WITH_VERSE_VM || defined(__INTELLISENSE__)
-	if (RuntimeBackend.IsSet()
-		&& RuntimeBackend.GetValue() == Flight::Vex::EVexBackendKind::VerseVm
-		&& Behavior->Procedure.Get())
-	{
-		VerseContext.EnterVM([&]()
-		{
-			Verse::FAllocationContext AllocContext(VerseContext);
-			ExecuteBehaviorInContext(BehaviorID, *Behavior, StructPtr, Host.TypeKey, AllocContext);
-		});
-		return;
-	}
-#endif
-
-	if (RuntimeBackend.IsSet()
-		&& RuntimeBackend.GetValue() == Flight::Vex::EVexBackendKind::NativeScalar)
-	{
-		if (!ExecuteResolvedStorageHost(Host, *Behavior, StructPtr))
-		{
-			UE_LOG(
-				LogFlightVerseSubsystem,
-				Warning,
-				TEXT("Behavior %u has no compatible storage host for type '%s'."),
-				BehaviorID,
-				Host.TypeName.IsNone() ? TEXT("<unknown>") : *Host.TypeName.ToString());
-		}
-		return;
-	}
+	const FBehaviorExecutionResult Result = ExecuteBehaviorWithResult(BehaviorID, StructPtr, TypeKey);
+	CommitBehaviorExecutionResult(BehaviorID, Result);
 }
 
 void UFlightVerseSubsystem::ExecuteOnSchema(const Flight::Vex::FVexProgramAst& Program, void* StructPtr, const Flight::Vex::FVexTypeSchema& Schema)
@@ -2012,14 +2133,56 @@ void UFlightVerseSubsystem::ExecuteBehaviorBulk(uint32 BehaviorID, TArrayView<Fl
 		return;
 	}
 
+	if (IsCompositeBehavior(*Behavior))
+	{
+		FBehaviorExecutionResult LastResult;
+		for (Flight::Swarm::FDroidState& Droid : DroidStates)
+		{
+			LastResult = ExecuteBehaviorWithResult(BehaviorID, &Droid, GetDroidStateTypeKey());
+		}
+		if (DroidStates.Num() > 0)
+		{
+			CommitBehaviorExecutionResult(BehaviorID, LastResult);
+		}
+		return;
+	}
+
 	const TOptional<Flight::Vex::EVexBackendKind> RuntimeBackend = ResolveBulkExecutionBackendKind(*Behavior);
 	const FResolvedStorageHost DroidHost = ResolveStorageHost(*Behavior, GetDroidStateTypeKey());
+
+	if (RuntimeBackend.IsSet()
+		&& RuntimeBackend.GetValue() == Flight::Vex::EVexBackendKind::NativeAvx256x8)
+	{
+		check(Behavior->SimdPlan.IsValid());
+		if (Behavior->SimdPlan->ExecuteExplicitAvx256x8(DroidStates))
+		{
+			const FString RuntimeBackendLabel = Flight::Vex::VexBackendKindToString(Flight::Vex::EVexBackendKind::NativeAvx256x8);
+			const FString CommitDetail = Behavior->SelectedBackend == RuntimeBackendLabel
+				? FString::Printf(TEXT("Bulk execution ratified explicit AVX2/FMA backend '%s' on %d droid states."), *RuntimeBackendLabel, DroidStates.Num())
+				: FString::Printf(
+					TEXT("Bulk execution selected '%s' after runtime fallback from '%s' and ratified it on %d droid states."),
+					*RuntimeBackendLabel,
+					*Behavior->SelectedBackend,
+					DroidStates.Num());
+			UpdateBehaviorCommitState(BehaviorID, RuntimeBackendLabel, CommitDetail);
+			return;
+		}
+	}
 
 	if (RuntimeBackend.IsSet()
 		&& RuntimeBackend.GetValue() == Flight::Vex::EVexBackendKind::NativeSimd)
 	{
 		check(Behavior->SimdPlan.IsValid());
 		Behavior->SimdPlan->Execute(DroidStates);
+		const FString RuntimeBackendLabel = Flight::Vex::VexBackendKindToString(Flight::Vex::EVexBackendKind::NativeSimd);
+		const FString CommitDetail = Behavior->SelectedBackend == RuntimeBackendLabel
+			? FString::Printf(TEXT("Bulk execution committed vector-shaped SIMD backend '%s' on %d droid states."), *RuntimeBackendLabel, DroidStates.Num())
+			: FString::Printf(
+				TEXT("Bulk execution selected '%s' after runtime fallback from '%s' on %d droid states."),
+				*RuntimeBackendLabel,
+				*Behavior->SelectedBackend,
+				DroidStates.Num());
+		UpdateBehaviorCommitState(BehaviorID, RuntimeBackendLabel, CommitDetail);
 		return;
 	}
 
@@ -2047,6 +2210,15 @@ void UFlightVerseSubsystem::ExecuteBehaviorBulk(uint32 BehaviorID, TArrayView<Fl
 		{
 			(void)ExecuteResolvedStorageHost(DroidHost, *Behavior, &Droid);
 		}
+		const FString RuntimeBackendLabel = Flight::Vex::VexBackendKindToString(Flight::Vex::EVexBackendKind::NativeScalar);
+		const FString CommitDetail = Behavior->SelectedBackend == RuntimeBackendLabel
+			? FString::Printf(TEXT("Bulk execution committed native scalar backend '%s' on %d droid states."), *RuntimeBackendLabel, DroidStates.Num())
+			: FString::Printf(
+				TEXT("Bulk execution selected '%s' after runtime fallback from '%s' on %d droid states."),
+				*RuntimeBackendLabel,
+				*Behavior->SelectedBackend,
+				DroidStates.Num());
+		UpdateBehaviorCommitState(BehaviorID, RuntimeBackendLabel, CommitDetail);
 		return;
 	}
 
@@ -2105,6 +2277,13 @@ void UFlightVerseSubsystem::FlushDeferredBehaviors()
 				continue;
 			}
 
+			if (IsCompositeBehavior(*Behavior))
+			{
+				const FBehaviorExecutionResult Result = ExecuteBehaviorWithResult(Deferred.BehaviorID, Deferred.StatePtr, Deferred.TypeKey);
+				CommitBehaviorExecutionResult(Deferred.BehaviorID, Result);
+				continue;
+			}
+
 			const FResolvedStorageHost DeferredHost = ResolveStorageHost(*Behavior, Deferred.TypeKey);
 			const TOptional<Flight::Vex::EVexBackendKind> RuntimeBackend = ResolveStructExecutionBackendKind(*Behavior, DeferredHost.TypeKey);
 			if (RuntimeBackend.IsSet()
@@ -2140,6 +2319,43 @@ void UFlightVerseSubsystem::ExecuteBehaviorDirect(
 	TArrayView<FFlightTransformFragment> Transforms,
 	TArrayView<FFlightDroidStateFragment> DroidStates)
 {
+	TArray<FMassFragmentHostView> FragmentViews;
+	FragmentViews.Reserve(2);
+
+	if (Transforms.Num() > 0)
+	{
+		FMassFragmentHostView& TransformView = FragmentViews.AddDefaulted_GetRef();
+		TransformView.FragmentType = TEXT("FFlightTransformFragment");
+		TransformView.BasePtr = reinterpret_cast<uint8*>(Transforms.GetData());
+		TransformView.FragmentStride = sizeof(FFlightTransformFragment);
+		TransformView.EntityCount = Transforms.Num();
+		TransformView.bWritable = true;
+	}
+
+	if (DroidStates.Num() > 0)
+	{
+		FMassFragmentHostView& DroidView = FragmentViews.AddDefaulted_GetRef();
+		DroidView.FragmentType = TEXT("FFlightDroidStateFragment");
+		DroidView.BasePtr = reinterpret_cast<uint8*>(DroidStates.GetData());
+		DroidView.FragmentStride = sizeof(FFlightDroidStateFragment);
+		DroidView.EntityCount = DroidStates.Num();
+		DroidView.bWritable = true;
+		DroidView.PostWrite = [](uint8* FragmentPtr)
+		{
+			if (FFlightDroidStateFragment* DroidState = reinterpret_cast<FFlightDroidStateFragment*>(FragmentPtr))
+			{
+				DroidState->bIsDirty = true;
+			}
+		};
+	}
+
+	ExecuteBehaviorDirect(BehaviorID, FragmentViews);
+}
+
+void UFlightVerseSubsystem::ExecuteBehaviorDirect(
+	uint32 BehaviorID,
+	TConstArrayView<FMassFragmentHostView> FragmentViews)
+{
 	const FVerseBehavior* Behavior = Behaviors.Find(BehaviorID);
 	if (!Behavior)
 	{
@@ -2148,8 +2364,9 @@ void UFlightVerseSubsystem::ExecuteBehaviorDirect(
 
 	const FResolvedStorageHost Host = ResolveStorageHost(*Behavior, Behavior->BoundTypeKey);
 	const TOptional<Flight::Vex::EVexBackendKind> RuntimeBackend = ResolveDirectExecutionBackendKind(*Behavior);
+	FMassFragmentHostBundle Bundle = BuildMassFragmentHostBundle(FragmentViews);
 	if (!RuntimeBackend.IsSet()
-		|| !ExecuteResolvedDirectStorageHost(Host, *Behavior, RuntimeBackend.GetValue(), Transforms, DroidStates))
+		|| !ExecuteResolvedDirectStorageHost(Host, *Behavior, RuntimeBackend.GetValue(), Bundle))
 	{
 		const TCHAR* HostName = TEXT("None");
 		switch (Host.Kind)
@@ -2179,6 +2396,23 @@ void UFlightVerseSubsystem::ExecuteBehaviorDirect(
 			TEXT("Behavior %u direct execution resolved to storage host '%s', but no direct runtime host executed it."),
 			BehaviorID,
 			HostName);
+		return;
+	}
+
+	if (RuntimeBackend.GetValue() == Flight::Vex::EVexBackendKind::NativeAvx256x8
+		|| RuntimeBackend.GetValue() == Flight::Vex::EVexBackendKind::NativeSimd
+		|| RuntimeBackend.GetValue() == Flight::Vex::EVexBackendKind::NativeScalar)
+	{
+		const FString RuntimeBackendLabel = Flight::Vex::VexBackendKindToString(RuntimeBackend.GetValue());
+		const int32 NumEntities = Bundle.GetEntityCount();
+		const FString CommitDetail = Behavior->SelectedBackend == RuntimeBackendLabel
+			? FString::Printf(TEXT("Direct execution committed backend '%s' on %d entities."), *RuntimeBackendLabel, NumEntities)
+			: FString::Printf(
+				TEXT("Direct execution selected '%s' after runtime fallback from '%s' on %d entities."),
+				*RuntimeBackendLabel,
+				*Behavior->SelectedBackend,
+				NumEntities);
+		UpdateBehaviorCommitState(BehaviorID, RuntimeBackendLabel, CommitDetail);
 	}
 }
 
@@ -2215,19 +2449,40 @@ FString UFlightVerseSubsystem::GetBehaviorCompileArtifactReportJson(uint32 Behav
 FString UFlightVerseSubsystem::DescribeCommittedExecutionBackend(uint32 BehaviorID, const void* TypeKey) const
 {
 	const FVerseBehavior* Behavior = Behaviors.Find(BehaviorID);
-	return Behavior ? ResolveCommittedExecutionBackend(*Behavior, TypeKey) : FString(TEXT("Unknown"));
+	if (!Behavior)
+	{
+		return FString(TEXT("Unknown"));
+	}
+
+	return IsCompositeBehavior(*Behavior)
+		? (Behavior->CommittedBackend.IsEmpty() ? CompositeBehaviorBackendLabel(Behavior->Kind) : Behavior->CommittedBackend)
+		: ResolveCommittedExecutionBackend(*Behavior, TypeKey);
 }
 
 FString UFlightVerseSubsystem::DescribeBulkExecutionBackend(uint32 BehaviorID) const
 {
 	const FVerseBehavior* Behavior = Behaviors.Find(BehaviorID);
-	return Behavior ? DescribeRuntimeExecutionBackend(ResolveBulkExecutionBackendKind(*Behavior)) : FString(TEXT("Unknown"));
+	if (!Behavior)
+	{
+		return FString(TEXT("Unknown"));
+	}
+
+	return IsCompositeBehavior(*Behavior)
+		? CompositeBehaviorBackendLabel(Behavior->Kind)
+		: DescribeRuntimeExecutionBackend(ResolveBulkExecutionBackendKind(*Behavior));
 }
 
 FString UFlightVerseSubsystem::DescribeDirectExecutionBackend(uint32 BehaviorID) const
 {
 	const FVerseBehavior* Behavior = Behaviors.Find(BehaviorID);
-	return Behavior ? DescribeRuntimeExecutionBackend(ResolveDirectExecutionBackendKind(*Behavior)) : FString(TEXT("Unknown"));
+	if (!Behavior)
+	{
+		return FString(TEXT("Unknown"));
+	}
+
+	return IsCompositeBehavior(*Behavior)
+		? FString(TEXT("Unknown"))
+		: DescribeRuntimeExecutionBackend(ResolveDirectExecutionBackendKind(*Behavior));
 }
 
 int64 UFlightVerseSubsystem::GetLastGpuSubmissionHandle(uint32 BehaviorID) const
@@ -2279,6 +2534,68 @@ void UFlightVerseSubsystem::UpdateBehaviorCommitState(
 		Behavior->CompileArtifactReport.CommittedBackend = CommittedBackend;
 		Behavior->CompileArtifactReport.CommitDetail = CommitDetail;
 	}
+	RefreshCapabilityEnvelopes();
+
+	if (UWorld* World = GetWorld())
+	{
+		if (UFlightOrchestrationSubsystem* Orchestration = World->GetSubsystem<UFlightOrchestrationSubsystem>())
+		{
+			Orchestration->Rebuild();
+		}
+	}
+}
+
+void UFlightVerseSubsystem::CommitBehaviorExecutionResult(const uint32 BehaviorID, const FBehaviorExecutionResult& Result)
+{
+	FVerseBehavior* Behavior = Behaviors.Find(BehaviorID);
+	if (!Behavior)
+	{
+		return;
+	}
+
+	Behavior->bHasLastExecutionResult = true;
+	Behavior->bLastExecutionSucceeded = Result.bSucceeded;
+	Behavior->bLastExecutionCommitted = Result.bCommitted;
+	Behavior->LastSelectedChildBehaviorId = Result.SelectedChildBehaviorId;
+	Behavior->LastBranchEvidence = Result.BranchEvidence;
+	Behavior->LastGuardOutcomes = Result.GuardOutcomes;
+	Behavior->LastExecutionDetail = Result.Detail;
+
+	FString ExecutionCommitDetail = Result.bCommitted
+		? Result.Detail
+		: FString::Printf(TEXT("Last execution did not commit: %s"), *Result.Detail);
+	if (Result.BranchEvidence.Num() > 0)
+	{
+		ExecutionCommitDetail += FString::Printf(TEXT(" BranchEvidence=[%s]."), *FString::Join(Result.BranchEvidence, TEXT(" | ")));
+	}
+	if (Result.GuardOutcomes.Num() > 0)
+	{
+		ExecutionCommitDetail += FString::Printf(TEXT(" GuardOutcomes=[%s]."), *FString::Join(Result.GuardOutcomes, TEXT(" | ")));
+	}
+
+	Behavior->CommitDetail = ExecutionCommitDetail;
+	if (Result.bCommitted)
+	{
+		if (!Result.Backend.IsEmpty())
+		{
+			Behavior->CommittedBackend = Result.Backend;
+		}
+		else if (!Result.CommittedLane.IsEmpty())
+		{
+			Behavior->CommittedBackend = Result.CommittedLane;
+		}
+	}
+
+	if (Behavior->bHasCompileArtifactReport)
+	{
+		if (Result.bCommitted && !Behavior->CommittedBackend.IsEmpty())
+		{
+			Behavior->CompileArtifactReport.CommittedBackend = Behavior->CommittedBackend;
+		}
+		Behavior->CompileArtifactReport.CommitDetail = ExecutionCommitDetail;
+	}
+
+	RefreshCapabilityEnvelopes();
 
 	if (UWorld* World = GetWorld())
 	{
@@ -2421,6 +2738,192 @@ FString UFlightVerseSubsystem::BuildCommitDetail(
 		: FString::Printf(TEXT("Selected backend '%s' downgraded to committed backend '%s'."), *SelectedBackend, *CommittedBackend);
 }
 
+FString UFlightVerseSubsystem::SelectorGuardComparisonToString(const EFlightBehaviorGuardComparison Comparison)
+{
+	return SelectorGuardComparisonToStringLocal(Comparison);
+}
+
+FString UFlightVerseSubsystem::DescribeSelectorGuard(const FSelectorBranchGuard& Guard)
+{
+	switch (Guard.Comparison)
+	{
+	case EFlightBehaviorGuardComparison::IsTrue:
+	case EFlightBehaviorGuardComparison::IsFalse:
+		return FString::Printf(TEXT("%s %s"), *Guard.SymbolName, *SelectorGuardComparisonToStringLocal(Guard.Comparison));
+	default:
+		return FString::Printf(
+			TEXT("%s %s %.3f"),
+			*Guard.SymbolName,
+			*SelectorGuardComparisonToStringLocal(Guard.Comparison),
+			Guard.ScalarValue);
+	}
+}
+
+bool UFlightVerseSubsystem::ValidateSelectorGuard(
+	const FSelectorBranchGuard& Guard,
+	const void* TypeKey,
+	FString& OutError) const
+{
+	OutError.Reset();
+	if (Guard.SymbolName.IsEmpty())
+	{
+		OutError = TEXT("Selector guard requires a non-empty symbol name.");
+		return false;
+	}
+
+	if (const Flight::Vex::FVexTypeSchema* Schema = TypeKey
+		? Flight::Vex::FVexSymbolRegistry::Get().GetSchema(TypeKey)
+		: nullptr)
+	{
+		const Flight::Vex::FVexSymbolRecord* SymbolRecord = Schema->FindSymbolRecord(Guard.SymbolName);
+		if (!SymbolRecord)
+		{
+			OutError = FString::Printf(TEXT("Selector guard symbol '%s' is not present in the bound schema."), *Guard.SymbolName);
+			return false;
+		}
+
+		if (!SymbolRecord->bReadable)
+		{
+			OutError = FString::Printf(TEXT("Selector guard symbol '%s' is not readable."), *Guard.SymbolName);
+			return false;
+		}
+
+		switch (SymbolRecord->ValueType)
+		{
+		case Flight::Vex::EVexValueType::Float:
+		case Flight::Vex::EVexValueType::Int:
+		case Flight::Vex::EVexValueType::Bool:
+			return true;
+		default:
+			OutError = FString::Printf(
+				TEXT("Selector guard symbol '%s' must be scalar-readable; current value type=%d."),
+				*Guard.SymbolName,
+				static_cast<int32>(SymbolRecord->ValueType));
+			return false;
+		}
+	}
+
+	if (TypeKey == GetDroidStateTypeKey())
+	{
+		const bool bKnownLegacySymbol = Guard.SymbolName == TEXT("@position")
+			|| Guard.SymbolName == TEXT("@velocity")
+			|| Guard.SymbolName == TEXT("@shield")
+			|| Guard.SymbolName == TEXT("@status");
+		if (!bKnownLegacySymbol)
+		{
+			OutError = FString::Printf(TEXT("Selector guard symbol '%s' is not supported on legacy FDroidState access."), *Guard.SymbolName);
+		}
+		return bKnownLegacySymbol;
+	}
+
+	OutError = FString::Printf(
+		TEXT("Selector guard symbol '%s' could not be validated because no readable schema is registered for this type key."),
+		*Guard.SymbolName);
+	return false;
+}
+
+bool UFlightVerseSubsystem::TryReadRuntimeSymbolValue(
+	const FResolvedStorageHost& Host,
+	void* StructPtr,
+	const FString& SymbolName,
+	Flight::Vex::FVexRuntimeValue& OutValue,
+	FString& OutError) const
+{
+	OutError.Reset();
+
+	if (Host.Kind == EStorageHostKind::LegacyDroidState)
+	{
+		OutValue = ReadSymbolValue(SymbolName, *static_cast<const Flight::Swarm::FDroidState*>(StructPtr));
+		return true;
+	}
+
+	if (!Host.Schema)
+	{
+		OutError = TEXT("Guard evaluation host does not have a readable schema.");
+		return false;
+	}
+
+	const Flight::Vex::FVexSymbolRecord* SymbolRecord = Host.Schema->FindSymbolRecord(SymbolName);
+	if (!SymbolRecord)
+	{
+		OutError = FString::Printf(TEXT("Guard symbol '%s' is not present in the resolved schema host."), *SymbolName);
+		return false;
+	}
+
+	if (!SymbolRecord->bReadable)
+	{
+		OutError = FString::Printf(TEXT("Guard symbol '%s' is not readable on the resolved schema host."), *SymbolName);
+		return false;
+	}
+
+	if (Host.Kind == EStorageHostKind::SchemaAos
+		&& SymbolRecord->Storage.MemberOffset != INDEX_NONE)
+	{
+		const uint32 ElementStride = Flight::VerseRuntime::ResolveRuntimeValueStride(*SymbolRecord);
+		const uint8* Bytes = reinterpret_cast<const uint8*>(StructPtr) + SymbolRecord->Storage.MemberOffset;
+		OutValue = Flight::VerseRuntime::ReadRuntimeValueFromAddress(Bytes, SymbolRecord->ValueType, ElementStride);
+		return true;
+	}
+
+	OutValue = SymbolRecord->ReadRuntimeValue(StructPtr);
+	return true;
+}
+
+bool UFlightVerseSubsystem::EvaluateSelectorGuard(
+	const FSelectorBranchGuard& Guard,
+	const FResolvedStorageHost& Host,
+	void* StructPtr,
+	bool& bOutPassed,
+	FString& OutDetail) const
+{
+	bOutPassed = false;
+
+	Flight::Vex::FVexRuntimeValue Value;
+	FString ReadError;
+	if (!TryReadRuntimeSymbolValue(Host, StructPtr, Guard.SymbolName, Value, ReadError))
+	{
+		OutDetail = FString::Printf(TEXT("Guard '%s' could not be evaluated: %s"), *DescribeSelectorGuard(Guard), *ReadError);
+		return false;
+	}
+
+	switch (Guard.Comparison)
+	{
+	case EFlightBehaviorGuardComparison::Less:
+		bOutPassed = Value.AsFloat() < Guard.ScalarValue;
+		break;
+	case EFlightBehaviorGuardComparison::LessEqual:
+		bOutPassed = Value.AsFloat() <= Guard.ScalarValue;
+		break;
+	case EFlightBehaviorGuardComparison::Greater:
+		bOutPassed = Value.AsFloat() > Guard.ScalarValue;
+		break;
+	case EFlightBehaviorGuardComparison::GreaterEqual:
+		bOutPassed = Value.AsFloat() >= Guard.ScalarValue;
+		break;
+	case EFlightBehaviorGuardComparison::Equal:
+		bOutPassed = FMath::IsNearlyEqual(Value.AsFloat(), Guard.ScalarValue);
+		break;
+	case EFlightBehaviorGuardComparison::NotEqual:
+		bOutPassed = !FMath::IsNearlyEqual(Value.AsFloat(), Guard.ScalarValue);
+		break;
+	case EFlightBehaviorGuardComparison::IsTrue:
+		bOutPassed = Value.AsBool();
+		break;
+	case EFlightBehaviorGuardComparison::IsFalse:
+		bOutPassed = !Value.AsBool();
+		break;
+	default:
+		OutDetail = FString::Printf(TEXT("Guard '%s' uses an unknown comparison operator."), *DescribeSelectorGuard(Guard));
+		return false;
+	}
+
+	OutDetail = FString::Printf(
+		TEXT("Guard '%s' evaluated %s."),
+		*DescribeSelectorGuard(Guard),
+		bOutPassed ? TEXT("true") : TEXT("false"));
+	return true;
+}
+
 TOptional<Flight::Vex::EVexBackendKind> UFlightVerseSubsystem::ResolveSelectedBackendKind(const FVerseBehavior& Behavior) const
 {
 	using namespace Flight::Vex;
@@ -2433,6 +2936,11 @@ TOptional<Flight::Vex::EVexBackendKind> UFlightVerseSubsystem::ResolveSelectedBa
 	if (Behavior.SelectedBackend == VexBackendKindToString(EVexBackendKind::NativeSimd))
 	{
 		return EVexBackendKind::NativeSimd;
+	}
+
+	if (Behavior.SelectedBackend == VexBackendKindToString(EVexBackendKind::NativeAvx256x8))
+	{
+		return EVexBackendKind::NativeAvx256x8;
 	}
 
 	if (Behavior.SelectedBackend == VexBackendKindToString(EVexBackendKind::VerseVm))
@@ -2522,6 +3030,11 @@ TOptional<Flight::Vex::EVexBackendKind> UFlightVerseSubsystem::ResolveBulkExecut
 	const FResolvedStorageHost Host = ResolveStorageHost(Behavior, GetDroidStateTypeKey());
 	const bool bCanUseNativeScalar = Behavior.bUsesNativeFallback && CanExecuteResolvedStorageHostDirect(Host);
 	const bool bCanUseSimd = Behavior.Tier == EVexTier::Literal && Behavior.bUsesNativeFallback && Behavior.SimdPlan.IsValid();
+	const bool bCanUseAvx256x8 =
+		bCanUseSimd
+		&& Behavior.SimdPlan->SupportsExplicitAvx256x8()
+		&& Flight::Vex::FVexSimdExecutor::HasExplicitAvx256x8KernelSupport()
+		&& Flight::Vex::FVexSimdExecutor::IsExplicitAvx256x8RuntimeSupported();
 
 #if WITH_VERSE_VM || defined(__INTELLISENSE__)
 	const bool bCanUseVm = Behavior.bUsesVmEntryPoint && Behavior.Procedure.Get();
@@ -2533,6 +3046,12 @@ TOptional<Flight::Vex::EVexBackendKind> UFlightVerseSubsystem::ResolveBulkExecut
 	{
 		switch (SelectedBackend.GetValue())
 		{
+		case EVexBackendKind::NativeAvx256x8:
+			if (bCanUseAvx256x8)
+			{
+				return EVexBackendKind::NativeAvx256x8;
+			}
+			break;
 		case EVexBackendKind::NativeSimd:
 			if (bCanUseSimd)
 			{
@@ -2554,6 +3073,11 @@ TOptional<Flight::Vex::EVexBackendKind> UFlightVerseSubsystem::ResolveBulkExecut
 		default:
 			break;
 		}
+	}
+
+	if (bCanUseAvx256x8)
+	{
+		return EVexBackendKind::NativeAvx256x8;
 	}
 
 	if (bCanUseSimd)
@@ -2593,11 +3117,24 @@ TOptional<Flight::Vex::EVexBackendKind> UFlightVerseSubsystem::ResolveDirectExec
 
 	const bool bCanUseNativeScalar = Behavior.bUsesNativeFallback && Host.Kind == EStorageHostKind::MassFragments;
 	const bool bCanUseSimd = bCanUseNativeScalar && Behavior.Tier == EVexTier::Literal && Behavior.SimdPlan.IsValid();
+	const bool bCanUseAvx256x8 =
+		bCanUseNativeScalar
+		&& Behavior.Tier == EVexTier::Literal
+		&& Behavior.SimdPlan.IsValid()
+		&& Behavior.SimdPlan->SupportsExplicitAvx256x8Direct()
+		&& Flight::Vex::FVexSimdExecutor::HasExplicitAvx256x8KernelSupport()
+		&& Flight::Vex::FVexSimdExecutor::IsExplicitAvx256x8RuntimeSupported();
 
 	if (SelectedBackend.IsSet())
 	{
 		switch (SelectedBackend.GetValue())
 		{
+		case EVexBackendKind::NativeAvx256x8:
+			if (bCanUseAvx256x8)
+			{
+				return EVexBackendKind::NativeAvx256x8;
+			}
+			break;
 		case EVexBackendKind::NativeSimd:
 			if (bCanUseSimd)
 			{
@@ -2619,6 +3156,11 @@ TOptional<Flight::Vex::EVexBackendKind> UFlightVerseSubsystem::ResolveDirectExec
 		default:
 			break;
 		}
+	}
+
+	if (bCanUseAvx256x8)
+	{
+		return EVexBackendKind::NativeAvx256x8;
 	}
 
 	if (bCanUseSimd)
@@ -2648,7 +3190,749 @@ FString UFlightVerseSubsystem::DescribeRuntimeExecutionBackend(const TOptional<F
 
 FString UFlightVerseSubsystem::ResolveCommittedExecutionBackend(const FVerseBehavior& Behavior, const void* RequestedTypeKey) const
 {
+	if (IsCompositeBehavior(Behavior))
+	{
+		return Behavior.CommittedBackend.IsEmpty() ? CompositeBehaviorBackendLabel(Behavior.Kind) : Behavior.CommittedBackend;
+	}
+
+	if (IsConcreteExecutionLane(Behavior.CommittedBackend))
+	{
+		return Behavior.CommittedBackend;
+	}
+
 	return DescribeRuntimeExecutionBackend(ResolveStructExecutionBackendKind(Behavior, RequestedTypeKey));
+}
+
+const void* UFlightVerseSubsystem::ResolveEffectiveBehaviorTypeKey(const FVerseBehavior& Behavior) const
+{
+	return Behavior.BoundTypeKey ? Behavior.BoundTypeKey : GetDroidStateTypeKey();
+}
+
+bool UFlightVerseSubsystem::IsCompositeBehavior(const FVerseBehavior& Behavior)
+{
+	return Behavior.Kind != EFlightVerseBehaviorKind::Atomic;
+}
+
+void UFlightVerseSubsystem::RefreshCapabilityEnvelopes()
+{
+	TSet<uint32> ActiveBehaviorIds;
+	for (TPair<uint32, FVerseBehavior>& Pair : Behaviors)
+	{
+		Pair.Value.CapabilityEnvelope = BuildCapabilityEnvelope(Pair.Key, ActiveBehaviorIds);
+	}
+}
+
+UFlightVerseSubsystem::FBehaviorCapabilityEnvelope UFlightVerseSubsystem::BuildCapabilityEnvelope(
+	const uint32 BehaviorID,
+	TSet<uint32>& ActiveBehaviorIds) const
+{
+	FBehaviorCapabilityEnvelope Envelope;
+
+	const FVerseBehavior* Behavior = Behaviors.Find(BehaviorID);
+	if (!Behavior)
+	{
+		Envelope.DisallowedLaneReasons.Add(FString::Printf(TEXT("Behavior %u is not registered."), BehaviorID));
+		return Envelope;
+	}
+
+	if (ActiveBehaviorIds.Contains(BehaviorID))
+	{
+		Envelope.DisallowedLaneReasons.Add(FString::Printf(TEXT("Behavior %u introduces a composite capability cycle."), BehaviorID));
+		return Envelope;
+	}
+
+	ActiveBehaviorIds.Add(BehaviorID);
+	if (IsCompositeBehavior(*Behavior))
+	{
+		switch (Behavior->Kind)
+		{
+		case EFlightVerseBehaviorKind::Sequence:
+			Envelope = BuildSequenceCapabilityEnvelope(*Behavior, ActiveBehaviorIds);
+			break;
+		case EFlightVerseBehaviorKind::Selector:
+			Envelope = BuildSelectorCapabilityEnvelope(*Behavior, ActiveBehaviorIds);
+			break;
+		default:
+			Envelope.DisallowedLaneReasons.Add(FString::Printf(TEXT("Behavior %u has an unsupported composite operator."), BehaviorID));
+			break;
+		}
+	}
+	else
+	{
+		Envelope = BuildAtomicCapabilityEnvelope(*Behavior);
+	}
+	ActiveBehaviorIds.Remove(BehaviorID);
+	return Envelope;
+}
+
+UFlightVerseSubsystem::FBehaviorCapabilityEnvelope UFlightVerseSubsystem::BuildAtomicCapabilityEnvelope(const FVerseBehavior& Behavior) const
+{
+	using namespace Flight::Vex;
+
+	FBehaviorCapabilityEnvelope Envelope;
+	Envelope.PreferredLane = Behavior.SelectedBackend;
+	Envelope.CommittedLane = Behavior.CommittedBackend == TEXT("Unknown")
+		? FString()
+		: Behavior.CommittedBackend;
+	Envelope.bRequiresSharedTypeKey = Behavior.BoundTypeKey != nullptr;
+
+	TSet<FString> LegalLaneSet;
+	if (Behavior.SchemaBinding.IsSet() && Behavior.SchemaBinding->BackendLegality.Num() > 0)
+	{
+		for (const TPair<EVexBackendKind, bool>& Pair : Behavior.SchemaBinding->BackendLegality)
+		{
+			if (Pair.Value)
+			{
+				LegalLaneSet.Add(VexBackendKindToString(Pair.Key));
+			}
+		}
+	}
+	else
+	{
+		if (Behavior.bUsesNativeFallback)
+		{
+			LegalLaneSet.Add(NativeScalarLane);
+		}
+		if (Behavior.Tier == EVexTier::Literal && Behavior.SimdPlan.IsValid())
+		{
+			LegalLaneSet.Add(NativeSimdLane);
+			if (Behavior.SimdPlan->SupportsExplicitAvx256x8()
+				&& Flight::Vex::FVexSimdExecutor::HasExplicitAvx256x8KernelSupport())
+			{
+				LegalLaneSet.Add(NativeAvx256x8Lane);
+			}
+		}
+		if (Behavior.bUsesVmEntryPoint)
+		{
+			LegalLaneSet.Add(VerseVmLane);
+		}
+		if (Behavior.SelectedBackend == GpuKernelLane
+			|| Behavior.CommittedBackend == GpuKernelLane
+			|| Behavior.bGpuExecutionPending)
+		{
+			LegalLaneSet.Add(GpuKernelLane);
+		}
+	}
+
+	Envelope.LegalLanes = LegalLaneSet.Array();
+	SortLanes(Envelope.LegalLanes);
+	Envelope.ExecutionShape = DeriveExecutionShapeFromLanes(Envelope.LegalLanes, Envelope.PreferredLane);
+	Envelope.CommittedExecutionShape = DeriveCommittedExecutionShape(Envelope.CommittedLane);
+
+	if (Behavior.bHasCompileArtifactReport)
+	{
+		for (const Flight::Vex::FFlightCompileBackendReport& BackendReport : Behavior.CompileArtifactReport.BackendReports)
+		{
+			if (BackendReport.Decision == TEXT("Rejected"))
+			{
+				const FString ReasonText = BackendReport.Reasons.Num() > 0
+					? FString::Join(BackendReport.Reasons, TEXT(" "))
+					: TEXT("No reason recorded.");
+				Envelope.DisallowedLaneReasons.Add(FString::Printf(TEXT("%s: %s"), *BackendReport.Backend, *ReasonText));
+			}
+		}
+	}
+
+	return Envelope;
+}
+
+UFlightVerseSubsystem::FBehaviorCapabilityEnvelope UFlightVerseSubsystem::BuildSequenceCapabilityEnvelope(
+	const FVerseBehavior& Behavior,
+	TSet<uint32>& ActiveBehaviorIds) const
+{
+	FBehaviorCapabilityEnvelope Envelope;
+	Envelope.PreferredLane = Behavior.SelectedBackend;
+	Envelope.bAllowsMixedLaneExecution = false;
+	Envelope.bRequiresSharedTypeKey = true;
+
+	if (Behavior.ChildBehaviorIds.IsEmpty())
+	{
+		Envelope.DisallowedLaneReasons.Add(TEXT("Sequence behavior has no child behaviors."));
+		return Envelope;
+	}
+
+	bool bInitializedLegalLanes = false;
+	TSet<FString> CommonLegalLanes;
+	bool bAnyScalarOnlyChild = false;
+	bool bAnyUnknownChildShape = false;
+	bool bAllVectorPreferred = true;
+	TSet<FString> CommonCommittedLanes;
+	bool bInitializedCommittedLanes = false;
+
+	for (const uint32 ChildBehaviorId : Behavior.ChildBehaviorIds)
+	{
+		const FVerseBehavior* ChildBehavior = Behaviors.Find(ChildBehaviorId);
+		if (!ChildBehavior)
+		{
+			Envelope.DisallowedLaneReasons.Add(FString::Printf(TEXT("Missing child behavior %u."), ChildBehaviorId));
+			continue;
+		}
+
+		const FBehaviorCapabilityEnvelope ChildEnvelope = BuildCapabilityEnvelope(ChildBehaviorId, ActiveBehaviorIds);
+		Envelope.DisallowedLaneReasons.Append(ChildEnvelope.DisallowedLaneReasons);
+
+		TSet<FString> ChildLegalLanes;
+		for (const FString& Lane : ChildEnvelope.LegalLanes)
+		{
+			ChildLegalLanes.Add(Lane);
+		}
+		if (!bInitializedLegalLanes)
+		{
+			CommonLegalLanes = ChildLegalLanes;
+			bInitializedLegalLanes = true;
+		}
+		else
+		{
+			for (auto It = CommonLegalLanes.CreateIterator(); It; ++It)
+			{
+				if (!ChildLegalLanes.Contains(*It))
+				{
+					Envelope.DisallowedLaneReasons.Add(FString::Printf(
+						TEXT("Sequence lane '%s' dropped because child %u does not support it."),
+						**It,
+						ChildBehaviorId));
+					It.RemoveCurrent();
+				}
+			}
+		}
+
+		switch (ChildEnvelope.ExecutionShape)
+		{
+		case EFlightBehaviorExecutionShape::ScalarOnly:
+			bAnyScalarOnlyChild = true;
+			bAllVectorPreferred = false;
+			break;
+		case EFlightBehaviorExecutionShape::VectorCapable:
+			bAllVectorPreferred = false;
+			break;
+		case EFlightBehaviorExecutionShape::VectorPreferred:
+			break;
+		case EFlightBehaviorExecutionShape::Unknown:
+			bAnyUnknownChildShape = true;
+			bAllVectorPreferred = false;
+			break;
+		default:
+			bAllVectorPreferred = false;
+			break;
+		}
+
+		if (!ChildEnvelope.CommittedLane.IsEmpty())
+		{
+			TSet<FString> ChildCommitted;
+			ChildCommitted.Add(ChildEnvelope.CommittedLane);
+			if (!bInitializedCommittedLanes)
+			{
+				CommonCommittedLanes = ChildCommitted;
+				bInitializedCommittedLanes = true;
+			}
+			else
+			{
+				for (auto It = CommonCommittedLanes.CreateIterator(); It; ++It)
+				{
+					if (!ChildCommitted.Contains(*It))
+					{
+						It.RemoveCurrent();
+					}
+				}
+			}
+		}
+		else
+		{
+			CommonCommittedLanes.Reset();
+		}
+	}
+
+	Envelope.LegalLanes = CommonLegalLanes.Array();
+	SortLanes(Envelope.LegalLanes);
+	if (Envelope.LegalLanes.Contains(Envelope.PreferredLane))
+	{
+		// keep compile-selected lane when it survives aggregation
+	}
+	else if (Envelope.LegalLanes.Num() > 0)
+	{
+		Envelope.PreferredLane = Envelope.LegalLanes[0];
+	}
+	else
+	{
+		Envelope.PreferredLane.Reset();
+	}
+
+	if (bInitializedCommittedLanes && CommonCommittedLanes.Num() == 1)
+	{
+		const TArray<FString> CommittedLanes = CommonCommittedLanes.Array();
+		Envelope.CommittedLane = CommittedLanes[0];
+	}
+	if (IsConcreteExecutionLane(Behavior.CommittedBackend))
+	{
+		Envelope.CommittedLane = Behavior.CommittedBackend;
+	}
+
+	if (bAnyUnknownChildShape && Envelope.LegalLanes.IsEmpty())
+	{
+		Envelope.ExecutionShape = EFlightBehaviorExecutionShape::Unknown;
+	}
+	else if (bAnyScalarOnlyChild)
+	{
+		Envelope.ExecutionShape = EFlightBehaviorExecutionShape::ScalarOnly;
+	}
+	else if (Envelope.LegalLanes.ContainsByPredicate([](const FString& Lane)
+	{
+		return IsVectorExecutionLane(Lane);
+	}))
+	{
+		Envelope.ExecutionShape = bAllVectorPreferred
+			? EFlightBehaviorExecutionShape::VectorPreferred
+			: EFlightBehaviorExecutionShape::VectorCapable;
+	}
+	else
+	{
+		Envelope.ExecutionShape = DeriveExecutionShapeFromLanes(Envelope.LegalLanes, Envelope.PreferredLane);
+	}
+	Envelope.CommittedExecutionShape = DeriveCommittedExecutionShape(Envelope.CommittedLane);
+
+	return Envelope;
+}
+
+UFlightVerseSubsystem::FBehaviorCapabilityEnvelope UFlightVerseSubsystem::BuildSelectorCapabilityEnvelope(
+	const FVerseBehavior& Behavior,
+	TSet<uint32>& ActiveBehaviorIds) const
+{
+	FBehaviorCapabilityEnvelope Envelope;
+	Envelope.PreferredLane = Behavior.SelectedBackend;
+	Envelope.bAllowsMixedLaneExecution = true;
+	Envelope.bRequiresSharedTypeKey = true;
+
+	if (Behavior.ChildBehaviorIds.IsEmpty())
+	{
+		Envelope.DisallowedLaneReasons.Add(TEXT("Selector behavior has no child behaviors."));
+		return Envelope;
+	}
+
+	TSet<FString> UnionLegalLanes;
+	TSet<FString> CommonCommittedLanes;
+	bool bInitializedCommittedLanes = false;
+	EFlightBehaviorExecutionShape FirstChildShape = EFlightBehaviorExecutionShape::Unknown;
+	bool bInitializedShape = false;
+	bool bMixedShapes = false;
+
+	for (const uint32 ChildBehaviorId : Behavior.ChildBehaviorIds)
+	{
+		const FVerseBehavior* ChildBehavior = Behaviors.Find(ChildBehaviorId);
+		if (!ChildBehavior)
+		{
+			Envelope.DisallowedLaneReasons.Add(FString::Printf(TEXT("Missing child behavior %u."), ChildBehaviorId));
+			continue;
+		}
+
+		const FBehaviorCapabilityEnvelope ChildEnvelope = BuildCapabilityEnvelope(ChildBehaviorId, ActiveBehaviorIds);
+		Envelope.DisallowedLaneReasons.Append(ChildEnvelope.DisallowedLaneReasons);
+
+		for (const FString& Lane : ChildEnvelope.LegalLanes)
+		{
+			UnionLegalLanes.Add(Lane);
+		}
+
+		if (Envelope.PreferredLane.IsEmpty() || !UnionLegalLanes.Contains(Envelope.PreferredLane))
+		{
+			if (!ChildEnvelope.PreferredLane.IsEmpty() && ChildEnvelope.LegalLanes.Contains(ChildEnvelope.PreferredLane))
+			{
+				Envelope.PreferredLane = ChildEnvelope.PreferredLane;
+			}
+			else if (ChildEnvelope.LegalLanes.Num() > 0 && Envelope.PreferredLane.IsEmpty())
+			{
+				Envelope.PreferredLane = ChildEnvelope.LegalLanes[0];
+			}
+		}
+
+		if (!bInitializedShape)
+		{
+			FirstChildShape = ChildEnvelope.ExecutionShape;
+			bInitializedShape = true;
+		}
+		else if (FirstChildShape != ChildEnvelope.ExecutionShape)
+		{
+			bMixedShapes = true;
+		}
+
+		if (!ChildEnvelope.CommittedLane.IsEmpty())
+		{
+			TSet<FString> ChildCommitted;
+			ChildCommitted.Add(ChildEnvelope.CommittedLane);
+			if (!bInitializedCommittedLanes)
+			{
+				CommonCommittedLanes = ChildCommitted;
+				bInitializedCommittedLanes = true;
+			}
+			else
+			{
+				for (auto It = CommonCommittedLanes.CreateIterator(); It; ++It)
+				{
+					if (!ChildCommitted.Contains(*It))
+					{
+						It.RemoveCurrent();
+					}
+				}
+			}
+		}
+		else
+		{
+			CommonCommittedLanes.Reset();
+		}
+	}
+
+	Envelope.LegalLanes = UnionLegalLanes.Array();
+	SortLanes(Envelope.LegalLanes);
+	if (!Envelope.LegalLanes.Contains(Envelope.PreferredLane))
+	{
+		Envelope.PreferredLane = Envelope.LegalLanes.Num() > 0 ? Envelope.LegalLanes[0] : FString();
+	}
+
+	if (bInitializedCommittedLanes && CommonCommittedLanes.Num() == 1)
+	{
+		const TArray<FString> CommittedLanes = CommonCommittedLanes.Array();
+		Envelope.CommittedLane = CommittedLanes[0];
+	}
+	if (IsConcreteExecutionLane(Behavior.CommittedBackend))
+	{
+		Envelope.CommittedLane = Behavior.CommittedBackend;
+	}
+
+	if (!bInitializedShape)
+	{
+		Envelope.ExecutionShape = EFlightBehaviorExecutionShape::Unknown;
+	}
+	else if (bMixedShapes)
+	{
+		Envelope.ExecutionShape = EFlightBehaviorExecutionShape::ShapeAgnostic;
+	}
+	else
+	{
+		Envelope.ExecutionShape = FirstChildShape;
+	}
+	Envelope.CommittedExecutionShape = DeriveCommittedExecutionShape(Envelope.CommittedLane);
+
+	return Envelope;
+}
+
+UFlightVerseSubsystem::FBehaviorExecutionResult UFlightVerseSubsystem::ExecuteBehaviorWithResult(
+	const uint32 BehaviorID,
+	void* StructPtr,
+	const void* TypeKey)
+{
+	FBehaviorExecutionResult Result;
+
+	const FVerseBehavior* Behavior = Behaviors.Find(BehaviorID);
+	if (!Behavior)
+	{
+		Result.FailureKind = EBehaviorExecutionFailureKind::MissingBehavior;
+		Result.Detail = FString::Printf(TEXT("Behavior %u is not registered."), BehaviorID);
+		return Result;
+	}
+
+	Result.LegalLanes = Behavior->CapabilityEnvelope.LegalLanes;
+	Result.SelectedLane = Behavior->CapabilityEnvelope.PreferredLane;
+	Result.ExecutionShape = Behavior->CapabilityEnvelope.ExecutionShape;
+	Result.CommittedLane = Behavior->CapabilityEnvelope.CommittedLane;
+	Result.CommittedExecutionShape = Behavior->CapabilityEnvelope.CommittedExecutionShape;
+
+	if (IsCompositeBehavior(*Behavior))
+	{
+		return ExecuteCompositeBehaviorWithResult(BehaviorID, *Behavior, StructPtr, TypeKey);
+	}
+
+	return ExecuteAtomicBehaviorWithResult(BehaviorID, *Behavior, StructPtr, TypeKey);
+}
+
+UFlightVerseSubsystem::FBehaviorExecutionResult UFlightVerseSubsystem::ExecuteAtomicBehaviorWithResult(
+	const uint32 BehaviorID,
+	const FVerseBehavior& Behavior,
+	void* StructPtr,
+	const void* TypeKey)
+{
+	FBehaviorExecutionResult Result;
+	Result.LegalLanes = Behavior.CapabilityEnvelope.LegalLanes;
+	Result.SelectedLane = Behavior.CapabilityEnvelope.PreferredLane;
+	Result.ExecutionShape = Behavior.CapabilityEnvelope.ExecutionShape;
+	Result.CommittedLane = Behavior.CapabilityEnvelope.CommittedLane;
+	Result.CommittedExecutionShape = Behavior.CapabilityEnvelope.CommittedExecutionShape;
+
+	if (!Behavior.bHasExecutableProcedure)
+	{
+		Result.FailureKind = EBehaviorExecutionFailureKind::NonExecutable;
+		Result.Detail = FString::Printf(TEXT("Behavior %u does not have an executable runtime path."), BehaviorID);
+		return Result;
+	}
+
+	const FResolvedStorageHost Host = ResolveStorageHost(Behavior, TypeKey);
+	const TOptional<Flight::Vex::EVexBackendKind> RuntimeBackend = ResolveStructExecutionBackendKind(Behavior, Host.TypeKey);
+
+#if WITH_VERSE_VM || defined(__INTELLISENSE__)
+	if (RuntimeBackend.IsSet()
+		&& RuntimeBackend.GetValue() == Flight::Vex::EVexBackendKind::VerseVm
+		&& Behavior.Procedure.Get())
+	{
+		VerseContext.EnterVM([&]()
+		{
+			Verse::FAllocationContext AllocContext(VerseContext);
+			ExecuteBehaviorInContext(BehaviorID, Behavior, StructPtr, Host.TypeKey, AllocContext);
+		});
+		Result.bSucceeded = true;
+		Result.bCommitted = true;
+		Result.Backend = TEXT("VerseVm");
+		Result.CommittedLane = TEXT("VerseVm");
+		Result.CommittedExecutionShape = DeriveCommittedExecutionShape(Result.CommittedLane);
+		Result.Detail = FString::Printf(TEXT("Behavior %u executed on Verse VM."), BehaviorID);
+		return Result;
+	}
+#endif
+
+	if (RuntimeBackend.IsSet()
+		&& RuntimeBackend.GetValue() == Flight::Vex::EVexBackendKind::NativeScalar)
+	{
+		if (!ExecuteResolvedStorageHost(Host, Behavior, StructPtr))
+		{
+			Result.FailureKind = EBehaviorExecutionFailureKind::UnsupportedStorageHost;
+			Result.Detail = FString::Printf(
+				TEXT("Behavior %u resolved to NativeScalar, but no compatible storage host was available for type '%s'."),
+				BehaviorID,
+				Host.TypeName.IsNone() ? TEXT("<unknown>") : *Host.TypeName.ToString());
+			UE_LOG(
+				LogFlightVerseSubsystem,
+				Warning,
+				TEXT("%s"),
+				*Result.Detail);
+			return Result;
+		}
+
+		Result.bSucceeded = true;
+		Result.bCommitted = true;
+		Result.Backend = TEXT("NativeScalar");
+		Result.CommittedLane = TEXT("NativeScalar");
+		Result.CommittedExecutionShape = DeriveCommittedExecutionShape(Result.CommittedLane);
+		Result.Detail = FString::Printf(TEXT("Behavior %u executed on the native scalar host."), BehaviorID);
+		return Result;
+	}
+
+	Result.FailureKind = EBehaviorExecutionFailureKind::UnsupportedBackend;
+	Result.Detail = FString::Printf(TEXT("Behavior %u does not have a supported struct execution backend."), BehaviorID);
+	return Result;
+}
+
+UFlightVerseSubsystem::FBehaviorExecutionResult UFlightVerseSubsystem::ExecuteCompositeBehaviorWithResult(
+	const uint32 BehaviorID,
+	const FVerseBehavior& Behavior,
+	void* StructPtr,
+	const void* TypeKey)
+{
+	switch (Behavior.Kind)
+	{
+	case EFlightVerseBehaviorKind::Sequence:
+		return ExecuteSequenceBehaviorWithResult(BehaviorID, Behavior, StructPtr, TypeKey);
+	case EFlightVerseBehaviorKind::Selector:
+		return ExecuteSelectorBehaviorWithResult(BehaviorID, Behavior, StructPtr, TypeKey);
+	default:
+		break;
+	}
+
+	FBehaviorExecutionResult Result;
+	Result.FailureKind = EBehaviorExecutionFailureKind::UnknownCompositeOperator;
+	Result.Detail = FString::Printf(TEXT("Behavior %u has an unknown composite operator."), BehaviorID);
+	return Result;
+}
+
+UFlightVerseSubsystem::FBehaviorExecutionResult UFlightVerseSubsystem::ExecuteSequenceBehaviorWithResult(
+	const uint32 BehaviorID,
+	const FVerseBehavior& Behavior,
+	void* StructPtr,
+	const void* TypeKey)
+{
+	FBehaviorExecutionResult Result;
+	Result.Backend = CompositeBehaviorBackendLabel(Behavior.Kind);
+	Result.LegalLanes = Behavior.CapabilityEnvelope.LegalLanes;
+	Result.SelectedLane = Behavior.CapabilityEnvelope.PreferredLane;
+	Result.ExecutionShape = Behavior.CapabilityEnvelope.ExecutionShape;
+	Result.CommittedLane = Behavior.CapabilityEnvelope.CommittedLane;
+	Result.CommittedExecutionShape = Behavior.CapabilityEnvelope.CommittedExecutionShape;
+
+	if (Behavior.ChildBehaviorIds.IsEmpty())
+	{
+		Result.FailureKind = EBehaviorExecutionFailureKind::NonExecutable;
+		Result.Detail = FString::Printf(TEXT("Composite sequence behavior %u has no child behaviors."), BehaviorID);
+		return Result;
+	}
+
+	const void* EffectiveTypeKey = TypeKey ? TypeKey : ResolveEffectiveBehaviorTypeKey(Behavior);
+
+	for (const uint32 ChildBehaviorId : Behavior.ChildBehaviorIds)
+	{
+		const FVerseBehavior* ChildBehavior = Behaviors.Find(ChildBehaviorId);
+		if (!ChildBehavior)
+		{
+			Result.FailureKind = EBehaviorExecutionFailureKind::MissingBehavior;
+			Result.Detail = FString::Printf(
+				TEXT("Composite sequence behavior %u is missing child behavior %u at execution time."),
+				BehaviorID,
+				ChildBehaviorId);
+			return Result;
+		}
+
+		if (ResolveEffectiveBehaviorTypeKey(*ChildBehavior) != EffectiveTypeKey)
+		{
+			Result.FailureKind = EBehaviorExecutionFailureKind::IncompatibleTypeKey;
+			Result.Detail = FString::Printf(
+				TEXT("Composite sequence behavior %u encountered incompatible child behavior %u at execution time."),
+				BehaviorID,
+				ChildBehaviorId);
+			return Result;
+		}
+
+		FBehaviorExecutionResult ChildResult = ExecuteBehaviorWithResult(ChildBehaviorId, StructPtr, EffectiveTypeKey);
+		Result.ExecutedChildBehaviorIds.Add(ChildBehaviorId);
+		Result.bCommitted = Result.bCommitted || ChildResult.bCommitted;
+		Result.BranchEvidence.Append(ChildResult.BranchEvidence);
+		Result.GuardOutcomes.Append(ChildResult.GuardOutcomes);
+		if (!ChildResult.bSucceeded)
+		{
+			Result.FailureKind = EBehaviorExecutionFailureKind::ChildExecutionFailed;
+			if (!ChildResult.CommittedLane.IsEmpty())
+			{
+				Result.CommittedLane = ChildResult.CommittedLane;
+				Result.CommittedExecutionShape = ChildResult.CommittedExecutionShape;
+			}
+			Result.Detail = FString::Printf(
+				TEXT("Composite sequence behavior %u failed on child %u: %s"),
+				BehaviorID,
+				ChildBehaviorId,
+				*ChildResult.Detail);
+			return Result;
+		}
+
+		if (Result.CommittedLane.IsEmpty() && !ChildResult.CommittedLane.IsEmpty())
+		{
+			Result.CommittedLane = ChildResult.CommittedLane;
+			Result.CommittedExecutionShape = ChildResult.CommittedExecutionShape;
+		}
+	}
+
+	Result.bSucceeded = true;
+	Result.Detail = FString::Printf(
+		TEXT("Composite sequence behavior %u executed child behaviors [%s]."),
+		BehaviorID,
+		*BuildChildBehaviorListString(Result.ExecutedChildBehaviorIds));
+	return Result;
+}
+
+UFlightVerseSubsystem::FBehaviorExecutionResult UFlightVerseSubsystem::ExecuteSelectorBehaviorWithResult(
+	const uint32 BehaviorID,
+	const FVerseBehavior& Behavior,
+	void* StructPtr,
+	const void* TypeKey)
+{
+	FBehaviorExecutionResult Result;
+	Result.Backend = CompositeBehaviorBackendLabel(Behavior.Kind);
+	Result.LegalLanes = Behavior.CapabilityEnvelope.LegalLanes;
+	Result.SelectedLane = Behavior.CapabilityEnvelope.PreferredLane;
+	Result.ExecutionShape = Behavior.CapabilityEnvelope.ExecutionShape;
+	Result.CommittedLane = Behavior.CapabilityEnvelope.CommittedLane;
+	Result.CommittedExecutionShape = Behavior.CapabilityEnvelope.CommittedExecutionShape;
+
+	if (Behavior.ChildBehaviorIds.IsEmpty())
+	{
+		Result.FailureKind = EBehaviorExecutionFailureKind::NonExecutable;
+		Result.Detail = FString::Printf(TEXT("Composite selector behavior %u has no child behaviors."), BehaviorID);
+		return Result;
+	}
+
+	const void* EffectiveTypeKey = TypeKey ? TypeKey : ResolveEffectiveBehaviorTypeKey(Behavior);
+	const FResolvedStorageHost Host = ResolveStorageHost(Behavior, EffectiveTypeKey);
+	TArray<FString> BranchFailures;
+	bool bAnyGuardEvaluationFailure = false;
+
+	for (int32 ChildIndex = 0; ChildIndex < Behavior.ChildBehaviorIds.Num(); ++ChildIndex)
+	{
+		const uint32 ChildBehaviorId = Behavior.ChildBehaviorIds[ChildIndex];
+		const FCompositeSelectorBranchSpec* BranchSpec = Behavior.SelectorBranches.IsValidIndex(ChildIndex)
+			? &Behavior.SelectorBranches[ChildIndex]
+			: nullptr;
+		const FVerseBehavior* ChildBehavior = Behaviors.Find(ChildBehaviorId);
+		if (!ChildBehavior)
+		{
+			BranchFailures.Add(FString::Printf(TEXT("child %u missing at execution time"), ChildBehaviorId));
+			continue;
+		}
+
+		if (ResolveEffectiveBehaviorTypeKey(*ChildBehavior) != EffectiveTypeKey)
+		{
+			BranchFailures.Add(FString::Printf(TEXT("child %u has an incompatible type key"), ChildBehaviorId));
+			continue;
+		}
+
+		if (BranchSpec && BranchSpec->bHasGuard)
+		{
+			bool bGuardPassed = false;
+			FString GuardDetail;
+			if (!EvaluateSelectorGuard(BranchSpec->Guard, Host, StructPtr, bGuardPassed, GuardDetail))
+			{
+				bAnyGuardEvaluationFailure = true;
+				Result.bSemanticFailure = true;
+				Result.BranchEvidence.Add(GuardDetail);
+				Result.GuardOutcomes.Add(GuardDetail);
+				BranchFailures.Add(FString::Printf(TEXT("child %u guard evaluation failed: %s"), ChildBehaviorId, *GuardDetail));
+				continue;
+			}
+
+			Result.BranchEvidence.Add(GuardDetail);
+			Result.GuardOutcomes.Add(GuardDetail);
+			if (!bGuardPassed)
+			{
+				Result.bSemanticFailure = true;
+				BranchFailures.Add(FString::Printf(TEXT("child %u guard rejected"), ChildBehaviorId));
+				continue;
+			}
+		}
+
+		FBehaviorExecutionResult ChildResult = ExecuteBehaviorWithResult(ChildBehaviorId, StructPtr, EffectiveTypeKey);
+		Result.ExecutedChildBehaviorIds.Add(ChildBehaviorId);
+		Result.BranchEvidence.Append(ChildResult.BranchEvidence);
+		Result.GuardOutcomes.Append(ChildResult.GuardOutcomes);
+		if (ChildResult.bSucceeded)
+		{
+			Result.bSucceeded = true;
+			Result.bCommitted = ChildResult.bCommitted;
+			Result.bSemanticFailure = ChildResult.bSemanticFailure;
+			Result.FailureKind = EBehaviorExecutionFailureKind::None;
+			Result.SelectedChildBehaviorId = ChildBehaviorId;
+			Result.SelectedLane = ChildResult.SelectedLane;
+			Result.CommittedLane = ChildResult.CommittedLane;
+			Result.CommittedExecutionShape = ChildResult.CommittedExecutionShape;
+			if (!ChildResult.Backend.IsEmpty())
+			{
+				Result.Backend = ChildResult.Backend;
+			}
+			Result.Detail = BranchFailures.Num() == 0
+				? FString::Printf(TEXT("Composite selector behavior %u chose child behavior %u."), BehaviorID, ChildBehaviorId)
+				: FString::Printf(
+					TEXT("Composite selector behavior %u chose child behavior %u after fallback over [%s]."),
+					BehaviorID,
+					ChildBehaviorId,
+					*FString::Join(BranchFailures, TEXT("; ")));
+			return Result;
+		}
+
+		Result.bSemanticFailure = Result.bSemanticFailure || ChildResult.bSemanticFailure;
+		BranchFailures.Add(FString::Printf(TEXT("child %u failed: %s"), ChildBehaviorId, *ChildResult.Detail));
+	}
+
+	Result.FailureKind = bAnyGuardEvaluationFailure
+		? EBehaviorExecutionFailureKind::GuardEvaluationFailed
+		: (Result.bSemanticFailure
+			? EBehaviorExecutionFailureKind::GuardRejected
+			: EBehaviorExecutionFailureKind::ChildExecutionFailed);
+	Result.Detail = FString::Printf(
+		TEXT("Composite selector behavior %u did not find a successful child branch. Attempts=[%s]"),
+		BehaviorID,
+		*FString::Join(BranchFailures, TEXT("; ")));
+	return Result;
 }
 
 #if WITH_VERSE_VM || defined(__INTELLISENSE__)

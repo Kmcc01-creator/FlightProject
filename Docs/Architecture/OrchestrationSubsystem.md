@@ -4,6 +4,7 @@ This document sketches a dedicated world-scoped orchestration subsystem for Flig
 
 For the project-organization and naming basis that should contain this subsystem, see `Docs/Architecture/ProjectOrganization.md`.
 For the concrete implementation and migration steps, see `Docs/Workflow/OrchestrationImplementationPlan.md`.
+For the behavior-owned composition layer that should sit above selected atomic behaviors without expanding orchestration into a behavior-tree runtime, see `Docs/Architecture/BehaviorComposition.md`.
 
 The aim is not to create a giant god-object.
 The aim is to create a single coordination surface that knows:
